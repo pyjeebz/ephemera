@@ -48,8 +48,20 @@ Each phase is a vertical slice that boots to a working checkpoint.
       network interface to be useful.
       _Checkpoint met: `eph run uname -a` boots, executes, and cleans up in ~2.5s. Managed machines via
       `eph create/ls/exec/rm`; orphans from a crashed daemon are reaped on restart._
-- [ ] **Phase 2 — Isolation & networking.** TAP + bridge + NAT egress, egress allow-list by default,
-      cgroup v2 CPU/mem caps, the jailer.
+- [~] **Phase 2 — Isolation & networking.**
+      - [x] **Networking & egress.** A point-to-point `/30` per machine over a TAP device — no bridge, so
+            machine-to-machine traffic is a routing decision the host firewall refuses rather than local
+            delivery it never sees. Guest self-configures from the kernel `ip=` cmdline (no DHCP, no
+            in-guest code). A static nftables table (`build/host-setup.sh`) masquerades the pool out and
+            drops all egress to private space — public internet only, isolation by default. The daemon
+            holds `CAP_NET_ADMIN` for TAP creation and touches no firewall at runtime.
+            See [decision 0002](decisions/0002-networking-and-isolation-model.md).
+      - [x] **Resource caps.** cgroup v2 CPU/memory per machine. One leaf per VMM under a delegated
+            subtree; the VMM is spawned straight into it with `CLONE_INTO_CGROUP`, so it is capped before
+            its first instruction. `memory.max` = guest RAM + 64 MiB headroom, `cpu.max` = vCPUs in cores.
+            Caps apply automatically when the subtree is available (a restriction, not a grant).
+            See [decision 0003](decisions/0003-resource-caps-via-delegated-cgroup.md).
+      - [ ] **The jailer.** Run each VMM under Firecracker's jailer (chroot, namespaces, seccomp).
       _Checkpoint: VM has filtered network, capped resources, runs under jailer._
 - [ ] **Phase 3 — Guest agent, snapshots & fork.** vsock guest agent (exec/files/tty), snapshot/restore,
       fork-in-ms, warm pool.
@@ -63,5 +75,8 @@ Each phase is a vertical slice that boots to a working checkpoint.
 ## Host requirements (verified on this box)
 
 - KVM present (`/dev/kvm`, world-writable), nested virt enabled — Firecracker runs.
-- cgroup **v2**, iptables on the **nf_tables** backend.
-- Phases 0–1 need **no root**. Phase 2+ runs a privileged daemon (TAP / iptables / jailer).
+- cgroup **v2**; `nft` and `iptables-nft` both present on the **nf_tables** backend.
+- Guest kernel built with `CONFIG_IP_PNP=y` and `CONFIG_VIRTIO_NET=y` — the guest configures its own
+  network from the kernel command line, so there is no in-guest network code.
+- Phases 0–1 need **no root**. Networking needs `CAP_NET_ADMIN` on the binaries (not a root daemon) plus a
+  one-time `build/host-setup.sh` for forwarding and the firewall.
