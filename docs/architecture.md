@@ -6,13 +6,15 @@ runs locally; there are no cloud dependencies.
 
 ## Components
 
-| Component     | What it is                                                              |
-| ------------- | ----------------------------------------------------------------------- |
-| `ephemerad`   | Long-running daemon. HTTP control API, owns VM lifecycle.               |
-| `eph`         | CLI client for the daemon.                                              |
-| Guest agent   | Tiny in-VM process (over vsock) for exec / file / tty.                  |
-| MCP server    | Exposes the sandbox as MCP tools so Claude Code can drive it.           |
-| Web UI        | SvelteKit desktop-in-browser (VNC) — last phase.                       |
+| Component      | What it is                                                              |
+| -------------- | ----------------------------------------------------------------------- |
+| `ephemerad`    | Long-running daemon. HTTP control API, owns VM lifecycle. Unprivileged. |
+| `eph`          | CLI client for the daemon (also drives a machine directly). Unprivileged. |
+| `eph-jail`     | Helper spawned per VMM: enters the namespaces, pivots, execs Firecracker. |
+| `eph-netadmin` | The one privileged binary — carries `CAP_NET_ADMIN`, creates/destroys TAPs. |
+| Guest agent    | Tiny in-VM process (over vsock) for exec / file / tty.                  |
+| MCP server     | Exposes the sandbox as MCP tools so Claude Code can drive it.           |
+| Web UI         | SvelteKit desktop-in-browser (VNC) — last phase.                       |
 
 ## Control API
 
@@ -49,8 +51,10 @@ Each phase is a vertical slice that boots to a working checkpoint.
       _Checkpoint met: `eph run uname -a` boots, executes, and cleans up in ~2.5s. Managed machines via
       `eph create/ls/exec/rm`; orphans from a crashed daemon are reaped on restart._
 - [x] **Phase 2 — Isolation & networking.** _Checkpoint met: a machine has a filtered network, capped
-      resources, and runs jailed — with the daemon holding only `CAP_NET_ADMIN` and a delegated cgroup
-      subtree, no root._
+      resources, and runs jailed — with the daemon holding **no capability at all**. The one privileged
+      component is `eph-netadmin`, a small setcap'd helper that does nothing but create and destroy TAPs
+      (see [decision 0005](decisions/0005-privileged-network-helper.md)); everything else is a one-time
+      host-setup step or an unprivileged user namespace._
       - [x] **Networking & egress.** A point-to-point `/30` per machine over a TAP device — no bridge, so
             machine-to-machine traffic is a routing decision the host firewall refuses rather than local
             delivery it never sees. Guest self-configures from the kernel `ip=` cmdline (no DHCP, no
@@ -68,6 +72,8 @@ Each phase is a vertical slice that boots to a working checkpoint.
             new capability. Net namespace stays shared so the firewall still applies; the TAP is opened by
             the jailed VMM via the TAP-owner exception. Firecracker's own seccomp is the syscall boundary.
             Opt-in (`-jail`) for now. See [decision 0004](decisions/0004-hand-rolled-unprivileged-jail.md).
+            _A capped daemon could not create the user namespace (the kernel forbids it), which is why the
+            network capability had to leave the daemon — see [decision 0005](decisions/0005-privileged-network-helper.md)._
 - [ ] **Phase 3 — Guest agent, snapshots & fork.** vsock guest agent (exec/files/tty), snapshot/restore,
       fork-in-ms, warm pool.
       _Checkpoint: fork a running VM in <100 ms; warm pool serves instant machines._
@@ -83,5 +89,7 @@ Each phase is a vertical slice that boots to a working checkpoint.
 - cgroup **v2**; `nft` and `iptables-nft` both present on the **nf_tables** backend.
 - Guest kernel built with `CONFIG_IP_PNP=y` and `CONFIG_VIRTIO_NET=y` — the guest configures its own
   network from the kernel command line, so there is no in-guest network code.
-- Phases 0–1 need **no root**. Networking needs `CAP_NET_ADMIN` on the binaries (not a root daemon) plus a
-  one-time `build/host-setup.sh` for forwarding and the firewall.
+- Phases 0–1 need **no root**. The daemon and CLI hold **no capability**; networking's `CAP_NET_ADMIN`
+  lives on the `eph-netadmin` helper alone, granted by a one-time `build/host-setup.sh` (which also sets up
+  forwarding, the firewall, and the cgroup delegation). Jailing needs only that the kernel permit
+  unprivileged user namespaces.

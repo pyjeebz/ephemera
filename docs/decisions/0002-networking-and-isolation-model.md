@@ -1,8 +1,12 @@
 # 0002 — Point-to-point links, a static nftables firewall, and one capability
 
-- **Status:** Accepted
+- **Status:** Accepted (privilege model amended by [0005](0005-privileged-network-helper.md))
 - **Date:** 2026-07-23
 - **Phase:** 2 (Isolation & networking)
+
+> **Amendment (0005):** where this record says "the daemon holds `CAP_NET_ADMIN`", the capability has since
+> moved to a small `eph-netadmin` helper; the daemon holds none. The topology and firewall below are
+> unchanged.
 
 ## Context
 

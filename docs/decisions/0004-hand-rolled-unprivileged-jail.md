@@ -1,8 +1,13 @@
 # 0004 — A hand-rolled, unprivileged jail instead of Firecracker's jailer
 
-- **Status:** Accepted
+- **Status:** Accepted (see follow-on [0005](0005-privileged-network-helper.md))
 - **Date:** 2026-07-23
 - **Phase:** 2 (Isolation & networking)
+
+> **Follow-on (0005):** this decision assumed the daemon could spawn the jail while holding
+> `CAP_NET_ADMIN`. It cannot — a process with a file capability is forbidden from creating a user
+> namespace — so the capability moved out to `eph-netadmin` and the daemon now spawns the jail holding
+> nothing. The jail design below is unchanged.
 
 ## Context
 

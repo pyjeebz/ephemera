@@ -395,5 +395,44 @@ but the first version bound the kernel and firecracker binary writable without c
 **Decision recorded in `docs/decisions/0004`.** Jailing is opt-in (`-jail`) for now — new, security-sensitive,
 wants soak time — but needs no privileged setup, so making it default-on later is one line.
 
-**Phase 2 done:** filtered network, capped resources, jailed VMM — daemon still holds only `CAP_NET_ADMIN`
-plus a delegated cgroup subtree.
+**Phase 2 done:** filtered network, capped resources, jailed VMM.
+
+---
+
+## Phase 2 — the collision, and a zero-privilege daemon
+
+**What happened:** networking and the jail were each finished and verified. Then a machine asked for *both*
+and would not boot. `-jail` worked. `-jail -net` failed with a bare `permission denied` on spawning the
+jail helper.
+
+**The rule nobody mentions:** a process holding a **file capability cannot create a user namespace** with
+the unprivileged self-mapping. The kernel blocks it on purpose — allowing it would let a process launder
+its capabilities into a namespace where it is root. The daemon held `CAP_NET_ADMIN` (to make TAPs), so the
+daemon could not build the jail. Proven directly: the *uncapped* `eph` jails fine; the *capped* one, same
+binary, fails.
+
+Both obvious escapes were dead ends:
+
+- **Create the userns later, inside the helper, with `unshare`.** Fails with `EINVAL` — `unshare(NEWUSER)`
+  needs a single-threaded process, and every Go program is multithreaded from the first instruction. The
+  userns has to come from the spawn-time `clone`, i.e. from a process that is not holding the capability.
+- **Wrap the spawn in an uncapped intermediate.** Works, but leaves the VMM a grandchild of the daemon, so
+  every machine carries a spare process and tracking/killing/inspecting it needs extra bookkeeping.
+
+**The fix: take the capability off the daemon entirely.** A tiny `eph-netadmin` binary is now the only thing
+that carries `CAP_NET_ADMIN` — it creates and destroys TAPs and does nothing else. The daemon and CLI hold
+*nothing* and shell out to it. With no capability on the daemon, the jail's clean spawn-time clone is
+allowed again, and jail + network + cap compose in one Firecracker process, no wrapper. `docs/decisions/0005`.
+
+**The upgrade in the story:** through most of Phase 2 the pitch was "unprivileged-ish — one capability." It
+is now simply **zero-privilege**: `getcap` reports nothing on `ephemerad` or `eph`; the only privileged
+thing in the whole system is a few dozen lines of TAP code, and every other privileged act is a one-time
+host-setup step or an unprivileged user namespace.
+
+**Lesson worth keeping:** capabilities and user namespaces are two ways to be "privileged without root," and
+they actively refuse to coexist in the same process. If you want both powers, they have to live in
+different processes — which, once forced on you, turns out to be the better design anyway: the privileged
+part shrinks to something you can read in one sitting.
+
+**Verified:** daemon and CLI uncapped; a machine that is jailed, networked, and capped at once boots in
+~1.2 s and reaches the internet through its owner-stamped TAP; teardown removes the tap and the jail.
