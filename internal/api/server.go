@@ -13,11 +13,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/agent"
+	"github.com/pyjeebz/ephemera/internal/cgroup"
 	"github.com/pyjeebz/ephemera/internal/machine"
 	"github.com/pyjeebz/ephemera/internal/store"
+	"github.com/pyjeebz/ephemera/internal/vmnet"
 )
 
 // Config holds what the daemon needs to build machines.
@@ -30,6 +33,18 @@ type Config struct {
 
 	// BootTimeout bounds how long a create waits for the guest agent.
 	BootTimeout time.Duration
+
+	// Net is the machine network. Nil means the daemon cannot give machines an
+	// interface, and requests that ask for one are refused rather than quietly
+	// served a machine that is not what was asked for.
+	Net *vmnet.Manager
+
+	// DNS is the resolver networked guests are pointed at.
+	DNS netip.Addr
+
+	// Cgroup caps every machine's CPU and memory when set. Nil means the daemon
+	// could not find its delegated subtree and machines run uncapped.
+	Cgroup *cgroup.Manager
 }
 
 // Server implements the control plane.
@@ -69,6 +84,11 @@ func (s *Server) Handler() http.Handler {
 type CreateRequest struct {
 	VCPUs  int `json:"vcpus,omitempty"`
 	MemMiB int `json:"mem_mib,omitempty"`
+
+	// Network asks for an interface. It is off by default, and stays that way:
+	// a machine that cannot reach anything is the isolation floor, and every
+	// step above it should be something a caller asked for out loud.
+	Network bool `json:"network,omitempty"`
 }
 
 // MachineResponse describes a machine to a client.
@@ -79,6 +99,8 @@ type MachineResponse struct {
 	MemMiB    int       `json:"mem_mib"`
 	StartedAt time.Time `json:"started_at"`
 	UptimeSec float64   `json:"uptime_sec"`
+	GuestIP   string    `json:"guest_ip,omitempty"`
+	Tap       string    `json:"tap,omitempty"`
 }
 
 func toResponse(r store.Record) MachineResponse {
@@ -89,6 +111,8 @@ func toResponse(r store.Record) MachineResponse {
 		MemMiB:    r.MemMiB,
 		StartedAt: r.StartedAt,
 		UptimeSec: time.Since(r.StartedAt).Seconds(),
+		GuestIP:   r.GuestIP,
+		Tap:       r.Tap,
 	}
 }
 
@@ -107,6 +131,12 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.Network && s.cfg.Net == nil {
+		writeError(w, http.StatusBadRequest,
+			errors.New("this daemon cannot give machines a network: start ephemerad with -network"))
+		return
+	}
+
 	cfg := machine.Config{
 		KernelPath: s.cfg.KernelPath,
 		RootfsPath: s.cfg.RootfsPath,
@@ -114,6 +144,11 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		VCPUs:      cmp(req.VCPUs, s.cfg.VCPUs),
 		MemMiB:     cmp(req.MemMiB, s.cfg.MemMiB),
 		Init:       machine.AgentInit,
+		DNS:        s.cfg.DNS,
+		Cgroup:     s.cfg.Cgroup,
+	}
+	if req.Network {
+		cfg.Net = s.cfg.Net
 	}
 
 	// Detached from the request: a client that hangs up mid-create should not
@@ -141,13 +176,18 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		MemMiB:    cfg.MemMiB,
 		StartedAt: m.StartedAt,
 	}
+	if lease, ok := m.Lease(); ok {
+		rec.Tap, rec.GuestIP = lease.Tap, lease.Guest.String()
+	}
+	rec.Cgroup = m.CgroupPath()
 	if err := s.store.Add(m, rec); err != nil {
 		_ = m.Destroy(context.Background())
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	s.log.Info("machine created", "id", m.ID, "pid", m.Pid(), "vcpus", cfg.VCPUs, "mem_mib", cfg.MemMiB)
+	s.log.Info("machine created", "id", m.ID, "pid", m.Pid(), "vcpus", cfg.VCPUs,
+		"mem_mib", cfg.MemMiB, "guest_ip", rec.GuestIP)
 	writeJSON(w, http.StatusCreated, toResponse(rec))
 }
 
