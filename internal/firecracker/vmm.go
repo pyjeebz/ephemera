@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -35,6 +36,12 @@ type Options struct {
 	// exits — the vsock socket, for instance. Keeping this with the reaper means
 	// every exit path cleans up, not just an explicit Shutdown.
 	Cleanup []string
+
+	// CgroupFD, when non-nil, is a directory descriptor for a cgroup v2 leaf the
+	// VMM is spawned directly into via CLONE_INTO_CGROUP. A pointer rather than
+	// an int because 0 is a valid descriptor (stdin), so there is no in-band way
+	// to say "unset". The caller owns the descriptor's lifetime.
+	CgroupFD *int
 }
 
 // VMM is one running firecracker process and the API client bound to it.
@@ -77,6 +84,12 @@ func Launch(ctx context.Context, o Options) (*VMM, error) {
 	cmd := exec.Command(bin, "--api-sock", o.SockPath)
 	cmd.Stdout, cmd.Stderr = o.Console, o.Console
 	cmd.Stdin = o.ConsoleIn
+
+	// Placed into its cgroup by the clone that starts it, so the VMM is inside
+	// its memory and CPU limits before it executes anything — no uncapped window.
+	if o.CgroupFD != nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: *o.CgroupFD}
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("firecracker: start %s: %w", bin, err)
