@@ -48,6 +48,13 @@ const (
 
 	// guestHostname is set by the kernel from the ip= parameter, before init.
 	guestHostname = "ephemera"
+
+	// overlayInit is the guest's real PID 1. It makes the root a RAM-backed
+	// overlay over the read-only disk, then execs the init named in eph.init=.
+	// Every machine boots through it, which is what keeps the disk image
+	// read-only and shareable — the fix for both fork's per-copy disk and the
+	// corruption two machines would cause sharing one writable image.
+	overlayInit = "/sbin/eph-overlay-init"
 )
 
 // DefaultDNS is the resolver a networked guest is pointed at. It is handed over
@@ -334,7 +341,10 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 		DriveID:      "rootfs",
 		PathOnHost:   rootfsPath,
 		IsRootDevice: true,
-		IsReadOnly:   false,
+		// Read-only on purpose: the guest overlays a RAM upper over it, so it
+		// never needs to write the disk — and a read-only image is one many
+		// machines and forks can share without treading on each other.
+		IsReadOnly: true,
 	}); err != nil {
 		return fail(err)
 	}
@@ -400,11 +410,13 @@ type NetArgs struct {
 //	panic=1           reboot on panic rather than hanging forever
 //	pci=off           Firecracker exposes no PCI bus; skip probing for one
 //
-// A networked machine also gets ip=, which is handled below.
+// The kernel boots into the overlay init, and the requested init rides along as
+// eph.init= for the overlay init to exec once the RAM root is in place. A
+// networked machine also gets ip=, handled below.
 func BootArgs(init string, net *NetArgs) string {
 	args := []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off"}
 	if init != "" {
-		args = append(args, "init="+init)
+		args = append(args, "init="+overlayInit, "eph.init="+init)
 	}
 	if net != nil {
 		args = append(args, net.ipArg())

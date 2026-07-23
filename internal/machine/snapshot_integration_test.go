@@ -117,8 +117,8 @@ func TestJailedSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if !snap.Jailed || snap.RootfsPath == "" {
-		t.Fatalf("a jailed snapshot should be marked jailed and carry a disk: %+v", snap)
+	if !snap.Jailed || snap.BaseImage == "" {
+		t.Fatalf("a jailed snapshot should be marked jailed and reference a base image: %+v", snap)
 	}
 	if err := base.Destroy(ctx); err != nil {
 		t.Fatalf("Destroy base: %v", err)
@@ -142,7 +142,7 @@ func TestJailedSnapshotRestore(t *testing.T) {
 	if _, ok := r.Jailed(); !ok {
 		t.Error("restored machine is not jailed")
 	}
-	t.Logf("jailed restore in %s (includes a full disk copy)", dur.Round(time.Millisecond))
+	t.Logf("jailed restore in %s (no disk copy — shared read-only base)", dur.Round(time.Millisecond))
 }
 
 // Fork: one snapshot, several live machines at once. This is the Phase 3

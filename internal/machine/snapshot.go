@@ -29,14 +29,14 @@ import (
 // on it. A non-jailed snapshot stores an absolute host socket path and can only
 // be restored one at a time.
 type Snapshot struct {
-	SourceID   string
-	StatePath  string // host path to the device/vCPU state
-	MemPath    string // host path to the guest RAM image
-	RootfsPath string // host path to the frozen disk (jailed snapshots only)
-	Jailed     bool
-	VsockPath  string // non-jailed only: the host socket a restore rebinds
-	VCPUs      int
-	MemMiB     int
+	SourceID  string
+	StatePath string // host path to the device/vCPU state
+	MemPath   string // host path to the guest RAM image
+	BaseImage string // host path to the read-only base disk, shared by every fork
+	Jailed    bool
+	VsockPath string // non-jailed only: the host socket a restore rebinds
+	VCPUs     int
+	MemMiB    int
 }
 
 // Snapshot pauses the machine and writes a full snapshot into dir. The machine
@@ -79,9 +79,13 @@ func (m *Machine) snapshotDirect(ctx context.Context, dir string) (Snapshot, err
 }
 
 // snapshotJailed writes the snapshot inside the jail — where the confined VMM can
-// reach the paths — then copies the three artifacts out to dir, so the snapshot
-// outlives the machine that produced it. The disk is captured too, because each
-// fork needs its own copy to start from.
+// reach the paths — then copies the state and memory out to dir so the snapshot
+// outlives the machine that produced it.
+//
+// The disk is not captured. Because every machine runs on a read-only base with
+// its writes in a RAM overlay, the base image is never modified, so a fork just
+// shares it read-only. The snapshot records where it is; there is nothing to
+// copy, which is what makes a fork cost only its memory.
 func (m *Machine) snapshotJailed(ctx context.Context, dir string) (Snapshot, error) {
 	// Firecracker writes to these paths inside its chroot; the host sees them
 	// under the jail directory, because that directory is ordinary host storage.
@@ -96,11 +100,9 @@ func (m *Machine) snapshotJailed(ctx context.Context, dir string) (Snapshot, err
 	jailDir, _ := m.Jailed()
 	state := filepath.Join(dir, m.ID+".state")
 	mem := filepath.Join(dir, m.ID+".mem")
-	rootfs := filepath.Join(dir, m.ID+".rootfs")
 	for _, c := range []struct{ from, to string }{
 		{filepath.Join(jailDir, "run", "state"), state},
 		{filepath.Join(jailDir, "run", "mem"), mem},
-		{m.cfg.RootfsPath, rootfs}, // the disk, frozen while the guest is paused
 	} {
 		if err := copyFile(c.from, c.to); err != nil {
 			return Snapshot{}, fmt.Errorf("machine: capture snapshot: %w", err)
@@ -108,13 +110,13 @@ func (m *Machine) snapshotJailed(ctx context.Context, dir string) (Snapshot, err
 	}
 
 	return Snapshot{
-		SourceID:   m.ID,
-		StatePath:  state,
-		MemPath:    mem,
-		RootfsPath: rootfs,
-		Jailed:     true,
-		VCPUs:      m.cfg.VCPUs,
-		MemMiB:     m.cfg.MemMiB,
+		SourceID:  m.ID,
+		StatePath: state,
+		MemPath:   mem,
+		BaseImage: m.cfg.RootfsPath, // shared, read-only, never copied
+		Jailed:    true,
+		VCPUs:     m.cfg.VCPUs,
+		MemMiB:    m.cfg.MemMiB,
 	}, nil
 }
 
@@ -187,16 +189,16 @@ func restoreDirect(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
 }
 
 // restoreJailed brings a snapshot up inside a fresh jail. This is the path fork
-// uses: the jail gives the restored guest its own vsock socket, and the private
-// rootfs copy gives it its own disk, so any number of them can run at once from
-// one snapshot.
+// uses: the jail gives the restored guest its own vsock socket, and the shared
+// read-only base gives every copy the same disk with no copy at all — each fork
+// keeps its own writes in the RAM overlay its restored memory already carries.
 func restoreJailed(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
 	snap := cfg.Snapshot
 	if cfg.JailHelper == "" {
 		return nil, fmt.Errorf("machine: restoring a jailed snapshot needs a jail helper")
 	}
-	if _, err := os.Stat(snap.RootfsPath); err != nil {
-		return nil, fmt.Errorf("machine: snapshot disk not usable: %w", err)
+	if _, err := os.Stat(snap.BaseImage); err != nil {
+		return nil, fmt.Errorf("machine: snapshot base image not usable: %w", err)
 	}
 
 	fcBin := cfg.Binary
@@ -215,21 +217,13 @@ func restoreJailed(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
 	runDir := orDefault(cfg.RunDir, "run")
 	jailDir := filepath.Join(runDir, "jails", id)
 
-	// A private, writable copy of the disk, placed directly in the jail directory
-	// so it lands at /rootfs.ext4 after the pivot and is removed with the jail.
-	// This is the copy-on-write stand-in for now: correct, if not yet cheap.
-	if err := os.MkdirAll(jailDir, 0o755); err != nil {
-		return nil, fmt.Errorf("machine: prepare jail dir: %w", err)
-	}
-	if err := copyFile(snap.RootfsPath, filepath.Join(jailDir, "rootfs.ext4")); err != nil {
-		_ = os.RemoveAll(jailDir)
-		return nil, fmt.Errorf("machine: copy fork disk: %w", err)
-	}
-
 	spec := &jail.Spec{
-		Dir:       jail.Dir(jailDir),
-		Binary:    fcBin,
-		Rootfs:    "", // already placed at /rootfs.ext4 above
+		Dir:    jail.Dir(jailDir),
+		Binary: fcBin,
+		// The read-only base is bound in, shared by every fork. Firecracker
+		// reopens it read-only from the snapshot's device config, so no two forks
+		// ever write it — and the guest's overlay keeps their filesystems apart.
+		Rootfs:    snap.BaseImage,
 		SnapState: snap.StatePath,
 		SnapMem:   snap.MemPath,
 		APISock:   "run/firecracker.sock",

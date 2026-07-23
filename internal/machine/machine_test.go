@@ -11,15 +11,23 @@ import (
 )
 
 func TestBootArgsCarryTheFlagsFirecrackerNeeds(t *testing.T) {
-	got := BootArgs("/sbin/eph-init", nil)
+	got := BootArgs("/sbin/eph-agent-init", nil)
 
 	// reboot=k is load-bearing: it routes guest resets through the i8042
 	// controller, which is what makes Firecracker exit when the guest reboots.
 	// Losing it turns a self-terminating machine into a hang.
-	for _, want := range []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off", "init=/sbin/eph-init"} {
+	for _, want := range []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("boot args %q missing %q", got, want)
 		}
+	}
+	// The kernel boots the overlay init, and the real init rides along for it to
+	// exec. Losing either leaves the machine with a writable disk or no agent.
+	if !strings.Contains(got, "init=/sbin/eph-overlay-init") {
+		t.Errorf("boot args %q do not boot the overlay init", got)
+	}
+	if !strings.Contains(got, "eph.init=/sbin/eph-agent-init") {
+		t.Errorf("boot args %q do not carry the real init", got)
 	}
 }
 
