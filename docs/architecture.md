@@ -48,7 +48,9 @@ Each phase is a vertical slice that boots to a working checkpoint.
       network interface to be useful.
       _Checkpoint met: `eph run uname -a` boots, executes, and cleans up in ~2.5s. Managed machines via
       `eph create/ls/exec/rm`; orphans from a crashed daemon are reaped on restart._
-- [~] **Phase 2 — Isolation & networking.**
+- [x] **Phase 2 — Isolation & networking.** _Checkpoint met: a machine has a filtered network, capped
+      resources, and runs jailed — with the daemon holding only `CAP_NET_ADMIN` and a delegated cgroup
+      subtree, no root._
       - [x] **Networking & egress.** A point-to-point `/30` per machine over a TAP device — no bridge, so
             machine-to-machine traffic is a routing decision the host firewall refuses rather than local
             delivery it never sees. Guest self-configures from the kernel `ip=` cmdline (no DHCP, no
@@ -61,8 +63,11 @@ Each phase is a vertical slice that boots to a working checkpoint.
             its first instruction. `memory.max` = guest RAM + 64 MiB headroom, `cpu.max` = vCPUs in cores.
             Caps apply automatically when the subtree is available (a restriction, not a grant).
             See [decision 0003](decisions/0003-resource-caps-via-delegated-cgroup.md).
-      - [ ] **The jailer.** Run each VMM under Firecracker's jailer (chroot, namespaces, seccomp).
-      _Checkpoint: VM has filtered network, capped resources, runs under jailer._
+      - [x] **The jail.** Each VMM confined to a `pivot_root` chroot and its own user, mount, and pid
+            namespaces — entered unprivileged via a user namespace (`eph-jail` helper), so no root and no
+            new capability. Net namespace stays shared so the firewall still applies; the TAP is opened by
+            the jailed VMM via the TAP-owner exception. Firecracker's own seccomp is the syscall boundary.
+            Opt-in (`-jail`) for now. See [decision 0004](decisions/0004-hand-rolled-unprivileged-jail.md).
 - [ ] **Phase 3 — Guest agent, snapshots & fork.** vsock guest agent (exec/files/tty), snapshot/restore,
       fork-in-ms, warm pool.
       _Checkpoint: fork a running VM in <100 ms; warm pool serves instant machines._

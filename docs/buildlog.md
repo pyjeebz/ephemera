@@ -328,3 +328,72 @@ says the thing didn't happen, first prove the test did what you think it did.
 (a *grant*, opt-in with `-net`) they apply automatically whenever the subtree is available.
 
 **Still open:** the jailer — chroot, namespaces, seccomp — the last Phase 2 isolation piece.
+
+---
+
+## Phase 2 — the jail (unprivileged confinement)
+
+**Goal:** the VMM process can see only the files it needs and no process outside its own tree. Without root.
+
+**Numbers**
+
+| Thing | Value |
+| --- | --- |
+| Jailed boot (`create` → ready) | ~1.4 s |
+| Mounts the VMM can see | **8** (images, 3 device nodes, /proc) vs dozens for a normal process |
+| Privilege added | **none** — a user namespace, not root |
+| Namespaces | user + mount + pid isolated; **net shared** (so the firewall still applies) |
+
+**Verified live:** a jailed VMM runs in its own user, mount, and pid namespaces; its `/proc/<pid>/mountinfo`
+shows the jail directory as `/` with only the bound-in images and device nodes; boot, exec over the
+relocated vsock, and teardown all work; and jail composes with cgroups in one clone (capped *and* jailed,
+single spawn, no errors).
+
+**Design: a user namespace is the whole trick.** Firecracker's own jailer is a *privileged* program that
+drops to safe — it needs root. We never had root to drop, and on this box `sudo` prompts for a password, so
+a root jailer is a non-starter. But inside a fresh user namespace an ordinary uid becomes root over *that
+namespace*, which is exactly enough to bind-mount a minimal root, `pivot_root` into it, and mount a private
+`/proc`. Step outside and the process is still just our uid with no real capability. `eph-jail` is a tiny
+helper the daemon spawns into the namespaces (Go gives no hook between clone and exec, so the setup has to
+run in a spawned process); it pivots, then exec's Firecracker. Full reasoning in `docs/decisions/0004`.
+
+**What we deliberately did NOT build.** Firecracker already runs as our unprivileged user, so there is no
+privilege-drop to write. Its seccomp filters are on by default, so there is no syscall filter to write. All
+that was actually missing was the chroot and the pid/mount namespaces — so that is all the jail is. This is
+the mirror of ADR 0001: hand-rolling a *client* was fine because a bug is a bad error message; a security
+boundary is different, so the jail assembles kernel-enforced primitives and leans on Firecracker's *own*
+audited seccomp rather than reinventing one.
+
+**Gotcha 1 — the userns can't touch the host's TAP, and the fix is an ioctl I'd never used.**
+The plan was to keep the host network namespace (so the firewall keeps working) and just isolate the
+filesystem and pids. But a process in a *child* user namespace has no `CAP_NET_ADMIN` over the *host*
+network namespace — so a jailed Firecracker cannot open a host TAP. Isolating the netns instead would have
+meant a per-machine netns, veth pairs, and rerouting the whole firewall — throwing away the clean
+point-to-point design.
+
+The escape is the TAP *owner* exception. `tun_not_capable()` in the kernel lets a process open a TAP without
+`CAP_NET_ADMIN` if the device's owner uid matches the caller's — the mechanism that exists precisely so
+unprivileged programs can use pre-created taps. So `vmnet` now sets `TUNSETOWNER` (and `TUNSETGROUP`) to our
+uid when it creates the tap, and a jailed VMM — our uid, mapped through the userns — opens its own interface
+with no capability at all. Networking survives the jail, firewall untouched. **Lesson: "needs CAP_NET_ADMIN"
+often means "unless you own it"; the owner exceptions on taps (and elsewhere) are how unprivileged network
+code gets written.**
+
+**Gotcha 2 — you can't observe a chroot with `readlink /proc/<pid>/root`.**
+Checking the confinement from the host, `/proc/<pid>/root` pointed at `/`, not the jail — which for a
+worried minute looked like the chroot hadn't taken. It had. That symlink is rendered from the *reader's*
+mount namespace, and the jail's root is a mount private to the VMM's namespace, so from outside it cannot be
+named and collapses to `/`. The real evidence is `/proc/<pid>/mountinfo`, which lists the process's own
+mount table: root = the jail dir, plus the eight binds, and nothing else. **Lesson: to inspect another
+process's filesystem view, read its mountinfo, not its root symlink — the symlink lies across namespaces.**
+
+**Gotcha 3 — a read-only bind mount takes two steps.** `mount(MS_BIND | MS_RDONLY)` silently ignores the
+read-only flag; the bind lands read-write. You have to bind first, then `mount(MS_BIND | MS_REMOUNT |
+MS_RDONLY)` the same target. The kernel has always worked this way and the man page mentions it in passing,
+but the first version bound the kernel and firecracker binary writable without complaint.
+
+**Decision recorded in `docs/decisions/0004`.** Jailing is opt-in (`-jail`) for now — new, security-sensitive,
+wants soak time — but needs no privileged setup, so making it default-on later is one line.
+
+**Phase 2 done:** filtered network, capped resources, jailed VMM — daemon still holds only `CAP_NET_ADMIN`
+plus a delegated cgroup subtree.
