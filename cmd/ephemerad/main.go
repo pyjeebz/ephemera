@@ -24,6 +24,7 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/cgroup"
+	"github.com/pyjeebz/ephemera/internal/jail"
 	"github.com/pyjeebz/ephemera/internal/machine"
 	"github.com/pyjeebz/ephemera/internal/store"
 	"github.com/pyjeebz/ephemera/internal/vmnet"
@@ -46,6 +47,7 @@ func run() error {
 	pool := flag.String("pool", vmnet.DefaultPool, "address range machine links are carved from")
 	dns := flag.String("dns", machine.DefaultDNS.String(), "resolver handed to networked guests")
 	cgroupRoot := flag.String("cgroup-root", cgroup.DefaultRoot, "delegated cgroup v2 subtree for resource caps (empty to disable)")
+	jailed := flag.Bool("jail", false, "confine each VMM to a chroot and its own pid namespace (unprivileged)")
 	flag.Parse()
 
 	log := newLogger(*logLevel)
@@ -107,6 +109,19 @@ func run() error {
 		log.Info("reaped orphaned machines from a previous run", "count", reaped)
 	}
 
+	// Jailing needs no privileged setup — just a kernel that permits unprivileged
+	// user namespaces — so it is refused up front only when that is missing.
+	var jailHelper string
+	if *jailed {
+		if err := jail.Available(); err != nil {
+			return err
+		}
+		if jailHelper, err = jail.HelperPath(""); err != nil {
+			return err
+		}
+		log.Info("machine jailing enabled", "helper", jailHelper)
+	}
+
 	srv := api.New(api.Config{
 		KernelPath: kernelPath,
 		RootfsPath: rootfsPath,
@@ -114,6 +129,8 @@ func run() error {
 		Net:        machineNet,
 		DNS:        resolver,
 		Cgroup:     caps,
+		Jail:       *jailed,
+		JailHelper: jailHelper,
 	}, st, log)
 
 	ln, err := listen(*addr)
