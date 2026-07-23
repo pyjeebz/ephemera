@@ -17,7 +17,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pyjeebz/ephemera/internal/cgroup"
 	"github.com/pyjeebz/ephemera/internal/machine"
+	"github.com/pyjeebz/ephemera/internal/vmnet"
 )
 
 // ErrNotFound is returned for an unknown machine id.
@@ -33,6 +35,17 @@ type Record struct {
 	VCPUs     int       `json:"vcpus"`
 	MemMiB    int       `json:"mem_mib"`
 	StartedAt time.Time `json:"started_at"`
+
+	// Tap is the machine's host interface, empty when it had no network. A TAP
+	// outlives the daemon that made it just as happily as a VMM does, so it has
+	// to be written down for the same reason the pid is.
+	Tap     string `json:"tap,omitempty"`
+	GuestIP string `json:"guest_ip,omitempty"`
+
+	// Cgroup is the machine's cgroup directory, empty when uncapped. Like the
+	// TAP, it outlives its daemon and has to be removed by whoever reaps the
+	// orphaned VMM.
+	Cgroup string `json:"cgroup,omitempty"`
 }
 
 // Store is the daemon's machine registry.
@@ -171,6 +184,21 @@ func Reap(dir string, log *slog.Logger) (int, error) {
 		for _, sock := range []string{r.APISock, r.VsockPath} {
 			if sock != "" {
 				_ = os.Remove(sock)
+			}
+		}
+		// A leftover interface is worse than a leftover socket: it holds an
+		// address the pool believes is free, so the next machine to be handed
+		// that index cannot create its own.
+		if r.Tap != "" {
+			if err := vmnet.DestroyTap(r.Tap); err != nil {
+				log.Error("could not remove orphaned interface", "id", r.ID, "tap", r.Tap, "err", err)
+			}
+		}
+		// The cgroup only empties once the killed VMM is reaped, so Remove
+		// retries past the EBUSY window rather than giving up on the first try.
+		if r.Cgroup != "" {
+			if err := cgroup.Remove(r.Cgroup); err != nil {
+				log.Error("could not remove orphaned cgroup", "id", r.ID, "cgroup", r.Cgroup, "err", err)
 			}
 		}
 		_ = os.Remove(path)
