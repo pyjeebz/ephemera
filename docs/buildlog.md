@@ -513,9 +513,41 @@ change to the guest or the image. **Lesson: before optimising the clever part (m
 boring part (a file copy) isn't quietly doing 20× the work by writing zeros.**
 
 **What's left for a *true* zero-copy fork.** Even sparse, the disk is O(data) per fork, not O(1). The
-zero-copy answer is a **read-only base image + a guest-side overlay**: the base attached read-only and
-shared by every fork, per-fork writes going to a tmpfs upper that rides along in each fork's own restored
-memory. That removes the copy entirely — and, usefully, fixes a **latent bug it surfaced**: two plain
-`create`s of jailed machines today share one rootfs image read-write (unnoticed only because machines have
-been booted one at a time). The overlay fixes fork's disk and that bug in one move. Deferred, documented in
-`docs/decisions/0006`.
+zero-copy answer is a **read-only base image + a guest-side overlay** — done next, below.
+
+---
+
+## Phase 3 — zero-copy fork, via a read-only base + RAM overlay
+
+**Goal:** stop copying the disk per fork entirely, and fix the corruption bug in the same move.
+
+**Numbers**
+
+| Thing | Value |
+| --- | --- |
+| Fork (was: sparse copy) | 78–85 ms |
+| **Fork (now: shared read-only base)** | **15–31 ms** |
+| Disk copied per fork | **none** |
+
+**The change.** Every machine now boots a **read-only** base image and overlays a **tmpfs** upper over it
+(`eph-overlay-init` runs as PID 1: mount overlay, `pivot_root`, exec the real init named on the cmdline as
+`eph.init=`). Every guest write lands in RAM; the disk is never touched. So a fork shares the one base image
+with no copy — it is purely a memory restore — and its writes are isolated in the overlay its restored
+memory already carries. `docs/decisions/0007`.
+
+**Two wins from one change.** Fork went zero-copy *and* a real bug closed: every machine used to mount the
+shared rootfs read-write, so two at once would both write the ext4 journal and corrupt the image (unnoticed
+only because machines had been booted one at a time). A read-only image can't be written by anyone.
+Verified: two concurrent machines wrote and read their own files, and the base image's checksum was
+unchanged afterward.
+
+**Gotcha — a read-only mount can't replay a journal.** First boot on the read-only drive panicked:
+`EXT4-fs (vda): INFO: recovery required on readonly filesystem` → `cannot proceed` → `Unable to mount root
+fs`. A freshly built ext4 carries a journal, and if it is flagged as needing recovery the kernel must
+*write* to replay it — impossible read-only, so it refuses to mount root at all. Fix: build the image
+**without a journal** (`mkfs.ext4 -O ^has_journal`). The base is only ever mounted read-only and overlaid,
+so a journal was pure liability. **Lesson: "read-only root" is not just a mount flag — the image has to be
+built to never need a write, journal included.**
+
+**Phase 3 checkpoint met and then some:** fork a running VM in **15–31 ms**, well under the 100 ms target,
+copying nothing.

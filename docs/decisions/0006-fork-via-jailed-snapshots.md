@@ -1,8 +1,12 @@
 # 0006 — Fork by restoring a jailed snapshot, with a sparse per-fork disk
 
-- **Status:** Accepted
+- **Status:** Accepted (disk half superseded by [0007](0007-read-only-base-with-ram-overlay.md))
 - **Date:** 2026-07-23
 - **Phase:** 3 (Snapshots, fork & warm pool)
+
+> **Update (0007):** the per-fork *sparse disk copy* below was the interim answer and has been replaced by a
+> shared read-only base with a RAM overlay — forks now copy nothing (15–31 ms, down from 78–85 ms). The
+> vsock-per-fork mechanism and "fork restores a jailed snapshot" decision here are unchanged.
 
 ## Context
 

@@ -80,14 +80,15 @@ Each phase is a vertical slice that boots to a working checkpoint.
             restored guest is the *same running instance* — its agent is already up, so the machine is ready
             with no boot to wait through. Measured **~63 ms to restore vs ~1 s to cold-boot**; verified it is
             a resume not a reboot (PID 1's start time is unchanged).
-      - [x] **Fork.** Restore one snapshot into several machines at once, each independent. The jail gives
-            every copy its own vsock socket (`/run/vsock.sock` is a different host path in each chroot) and
-            its own disk (a private sparse copy of the frozen rootfs). **Measured 78–85 ms per fork** —
-            under the checkpoint — with isolated writes verified across concurrent copies. Disk copy is
-            sparse (a 1 GiB image is ~50 MiB of data); a zero-copy read-only-base + guest-overlay is the
-            next optimisation. See [decision 0006](decisions/0006-fork-via-jailed-snapshots.md).
+      - [x] **Fork (zero-copy).** Restore one snapshot into several machines at once, each independent. The
+            jail gives every copy its own vsock socket (`/run/vsock.sock` is a different host path in each
+            chroot); the read-only base image is **shared with no copy**, and each fork's writes live in the
+            RAM overlay its restored memory carries. **Measured 15–31 ms per fork.** Every machine now boots
+            a read-only base with a tmpfs overlay, which also fixes a latent bug (concurrent machines used to
+            share one writable image). See [0006](decisions/0006-fork-via-jailed-snapshots.md) (vsock) and
+            [0007](decisions/0007-read-only-base-with-ram-overlay.md) (disk).
       - [ ] **Warm pool.** Keep restored machines standing by, so a request is served instantly.
-      _Checkpoint: fork a running VM in <100 ms ✅; warm pool serves instant machines._
+      _Checkpoint: fork a running VM in <100 ms ✅ (15–31 ms); warm pool serves instant machines._
 - [ ] **Phase 4 — AI agent loop.** Anthropic-driven loop with exec/file tools, budgets, rate limits,
       safety; exposed MCP-native.
       _Checkpoint: "build a snake game" runs end-to-end in a sandbox._
