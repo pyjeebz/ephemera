@@ -45,6 +45,12 @@ type Config struct {
 	// Cgroup caps every machine's CPU and memory when set. Nil means the daemon
 	// could not find its delegated subtree and machines run uncapped.
 	Cgroup *cgroup.Manager
+
+	// Jail confines every machine's VMM when set; JailHelper is the eph-jail
+	// binary. Like caps, it is a restriction applied to every machine rather than
+	// something a request opts into.
+	Jail       bool
+	JailHelper string
 }
 
 // Server implements the control plane.
@@ -146,6 +152,8 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Init:       machine.AgentInit,
 		DNS:        s.cfg.DNS,
 		Cgroup:     s.cfg.Cgroup,
+		Jail:       s.cfg.Jail,
+		JailHelper: s.cfg.JailHelper,
 	}
 	if req.Network {
 		cfg.Net = s.cfg.Net
