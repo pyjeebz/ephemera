@@ -104,6 +104,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Snapshots outlive the daemon, so their store loads what earlier runs left.
+	snaps, err := store.OpenSnapshots(filepath.Join(*runDir, "snapshots"))
+	if err != nil {
+		return err
+	}
 
 	// Anything still running from a previous daemon is unowned: this process
 	// cannot wait on a VMM it did not spawn, so orphans are destroyed, not
@@ -139,7 +144,7 @@ func run() error {
 		Cgroup:     caps,
 		Jail:       *jailed,
 		JailHelper: jailHelper,
-	}, st, log)
+	}, st, snaps, log)
 
 	ln, err := listen(*addr)
 	if err != nil {

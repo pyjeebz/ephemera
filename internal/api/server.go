@@ -8,12 +8,15 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/agent"
@@ -57,11 +60,12 @@ type Config struct {
 type Server struct {
 	cfg   Config
 	store *store.Store
+	snaps *store.SnapshotStore
 	log   *slog.Logger
 }
 
-// New returns a server backed by store.
-func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
+// New returns a server backed by the machine and snapshot stores.
+func New(cfg Config, st *store.Store, snaps *store.SnapshotStore, log *slog.Logger) *Server {
 	if cfg.VCPUs == 0 {
 		cfg.VCPUs = machine.DefaultVCPUs
 	}
@@ -71,7 +75,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	if cfg.BootTimeout == 0 {
 		cfg.BootTimeout = 30 * time.Second
 	}
-	return &Server{cfg: cfg, store: st, log: log}
+	return &Server{cfg: cfg, store: st, snaps: snaps, log: log}
 }
 
 // Handler returns the routed control plane.
@@ -83,6 +87,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/machines/{id}", s.get)
 	mux.HandleFunc("DELETE /v1/machines/{id}", s.destroy)
 	mux.HandleFunc("POST /v1/machines/{id}/exec", s.exec)
+	mux.HandleFunc("POST /v1/machines/{id}/snapshot", s.snapshot)
+	mux.HandleFunc("GET /v1/snapshots", s.listSnapshots)
+	mux.HandleFunc("DELETE /v1/snapshots/{id}", s.deleteSnapshot)
+	mux.HandleFunc("POST /v1/snapshots/{id}/fork", s.fork)
 	return s.logRequests(mux)
 }
 
@@ -188,6 +196,9 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		rec.Tap, rec.GuestIP = lease.Tap, lease.Guest.String()
 	}
 	rec.Cgroup = m.CgroupPath()
+	if dir, ok := m.Jailed(); ok {
+		rec.JailDir = dir
+	}
 	if err := s.store.Add(m, rec); err != nil {
 		_ = m.Destroy(context.Background())
 		writeError(w, http.StatusInternalServerError, err)
@@ -295,6 +306,131 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
+// SnapshotResponse describes a snapshot to a client.
+type SnapshotResponse struct {
+	ID        string    `json:"id"`
+	SourceID  string    `json:"source_id"`
+	VCPUs     int       `json:"vcpus"`
+	MemMiB    int       `json:"mem_mib"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func toSnapshotResponse(r store.SnapshotRecord) SnapshotResponse {
+	return SnapshotResponse{
+		ID:        r.ID,
+		SourceID:  r.SourceID,
+		VCPUs:     r.VCPUs,
+		MemMiB:    r.MemMiB,
+		CreatedAt: r.CreatedAt,
+	}
+}
+
+// snapshot freezes a machine to disk and records the result, leaving the machine
+// running. Only a jailed machine can be snapshotted, because only a jailed
+// snapshot can be forked — its guest agent socket is chroot-relative and so
+// distinct per copy.
+func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	m, _, err := s.store.Get(id)
+	if err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	if _, ok := m.Jailed(); !ok {
+		writeError(w, http.StatusBadRequest,
+			errors.New("only a jailed machine can be snapshotted; start ephemerad with -jail"))
+		return
+	}
+
+	snapID, err := newID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	snap, err := m.Snapshot(ctx, filepath.Join(s.snaps.Dir(), snapID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Snapshot pauses the guest; put it back to work — the snapshot is a copy,
+	// not a handover.
+	if err := m.Resume(ctx); err != nil {
+		s.log.Error("resume after snapshot failed", "id", id, "err", err)
+	}
+
+	rec, err := s.snaps.Add(snapID, snap)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.log.Info("snapshot created", "id", snapID, "source", id)
+	writeJSON(w, http.StatusCreated, toSnapshotResponse(rec))
+}
+
+func (s *Server) listSnapshots(w http.ResponseWriter, _ *http.Request) {
+	recs := s.snaps.List()
+	out := make([]SnapshotResponse, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, toSnapshotResponse(r))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"snapshots": out})
+}
+
+func (s *Server) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
+	if err := s.snaps.Remove(r.PathValue("id")); err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// fork restores a snapshot into a new running machine. Because the machines come
+// from one read-only base and each keeps its writes in its own RAM overlay, any
+// number of forks of one snapshot run side by side.
+func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
+	rec, err := s.snaps.Get(r.PathValue("id"))
+	if err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.BootTimeout)
+	defer cancel()
+
+	m, err := machine.Restore(ctx, machine.RestoreConfig{
+		Snapshot:   rec.Snapshot(),
+		RunDir:     s.cfg.RunDir,
+		JailHelper: s.cfg.JailHelper,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	mrec := store.Record{
+		ID:        m.ID,
+		PID:       m.Pid(),
+		VsockPath: m.VsockPath(),
+		VCPUs:     rec.VCPUs,
+		MemMiB:    rec.MemMiB,
+		StartedAt: m.StartedAt,
+	}
+	if dir, ok := m.Jailed(); ok {
+		mrec.JailDir = dir
+	}
+	if err := s.store.Add(m, mrec); err != nil {
+		_ = m.Destroy(context.Background())
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.log.Info("machine forked", "id", m.ID, "snapshot", rec.ID, "pid", m.Pid())
+	writeJSON(w, http.StatusCreated, toResponse(mrec))
+}
+
 // DestroyAll tears down every machine the daemon owns. Used on shutdown so a
 // stopping daemon does not leave VMMs behind for the next one to reap.
 func (s *Server) DestroyAll(ctx context.Context) {
@@ -347,4 +483,13 @@ func cmp(v, fallback int) int {
 		return v
 	}
 	return fallback
+}
+
+// newID returns a short, collision-resistant id for a snapshot.
+func newID() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }

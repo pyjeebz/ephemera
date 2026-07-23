@@ -18,7 +18,11 @@ func newTestServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(Config{RunDir: t.TempDir()}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	snaps, err := store.OpenSnapshots(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{RunDir: t.TempDir()}, st, snaps, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	return srv
@@ -141,7 +145,8 @@ func TestMethodsAreRouted(t *testing.T) {
 
 func TestDefaultsAreApplied(t *testing.T) {
 	st, _ := store.Open(t.TempDir())
-	s := New(Config{}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	snaps, _ := store.OpenSnapshots(t.TempDir())
+	s := New(Config{}, st, snaps, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if s.cfg.VCPUs == 0 || s.cfg.MemMiB == 0 || s.cfg.BootTimeout == 0 {
 		t.Errorf("zero config left unfilled: %+v", s.cfg)
