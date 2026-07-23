@@ -77,6 +77,35 @@ func (c *Client) Destroy(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/machines/"+id, nil, nil)
 }
 
+// Snapshot freezes a machine to disk and returns the snapshot's details. The
+// machine keeps running.
+func (c *Client) Snapshot(ctx context.Context, id string) (api.SnapshotResponse, error) {
+	var out api.SnapshotResponse
+	err := c.do(ctx, http.MethodPost, "/v1/machines/"+id+"/snapshot", nil, &out)
+	return out, err
+}
+
+// ListSnapshots returns every snapshot the daemon holds.
+func (c *Client) ListSnapshots(ctx context.Context) ([]api.SnapshotResponse, error) {
+	var out struct {
+		Snapshots []api.SnapshotResponse `json:"snapshots"`
+	}
+	err := c.do(ctx, http.MethodGet, "/v1/snapshots", nil, &out)
+	return out.Snapshots, err
+}
+
+// DeleteSnapshot removes a snapshot and its files.
+func (c *Client) DeleteSnapshot(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/snapshots/"+id, nil, nil)
+}
+
+// Fork restores a snapshot into a new running machine and returns it.
+func (c *Client) Fork(ctx context.Context, snapshotID string) (api.MachineResponse, error) {
+	var out api.MachineResponse
+	err := c.do(ctx, http.MethodPost, "/v1/snapshots/"+snapshotID+"/fork", nil, &out)
+	return out, err
+}
+
 // Exec runs a command in a machine, writing its output as it arrives.
 //
 // The returned status is the command's own; a non-zero value comes back with a

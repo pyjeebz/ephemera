@@ -48,6 +48,12 @@ func main() {
 		err = cmdExec(args[1:])
 	case "rm":
 		err = cmdRm(args[1:])
+	case "snapshot":
+		err = cmdSnapshot(args[1:])
+	case "snapshots":
+		err = cmdSnapshots(args[1:])
+	case "fork":
+		err = cmdFork(args[1:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -77,10 +83,13 @@ standalone — drive a machine directly, no daemon needed:
   run      boot a machine, run one command inside it, then destroy it
 
 managed — talk to ephemerad, machines outlive the command:
-  create   boot a machine and leave it running
-  ls       list running machines
-  exec     run a command in an existing machine
-  rm       destroy a machine
+  create     boot a machine and leave it running
+  ls         list running machines
+  exec       run a command in an existing machine
+  rm         destroy a machine
+  snapshot   freeze a running machine to disk (machine keeps running)
+  snapshots  list snapshots
+  fork       start a new machine from a snapshot, in milliseconds
 
 run "eph <command> -h" for flags
 `)
@@ -455,6 +464,91 @@ func cmdRm(argv []string) error {
 		fmt.Println(id)
 	}
 	return firstErr
+}
+
+func cmdSnapshot(argv []string) error {
+	fs := flag.NewFlagSet("snapshot", flag.ExitOnError)
+	addr := daemonAddr(fs)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: eph snapshot [flags] <machine-id>\n\n"+
+			"Freezes a running machine to disk and prints the snapshot id. The\n"+
+			"machine keeps running. Fork the snapshot to start copies of it.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return fmt.Errorf("need exactly one machine id")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	snap, err := client.New(*addr).Snapshot(ctx, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	fmt.Println(snap.ID)
+	return nil
+}
+
+func cmdSnapshots(argv []string) error {
+	fs := flag.NewFlagSet("snapshots", flag.ExitOnError)
+	addr := daemonAddr(fs)
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	snaps, err := client.New(*addr).ListSnapshots(ctx)
+	if err != nil {
+		return err
+	}
+	if len(snaps) == 0 {
+		fmt.Fprintln(os.Stderr, "no snapshots")
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw, "ID\tSOURCE\tCPUS\tMEM\tAGE")
+	for _, s := range snaps {
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%d MiB\t%s\n", s.ID, s.SourceID, s.VCPUs, s.MemMiB,
+			time.Since(s.CreatedAt).Round(time.Second))
+	}
+	return tw.Flush()
+}
+
+func cmdFork(argv []string) error {
+	fs := flag.NewFlagSet("fork", flag.ExitOnError)
+	addr := daemonAddr(fs)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: eph fork [flags] <snapshot-id>\n\n"+
+			"Starts a new machine from a snapshot and prints its id. The copy comes\n"+
+			"up ready in milliseconds — its agent was already running when the\n"+
+			"snapshot was taken.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return fmt.Errorf("need exactly one snapshot id")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	m, err := client.New(*addr).Fork(ctx, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	fmt.Println(m.ID)
+	return nil
 }
 
 // guestExit carries a command's non-zero status out to the process exit code
