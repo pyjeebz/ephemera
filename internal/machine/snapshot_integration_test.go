@@ -87,6 +87,137 @@ func TestSnapshotRestore(t *testing.T) {
 	t.Logf("restored in %s (a cold boot is ~1s)", restoreDur.Round(time.Millisecond))
 }
 
+// A jailed snapshot is the one that can be forked, so it is worth its own test:
+// snapshot a jailed machine, throw it away, and restore a confined copy — with
+// its own disk and its own vsock socket — that answers straight away.
+func TestJailedSnapshotRestore(t *testing.T) {
+	cfg := requireVM(t)
+	requireJail(t)
+	helper := buildHelper(t, "eph-jail")
+	cfg.Init = AgentInit
+	cfg.Jail = true
+	cfg.JailHelper = helper
+	cfg.Console = &bytes.Buffer{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	base, err := Boot(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+	if err := base.WaitAgent(ctx); err != nil {
+		t.Fatalf("agent never came up: %v", err)
+	}
+	if _, err := base.Exec(ctx, []string{"sh", "-c", "echo forked-me > /run/marker"}, nil, nil); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	snap, err := base.Snapshot(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if !snap.Jailed || snap.RootfsPath == "" {
+		t.Fatalf("a jailed snapshot should be marked jailed and carry a disk: %+v", snap)
+	}
+	if err := base.Destroy(ctx); err != nil {
+		t.Fatalf("Destroy base: %v", err)
+	}
+
+	started := time.Now()
+	r, err := Restore(ctx, RestoreConfig{Snapshot: snap, RunDir: cfg.RunDir, JailHelper: helper})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	dur := time.Since(started)
+	defer func() { _ = r.Destroy(context.Background()) }()
+
+	var out bytes.Buffer
+	if _, err := r.Exec(ctx, []string{"cat", "/run/marker"}, &out, nil); err != nil {
+		t.Fatalf("Exec on restored machine: %v", err)
+	}
+	if strings.TrimSpace(out.String()) != "forked-me" {
+		t.Errorf("marker = %q, want forked-me", out.String())
+	}
+	if _, ok := r.Jailed(); !ok {
+		t.Error("restored machine is not jailed")
+	}
+	t.Logf("jailed restore in %s (includes a full disk copy)", dur.Round(time.Millisecond))
+}
+
+// Fork: one snapshot, several live machines at once. This is the Phase 3
+// headline — it proves the copies are genuinely independent (each with its own
+// disk and its own agent socket) rather than one machine wearing two hats.
+func TestForkRunsIndependentCopies(t *testing.T) {
+	cfg := requireVM(t)
+	requireJail(t)
+	helper := buildHelper(t, "eph-jail")
+	cfg.Init = AgentInit
+	cfg.Jail = true
+	cfg.JailHelper = helper
+	cfg.Console = &bytes.Buffer{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	base, err := Boot(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+	if err := base.WaitAgent(ctx); err != nil {
+		t.Fatalf("agent never came up: %v", err)
+	}
+	snap, err := base.Snapshot(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if err := base.Destroy(ctx); err != nil {
+		t.Fatalf("Destroy base: %v", err)
+	}
+
+	const n = 2
+	forks := make([]*Machine, 0, n)
+	for i := range n {
+		started := time.Now()
+		f, err := Restore(ctx, RestoreConfig{Snapshot: snap, RunDir: cfg.RunDir, JailHelper: helper})
+		if err != nil {
+			t.Fatalf("fork %d: Restore: %v", i, err)
+		}
+		t.Logf("fork %d restored in %s", i, time.Since(started).Round(time.Millisecond))
+		forks = append(forks, f)
+	}
+	defer func() {
+		for _, f := range forks {
+			_ = f.Destroy(context.Background())
+		}
+	}()
+
+	// The forks must be different machines: different vsock sockets, different
+	// jails, and each running at the same time as the other.
+	if forks[0].VsockPath() == forks[1].VsockPath() {
+		t.Fatalf("both forks share a vsock socket %s — they are not independent", forks[0].VsockPath())
+	}
+
+	// Write a different value into each fork and read all of them back. If the
+	// forks shared a disk or a socket, the second write would clobber the first.
+	for i, f := range forks {
+		cmd := []string{"sh", "-c", "echo fork-" + string(rune('A'+i)) + " > /run/id"}
+		if _, err := f.Exec(ctx, cmd, nil, nil); err != nil {
+			t.Fatalf("fork %d write: %v", i, err)
+		}
+	}
+	for i, f := range forks {
+		var out bytes.Buffer
+		if _, err := f.Exec(ctx, []string{"cat", "/run/id"}, &out, nil); err != nil {
+			t.Fatalf("fork %d read: %v", i, err)
+		}
+		want := "fork-" + string(rune('A'+i))
+		if strings.TrimSpace(out.String()) != want {
+			t.Errorf("fork %d sees %q, want %q — the forks are not isolated", i, out.String(), want)
+		}
+	}
+}
+
 func TestRestoreRejectsAMissingSnapshot(t *testing.T) {
 	_, err := Restore(context.Background(), RestoreConfig{
 		Snapshot: Snapshot{

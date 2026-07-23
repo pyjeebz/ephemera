@@ -3,63 +3,71 @@ package machine
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/firecracker"
+	"github.com/pyjeebz/ephemera/internal/jail"
+	"golang.org/x/sys/unix"
 )
 
 // Snapshot is a machine frozen to disk: its device and vCPU state, its guest
-// memory, and the little a restore needs to bring it back — chiefly the socket
-// the in-guest agent listens on, which the restored machine inherits.
+// memory, and — for a jailed source — a frozen copy of its disk, plus enough to
+// bring copies back.
 //
-// The point of the whole exercise is what the memory file contains: a guest
-// that has already booted and is already running its agent. Restoring it skips
-// the second of kernel-and-userland startup that a fresh Boot pays, so a machine
+// The point of the whole exercise is what the memory file contains: a guest that
+// has already booted and is already running its agent. Restoring it skips the
+// second of kernel-and-userland startup that a fresh Boot pays, so a machine
 // comes back ready rather than starting.
+//
+// A jailed snapshot is the one that can be forked. Its guest listens on the
+// in-jail path /run/vsock.sock, which resolves to a different host socket in
+// every restore's own chroot — so many copies can run at once without colliding
+// on it. A non-jailed snapshot stores an absolute host socket path and can only
+// be restored one at a time.
 type Snapshot struct {
-	SourceID  string
-	StatePath string // host path to the device/vCPU state
-	MemPath   string // host path to the guest RAM image
-	VsockPath string // the agent socket the snapshot's vsock device expects
-	VCPUs     int
-	MemMiB    int
+	SourceID   string
+	StatePath  string // host path to the device/vCPU state
+	MemPath    string // host path to the guest RAM image
+	RootfsPath string // host path to the frozen disk (jailed snapshots only)
+	Jailed     bool
+	VsockPath  string // non-jailed only: the host socket a restore rebinds
+	VCPUs      int
+	MemMiB     int
 }
 
 // Snapshot pauses the machine and writes a full snapshot into dir. The machine
-// is left paused; the caller resumes it to keep it running, or destroys it —
-// destroying is the common case, since the usual reason to snapshot is to throw
-// the original away and restore copies later.
+// is left paused; the caller resumes it to keep it running (the fork case, where
+// the parent lives on) or destroys it.
 //
 // The guest must be paused first so its memory is a coherent instant and not a
 // moving target while the image is written.
 func (m *Machine) Snapshot(ctx context.Context, dir string) (Snapshot, error) {
-	if m.jail != nil {
-		// A jailed VMM writes inside its chroot, so the snapshot paths would have
-		// to be translated the way the boot images are. That composition comes
-		// after the mechanism itself is proven; refuse clearly until then.
-		return Snapshot{}, fmt.Errorf("machine: snapshotting a jailed machine is not supported yet")
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Snapshot{}, fmt.Errorf("machine: prepare snapshot dir: %w", err)
 	}
-
-	c := m.vmm.Client()
-	if err := c.Pause(ctx); err != nil {
+	if err := m.vmm.Client().Pause(ctx); err != nil {
 		return Snapshot{}, fmt.Errorf("machine: pause for snapshot: %w", err)
 	}
+	if m.jail != nil {
+		return m.snapshotJailed(ctx, dir)
+	}
+	return m.snapshotDirect(ctx, dir)
+}
 
+func (m *Machine) snapshotDirect(ctx context.Context, dir string) (Snapshot, error) {
 	state := filepath.Join(dir, m.ID+".state")
 	mem := filepath.Join(dir, m.ID+".mem")
-	if err := c.CreateSnapshot(ctx, firecracker.SnapshotCreate{
+	if err := m.vmm.Client().CreateSnapshot(ctx, firecracker.SnapshotCreate{
 		SnapshotType: "Full",
 		SnapshotPath: state,
 		MemFilePath:  mem,
 	}); err != nil {
 		return Snapshot{}, fmt.Errorf("machine: create snapshot: %w", err)
 	}
-
 	return Snapshot{
 		SourceID:  m.ID,
 		StatePath: state,
@@ -70,6 +78,46 @@ func (m *Machine) Snapshot(ctx context.Context, dir string) (Snapshot, error) {
 	}, nil
 }
 
+// snapshotJailed writes the snapshot inside the jail — where the confined VMM can
+// reach the paths — then copies the three artifacts out to dir, so the snapshot
+// outlives the machine that produced it. The disk is captured too, because each
+// fork needs its own copy to start from.
+func (m *Machine) snapshotJailed(ctx context.Context, dir string) (Snapshot, error) {
+	// Firecracker writes to these paths inside its chroot; the host sees them
+	// under the jail directory, because that directory is ordinary host storage.
+	if err := m.vmm.Client().CreateSnapshot(ctx, firecracker.SnapshotCreate{
+		SnapshotType: "Full",
+		SnapshotPath: "/run/state",
+		MemFilePath:  "/run/mem",
+	}); err != nil {
+		return Snapshot{}, fmt.Errorf("machine: create snapshot: %w", err)
+	}
+
+	jailDir, _ := m.Jailed()
+	state := filepath.Join(dir, m.ID+".state")
+	mem := filepath.Join(dir, m.ID+".mem")
+	rootfs := filepath.Join(dir, m.ID+".rootfs")
+	for _, c := range []struct{ from, to string }{
+		{filepath.Join(jailDir, "run", "state"), state},
+		{filepath.Join(jailDir, "run", "mem"), mem},
+		{m.cfg.RootfsPath, rootfs}, // the disk, frozen while the guest is paused
+	} {
+		if err := copyFile(c.from, c.to); err != nil {
+			return Snapshot{}, fmt.Errorf("machine: capture snapshot: %w", err)
+		}
+	}
+
+	return Snapshot{
+		SourceID:   m.ID,
+		StatePath:  state,
+		MemPath:    mem,
+		RootfsPath: rootfs,
+		Jailed:     true,
+		VCPUs:      m.cfg.VCPUs,
+		MemMiB:     m.cfg.MemMiB,
+	}, nil
+}
+
 // Resume unfreezes a machine paused by Snapshot.
 func (m *Machine) Resume(ctx context.Context) error {
 	return m.vmm.Client().Resume(ctx)
@@ -77,19 +125,16 @@ func (m *Machine) Resume(ctx context.Context) error {
 
 // RestoreConfig describes a restore.
 type RestoreConfig struct {
-	Snapshot Snapshot
-	RunDir   string
-	Binary   string // firecracker executable; empty looks it up on PATH
+	Snapshot   Snapshot
+	RunDir     string
+	Binary     string // firecracker executable; empty looks it up on PATH
+	JailHelper string // required for a jailed snapshot
 }
 
 // Restore brings a snapshot back to life in a fresh VMM and returns once the
 // guest is running again. Because the agent was already up when the snapshot was
 // taken, the returned machine is immediately ready — there is no WaitAgent to
 // sit through, which is the entire value of doing this.
-//
-// The restored guest listens on the same vsock socket the original did, so the
-// original must be gone first; Restore clears any stale socket at that path
-// before the new VMM can bind it.
 func Restore(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
 	snap := cfg.Snapshot
 	for _, f := range []struct{ name, path string }{
@@ -100,16 +145,20 @@ func Restore(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
 			return nil, fmt.Errorf("machine: snapshot %s not usable: %w", f.name, err)
 		}
 	}
+	if snap.Jailed {
+		return restoreJailed(ctx, cfg)
+	}
+	return restoreDirect(ctx, cfg)
+}
 
+func restoreDirect(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
+	snap := cfg.Snapshot
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
+	runDir := orDefault(cfg.RunDir, "run")
 
-	runDir := cfg.RunDir
-	if runDir == "" {
-		runDir = "run"
-	}
 	// The restored guest's vsock device binds the path stored in the snapshot, so
 	// a leftover socket from the source machine would stop the new VMM binding it.
 	if err := os.Remove(snap.VsockPath); err != nil && !os.IsNotExist(err) {
@@ -124,16 +173,10 @@ func Restore(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if err := vmm.Client().LoadSnapshot(ctx, firecracker.SnapshotLoad{
-		SnapshotPath: snap.StatePath,
-		MemBackend:   firecracker.MemBackend{BackendType: "File", BackendPath: snap.MemPath},
-		ResumeVM:     true,
-	}); err != nil {
+	if err := loadAndResume(ctx, vmm, snap.StatePath, snap.MemPath); err != nil {
 		_ = vmm.Shutdown(context.Background())
-		return nil, fmt.Errorf("machine: load snapshot: %w", err)
+		return nil, err
 	}
-
 	return &Machine{
 		ID:        id,
 		StartedAt: time.Now(),
@@ -141,4 +184,171 @@ func Restore(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
 		vmm:       vmm,
 		vsockPath: snap.VsockPath,
 	}, nil
+}
+
+// restoreJailed brings a snapshot up inside a fresh jail. This is the path fork
+// uses: the jail gives the restored guest its own vsock socket, and the private
+// rootfs copy gives it its own disk, so any number of them can run at once from
+// one snapshot.
+func restoreJailed(ctx context.Context, cfg RestoreConfig) (*Machine, error) {
+	snap := cfg.Snapshot
+	if cfg.JailHelper == "" {
+		return nil, fmt.Errorf("machine: restoring a jailed snapshot needs a jail helper")
+	}
+	if _, err := os.Stat(snap.RootfsPath); err != nil {
+		return nil, fmt.Errorf("machine: snapshot disk not usable: %w", err)
+	}
+
+	fcBin := cfg.Binary
+	if fcBin == "" {
+		resolved, err := exec.LookPath(firecracker.DefaultBinary)
+		if err != nil {
+			return nil, fmt.Errorf("machine: locate firecracker: %w", err)
+		}
+		fcBin = resolved
+	}
+
+	id, err := newID()
+	if err != nil {
+		return nil, err
+	}
+	runDir := orDefault(cfg.RunDir, "run")
+	jailDir := filepath.Join(runDir, "jails", id)
+
+	// A private, writable copy of the disk, placed directly in the jail directory
+	// so it lands at /rootfs.ext4 after the pivot and is removed with the jail.
+	// This is the copy-on-write stand-in for now: correct, if not yet cheap.
+	if err := os.MkdirAll(jailDir, 0o755); err != nil {
+		return nil, fmt.Errorf("machine: prepare jail dir: %w", err)
+	}
+	if err := copyFile(snap.RootfsPath, filepath.Join(jailDir, "rootfs.ext4")); err != nil {
+		_ = os.RemoveAll(jailDir)
+		return nil, fmt.Errorf("machine: copy fork disk: %w", err)
+	}
+
+	spec := &jail.Spec{
+		Dir:       jail.Dir(jailDir),
+		Binary:    fcBin,
+		Rootfs:    "", // already placed at /rootfs.ext4 above
+		SnapState: snap.StatePath,
+		SnapMem:   snap.MemPath,
+		APISock:   "run/firecracker.sock",
+		VsockSock: "run/vsock.sock",
+	}
+	vmm, err := firecracker.Launch(ctx, firecracker.Options{
+		Binary:     fcBin,
+		Jail:       spec,
+		JailHelper: cfg.JailHelper,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// The snapshot is bound read-only inside the jail at fixed names.
+	if err := loadAndResume(ctx, vmm, jail.GuestSnapState, jail.GuestSnapMem); err != nil {
+		_ = vmm.Shutdown(context.Background())
+		return nil, err
+	}
+
+	m := &Machine{
+		ID:        id,
+		StartedAt: time.Now(),
+		cfg:       Config{VCPUs: snap.VCPUs, MemMiB: snap.MemMiB, RunDir: runDir},
+		vmm:       vmm,
+		vsockPath: spec.HostVsockSock(),
+		jail:      spec,
+	}
+	return m, nil
+}
+
+// loadAndResume rebuilds the guest from a snapshot and starts it running.
+func loadAndResume(ctx context.Context, vmm *firecracker.VMM, statePath, memPath string) error {
+	if err := vmm.Client().LoadSnapshot(ctx, firecracker.SnapshotLoad{
+		SnapshotPath: statePath,
+		MemBackend:   firecracker.MemBackend{BackendType: "File", BackendPath: memPath},
+		ResumeVM:     true,
+	}); err != nil {
+		return fmt.Errorf("machine: load snapshot: %w", err)
+	}
+	return nil
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// copyFile copies src to dst, skipping holes. A rootfs image is 1 GiB in name
+// and ~50 MiB in fact — the rest is a hole — so copying it byte for byte would
+// spend most of its time writing zeros. Copying only the data extents turns a
+// multi-second copy into a fraction of a second, which is what keeps a fork
+// closer to instant than to a reboot. On a filesystem without SEEK_DATA this
+// falls back to a straight copy.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+
+	if err := sparseCopy(in, out, info.Size()); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// sparseCopy writes only src's data regions to out, leaving the gaps as holes,
+// then sets out to the full size so any trailing hole is preserved.
+func sparseCopy(in, out *os.File, size int64) error {
+	fd := int(in.Fd())
+	var off int64
+	for off < size {
+		dataStart, err := unix.Seek(fd, off, unix.SEEK_DATA)
+		if err != nil {
+			if err == unix.ENXIO {
+				break // no more data before the end; the rest is a hole
+			}
+			// SEEK_DATA unsupported here — fall back to a plain copy.
+			return plainCopy(in, out)
+		}
+		holeStart, err := unix.Seek(fd, dataStart, unix.SEEK_HOLE)
+		if err != nil {
+			return err
+		}
+		if _, err := in.Seek(dataStart, io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := out.Seek(dataStart, io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := io.CopyN(out, in, holeStart-dataStart); err != nil {
+			return err
+		}
+		off = holeStart
+	}
+	// Truncate to the real size so a hole at the very end is not lost.
+	return out.Truncate(size)
+}
+
+func plainCopy(in, out *os.File) error {
+	if _, err := in.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := out.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := io.Copy(out, in)
+	return err
 }
