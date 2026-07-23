@@ -26,6 +26,12 @@ if ! docker ps >/dev/null 2>&1; then
   exit 1
 fi
 
+# The agent runs inside the guest, so it is built statically (CGO off) — the
+# minimal rootfs has no toolchain and we do not want to depend on its libc.
+echo ">> building guest agent"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -trimpath -ldflags='-s -w' -o "$root/build/guest/eph-agent" "$root/cmd/eph-agent"
+
 echo ">> building guest image ($IMAGE_TAG)"
 docker build -q -t "$IMAGE_TAG" "$root/build/guest" >/dev/null
 
