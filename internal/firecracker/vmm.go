@@ -30,6 +30,11 @@ type Options struct {
 	// ConsoleIn is the guest's serial input. Firecracker only forwards
 	// keystrokes from a real TTY, so this is only useful when wired to one.
 	ConsoleIn io.Reader
+
+	// Cleanup lists extra paths the VMM creates that should be removed once it
+	// exits — the vsock socket, for instance. Keeping this with the reaper means
+	// every exit path cleans up, not just an explicit Shutdown.
+	Cleanup []string
 }
 
 // VMM is one running firecracker process and the API client bound to it.
@@ -93,6 +98,9 @@ func Launch(ctx context.Context, o Options) (*VMM, error) {
 	go func() {
 		v.waitErr = cmd.Wait()
 		_ = os.Remove(o.SockPath)
+		for _, p := range o.Cleanup {
+			_ = os.Remove(p)
+		}
 		close(v.done)
 	}()
 
