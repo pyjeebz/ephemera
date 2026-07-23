@@ -6,6 +6,7 @@
 # VM build artifacts — large, rebuilt locally, never committed
 /build/kernel/
 /build/rootfs/
+/build/guest/eph-agent
 *.ext4
 *.img
 vmlinux*
