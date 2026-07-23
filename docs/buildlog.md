@@ -585,3 +585,31 @@ cost entirely off the hot path. On a 7.6 GB box the pool stays small; the knob i
 
 **Phase 3 mechanisms complete:** snapshot/restore, zero-copy fork, and a warm pool that serves in
 microseconds. What remains is exposing them through the daemon and CLI.
+
+---
+
+## Phase 3 — the daemon and CLI surface
+
+**Goal:** make snapshot and fork drivable by hand.
+
+`ephemerad` gained `POST /v1/machines/{id}/snapshot` (jailed machines only, since only a jailed snapshot
+forks; the machine keeps running), `GET`/`DELETE /v1/snapshots`, and `POST /v1/snapshots/{id}/fork`.
+Snapshots persist in their own store — unlike a machine record, which dies with its process, a snapshot is
+files on disk that outlive the daemon. The CLI mirrors it: `eph snapshot <id>`, `eph snapshots`, `eph fork
+<snap>`.
+
+End to end, by hand: create a base, drop a marker in it, `eph snapshot` it (base keeps running), `eph
+fork` it twice — both copies come up in tens of milliseconds carrying the marker, and a write in one is
+absent in the other. The whole point in one demo: a booted, customised machine, cloned on demand, each
+clone isolated.
+
+**A jail-cleanup gap this closed.** Machine records now carry the jail directory, and the orphan reaper
+removes it — a jailed machine's sockets live inside that directory, so without it a crashed daemon would
+leave them behind. Latent for every jailed machine, not just forks; fixed for all.
+
+**A shell gotcha, not a code one, worth one line so I stop repeating it:** `pkill -f 'bin/ephemerad'` in a
+test script matches the *script's own command line* and kills the shell running it. Kill by recorded PID,
+or match the executable name exactly (`pgrep -x ephemerad`), never a substring the command itself contains.
+
+**Phase 3 complete:** boot once, snapshot, and fork ready copies in ~20 ms or serve pre-forked ones in
+microseconds — all drivable from `eph`.
