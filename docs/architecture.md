@@ -87,8 +87,10 @@ Each phase is a vertical slice that boots to a working checkpoint.
             a read-only base with a tmpfs overlay, which also fixes a latent bug (concurrent machines used to
             share one writable image). See [0006](decisions/0006-fork-via-jailed-snapshots.md) (vsock) and
             [0007](decisions/0007-read-only-base-with-ram-overlay.md) (disk).
-      - [ ] **Warm pool.** Keep restored machines standing by, so a request is served instantly.
-      _Checkpoint: fork a running VM in <100 ms ✅ (15–31 ms); warm pool serves instant machines._
+      - [x] **Warm pool.** `internal/pool` keeps N machines pre-forked and resumed, agents up. `Get` takes
+            one and reforks a replacement in the background, so a request waits for a channel receive, not a
+            VM. **Measured ~12 µs to serve** from a full pool (vs ~20 ms to fork, ~1 s to boot).
+      _Checkpoint: fork a running VM in <100 ms ✅ (15–31 ms); warm pool serves instant machines ✅ (~12 µs)._
 - [ ] **Phase 4 — AI agent loop.** Anthropic-driven loop with exec/file tools, budgets, rate limits,
       safety; exposed MCP-native.
       _Checkpoint: "build a snake game" runs end-to-end in a sandbox._

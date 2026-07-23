@@ -551,3 +551,37 @@ built to never need a write, journal included.**
 
 **Phase 3 checkpoint met and then some:** fork a running VM in **15–31 ms**, well under the 100 ms target,
 copying nothing.
+
+---
+
+## Phase 3 — the warm pool
+
+**Goal:** take even the fork off the request path. Keep machines pre-forked and ready; hand one out
+instantly.
+
+**Numbers**
+
+| Thing | Value |
+| --- | --- |
+| Boot | ~1 s |
+| Fork | ~15–31 ms |
+| **Get from a warm pool** | **~12 µs** |
+
+**How it works.** `internal/pool` forks N machines from one snapshot ahead of time and holds them in a
+channel, resumed with their agents up. `Get` receives one and starts a background refork to replace it, so
+the caller waits for a channel receive — microseconds — not for a VM. Every machine in the pool is an
+identical fork of the same snapshot, which is what makes them interchangeable.
+
+**The shape that makes it safe.** The pool is a buffered channel plus a bounded set of forker goroutines,
+with one rule for shutdown: cancel first, then wait, then drain. Cancelling makes any in-flight fork
+destroy its machine instead of handing it out; waiting lets those finish; draining destroys whatever
+already made it into the channel. A `closed` flag under a mutex keeps `Get`'s refill from starting a new
+forker after `Close` has begun — the one race worth guarding, since a goroutine started after the wait
+would leak a VM.
+
+**Why microseconds and not milliseconds:** the expensive things — boot, then fork — already happened,
+before the request arrived. The pool trades a little standing memory (N idle machines) for taking their
+cost entirely off the hot path. On a 7.6 GB box the pool stays small; the knob is memory.
+
+**Phase 3 mechanisms complete:** snapshot/restore, zero-copy fork, and a warm pool that serves in
+microseconds. What remains is exposing them through the daemon and CLI.
