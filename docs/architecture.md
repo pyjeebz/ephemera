@@ -74,8 +74,15 @@ Each phase is a vertical slice that boots to a working checkpoint.
             Opt-in (`-jail`) for now. See [decision 0004](decisions/0004-hand-rolled-unprivileged-jail.md).
             _A capped daemon could not create the user namespace (the kernel forbids it), which is why the
             network capability had to leave the daemon — see [decision 0005](decisions/0005-privileged-network-helper.md)._
-- [ ] **Phase 3 — Guest agent, snapshots & fork.** vsock guest agent (exec/files/tty), snapshot/restore,
-      fork-in-ms, warm pool.
+- [~] **Phase 3 — Snapshots, fork & warm pool.** (The vsock guest agent's exec path landed in Phase 1.)
+      - [x] **Snapshot & restore.** Pause a running guest, write its device state and RAM to two files
+            (`PUT /snapshot/create`), and bring it back in a fresh VMM (`PUT /snapshot/load`, resume). The
+            restored guest is the *same running instance* — its agent is already up, so the machine is ready
+            with no boot to wait through. Measured **~63 ms to restore vs ~1 s to cold-boot**; verified it is
+            a resume not a reboot (PID 1's start time is unchanged).
+      - [ ] **Fork.** Restore one snapshot into several machines at once. Needs per-copy vsock paths (the
+            jail gives each its own, since `/run/vsock.sock` is distinct per chroot) and copy-on-write disks.
+      - [ ] **Warm pool.** Keep restored machines standing by, so a request is served instantly.
       _Checkpoint: fork a running VM in <100 ms; warm pool serves instant machines._
 - [ ] **Phase 4 — AI agent loop.** Anthropic-driven loop with exec/file tools, budgets, rate limits,
       safety; exposed MCP-native.

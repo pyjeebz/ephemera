@@ -436,3 +436,45 @@ part shrinks to something you can read in one sitting.
 
 **Verified:** daemon and CLI uncapped; a machine that is jailed, networked, and capped at once boots in
 ~1.2 s and reaches the internet through its owner-stamped TAP; teardown removes the tap and the jail.
+
+---
+
+## Phase 3 — snapshot & restore (the foundation for fork)
+
+**Goal:** stop paying the boot cost every time. Freeze a booted machine to disk, bring it back in
+milliseconds.
+
+**Numbers**
+
+| Thing | Value |
+| --- | --- |
+| Cold boot to agent-ready | ~1 s |
+| **Restore to agent-ready** | **~63 ms** |
+| Snapshot artifacts | two files: device/vCPU state + guest RAM |
+
+**How it works.** Pause the guest (`PATCH /vm` → Paused), so its memory is a still image rather than a
+moving one, then `PUT /snapshot/create` writes two files: the device and vCPU state, and the guest RAM. To
+bring it back, a fresh Firecracker gets `PUT /snapshot/load` with those two files and `resume_vm: true`,
+and the guest is running again the instant the call returns.
+
+**The thing that makes it worth doing.** The memory image contains a guest that had already booted and was
+already running its agent. So a restore does not just skip the kernel and userland coming up — it comes
+back with the agent *already listening*. No `WaitAgent`, no boot: the machine is ready the moment restore
+returns. That is the entire pitch of the phase, and it is why 63 ms beats a 1 s boot by more than the
+number alone suggests — the restored machine is immediately useful, not just immediately present.
+
+**Proving it is a resume, not a fast reboot.** A restore that quietly rebooted the guest would still pass a
+naive "does it work" check. Two things pin it down: a marker written into the running guest survives the
+round trip, and — the surer one — PID 1's start time (field 22 of `/proc/1/stat`, in ticks since the
+guest's boot) is identical before and after. A reboot resets that clock; a resume cannot. It is unchanged,
+so the guest was genuinely resumed.
+
+**Design notes / what is deferred.**
+- **Full snapshots only** for now. Diff snapshots (just the pages changed since a base) need dirty-page
+  tracking turned on at boot and a base to diff against — that is fork's problem, not this slice's.
+- **Non-jailed only** for now. A jailed VMM writes inside its chroot, so the snapshot paths need the same
+  translation the boot images get; deferred until the mechanism itself was proven.
+- **The vsock path is the fork constraint.** A restored guest binds the exact socket path stored in the
+  snapshot, so two restores of one snapshot would collide on it. Neat resolution waiting in the wings: the
+  jail already gives every machine its own `/run/vsock.sock` inside its own chroot, so once snapshot
+  composes with the jail, forks get distinct sockets for free.
