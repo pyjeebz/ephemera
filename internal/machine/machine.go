@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/agent"
 	"github.com/pyjeebz/ephemera/internal/cgroup"
 	"github.com/pyjeebz/ephemera/internal/firecracker"
+	"github.com/pyjeebz/ephemera/internal/jail"
 	"github.com/pyjeebz/ephemera/internal/vmnet"
 )
 
@@ -87,6 +89,12 @@ type Config struct {
 	// network it is a restriction rather than a grant, so it applies whenever
 	// the subtree is available rather than on explicit request.
 	Cgroup *cgroup.Manager
+
+	// Jail confines the VMM to a chroot and its own process tree, entered through
+	// a user namespace so it needs no privilege. JailHelper is the eph-jail
+	// binary that does the entering; both must be set together.
+	Jail       bool
+	JailHelper string
 }
 
 func (c *Config) applyDefaults() {
@@ -134,7 +142,16 @@ type Machine struct {
 	lease    vmnet.Lease
 	hasLease bool
 	cg       *cgroup.Cgroup
+	jail     *jail.Spec
 	released sync.Once
+}
+
+// Jailed reports whether the machine runs confined, and where its jail is.
+func (m *Machine) Jailed() (string, bool) {
+	if m.jail == nil {
+		return "", false
+	}
+	return string(m.jail.Dir), true
 }
 
 // VsockPath is the host socket through which the guest agent is reached.
@@ -232,12 +249,50 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 		m.cg = cg
 	}
 
+	// Resolve where the VMM's sockets and images live. Without a jail these are
+	// host paths the VMM uses directly; with one they are paths inside the jail,
+	// and the daemon reaches the sockets at their host location under the jail
+	// directory. kernelPath and rootfsPath are what the VMM is told; vsockForVMM
+	// likewise, while vsockPath is always the host path the agent connects to.
 	vsockPath := filepath.Join(cfg.RunDir, id+".vsock")
-	// The VMM creates this socket itself and refuses to start if one is already
-	// there, so clear any remnant of a machine that did not shut down cleanly.
-	if err := os.Remove(vsockPath); err != nil && !os.IsNotExist(err) {
-		m.release()
-		return nil, fmt.Errorf("machine: clear stale vsock socket: %w", err)
+	vsockForVMM := vsockPath
+	kernelPath, rootfsPath := cfg.KernelPath, cfg.RootfsPath
+	var cleanup []string
+
+	if cfg.Jail {
+		fcBin := cfg.Binary
+		if fcBin == "" {
+			resolved, err := exec.LookPath(firecracker.DefaultBinary)
+			if err != nil {
+				m.release()
+				return nil, fmt.Errorf("machine: locate firecracker for jail: %w", err)
+			}
+			fcBin = resolved
+		}
+		spec := &jail.Spec{
+			Dir:       jail.Dir(filepath.Join(cfg.RunDir, "jails", id)),
+			Binary:    fcBin,
+			Kernel:    cfg.KernelPath,
+			Rootfs:    cfg.RootfsPath,
+			Network:   m.hasLease,
+			APISock:   "run/firecracker.sock",
+			VsockSock: "run/vsock.sock",
+		}
+		m.jail = spec
+		// Inside the jail the VMM sees fixed names; the real files are bind
+		// mounted there by eph-jail, and the sockets land under the jail dir.
+		kernelPath, rootfsPath = jail.GuestKernel, jail.GuestRootfs
+		vsockForVMM = spec.GuestVsock()
+		vsockPath = spec.HostVsockSock()
+	} else {
+		// The VMM creates this socket itself and refuses to start if one is
+		// already there, so clear any remnant of a machine that did not shut down
+		// cleanly. A jail always builds a fresh directory, so it has none.
+		if err := os.Remove(vsockPath); err != nil && !os.IsNotExist(err) {
+			m.release()
+			return nil, fmt.Errorf("machine: clear stale vsock socket: %w", err)
+		}
+		cleanup = []string{vsockPath}
 	}
 
 	var cgroupFD *int
@@ -246,12 +301,14 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 		cgroupFD = &fd
 	}
 	vmm, err := firecracker.Launch(ctx, firecracker.Options{
-		Binary:    cfg.Binary,
-		SockPath:  filepath.Join(cfg.RunDir, id+".sock"),
-		Console:   cfg.Console,
-		ConsoleIn: cfg.ConsoleIn,
-		Cleanup:   []string{vsockPath},
-		CgroupFD:  cgroupFD,
+		Binary:     cfg.Binary,
+		SockPath:   filepath.Join(cfg.RunDir, id+".sock"),
+		Console:    cfg.Console,
+		ConsoleIn:  cfg.ConsoleIn,
+		Cleanup:    cleanup,
+		CgroupFD:   cgroupFD,
+		Jail:       m.jail,
+		JailHelper: cfg.JailHelper,
 	})
 	if err != nil {
 		m.release()
@@ -268,14 +325,14 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 
 	c := vmm.Client()
 	if err := c.SetBootSource(ctx, firecracker.BootSource{
-		KernelImagePath: cfg.KernelPath,
+		KernelImagePath: kernelPath,
 		BootArgs:        BootArgs(cfg.Init, m.netArgs()),
 	}); err != nil {
 		return fail(err)
 	}
 	if err := c.SetDrive(ctx, firecracker.Drive{
 		DriveID:      "rootfs",
-		PathOnHost:   cfg.RootfsPath,
+		PathOnHost:   rootfsPath,
 		IsRootDevice: true,
 		IsReadOnly:   false,
 	}); err != nil {
@@ -291,7 +348,7 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 	// for a machine with no network interface.
 	if err := c.SetVsock(ctx, firecracker.Vsock{
 		GuestCID: guestCID,
-		UDSPath:  vsockPath,
+		UDSPath:  vsockForVMM,
 	}); err != nil {
 		return fail(err)
 	}
