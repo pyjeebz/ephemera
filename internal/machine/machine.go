@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pyjeebz/ephemera/internal/agent"
 	"github.com/pyjeebz/ephemera/internal/firecracker"
 )
 
@@ -25,6 +26,15 @@ const (
 	DefaultVCPUs  = 1
 	DefaultMemMiB = 256
 	DefaultInit   = "/sbin/eph-init"
+
+	// AgentInit boots straight into the guest agent, which is what the daemon
+	// uses; the other inits are for a human at a console or for tests.
+	AgentInit = "/sbin/eph-agent-init"
+
+	// guestCID identifies the guest on its vsock bus. Host is always 2 and 0/1
+	// are reserved, so 3 is the first usable value — and since every machine
+	// gets its own VMM and its own socket, they can all share it.
+	guestCID = 3
 )
 
 // Config describes a machine to boot.
@@ -85,8 +95,28 @@ type Machine struct {
 	ID        string
 	StartedAt time.Time
 
-	cfg Config
-	vmm *firecracker.VMM
+	cfg       Config
+	vmm       *firecracker.VMM
+	vsockPath string
+}
+
+// VsockPath is the host socket through which the guest agent is reached.
+func (m *Machine) VsockPath() string { return m.vsockPath }
+
+// WaitAgent blocks until the guest agent is accepting commands.
+//
+// Boot returns as soon as the VMM accepts the start action, long before the
+// guest kernel and userland are up, so anything that wants to run a command has
+// to wait for the agent rather than for Boot.
+func (m *Machine) WaitAgent(ctx context.Context) error {
+	return agent.WaitReady(ctx, m.vsockPath)
+}
+
+// Exec runs a command in the guest and streams its output.
+//
+// The returned status is the command's own: non-zero is a result, not an error.
+func (m *Machine) Exec(ctx context.Context, cmd []string, stdout, stderr io.Writer) (int, error) {
+	return agent.Exec(ctx, m.vsockPath, agent.ExecRequest{Cmd: cmd}, stdout, stderr)
 }
 
 // Boot starts a machine and returns once the VMM has accepted the boot action.
@@ -103,11 +133,19 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 		return nil, err
 	}
 
+	vsockPath := filepath.Join(cfg.RunDir, id+".vsock")
+	// The VMM creates this socket itself and refuses to start if one is already
+	// there, so clear any remnant of a machine that did not shut down cleanly.
+	if err := os.Remove(vsockPath); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("machine: clear stale vsock socket: %w", err)
+	}
+
 	vmm, err := firecracker.Launch(ctx, firecracker.Options{
 		Binary:    cfg.Binary,
 		SockPath:  filepath.Join(cfg.RunDir, id+".sock"),
 		Console:   cfg.Console,
 		ConsoleIn: cfg.ConsoleIn,
+		Cleanup:   []string{vsockPath},
 	})
 	if err != nil {
 		return nil, err
@@ -140,11 +178,25 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 	}); err != nil {
 		return fail(err)
 	}
+	// Always attached: it costs nothing when unused, and it is the only way in
+	// for a machine with no network interface.
+	if err := c.SetVsock(ctx, firecracker.Vsock{
+		GuestCID: guestCID,
+		UDSPath:  vsockPath,
+	}); err != nil {
+		return fail(err)
+	}
 	if err := c.Start(ctx); err != nil {
 		return fail(err)
 	}
 
-	return &Machine{ID: id, StartedAt: time.Now(), cfg: cfg, vmm: vmm}, nil
+	return &Machine{
+		ID:        id,
+		StartedAt: time.Now(),
+		cfg:       cfg,
+		vmm:       vmm,
+		vsockPath: vsockPath,
+	}, nil
 }
 
 // BootArgs builds the guest kernel command line.
