@@ -2,15 +2,15 @@
 # One-time host setup for machine networking. Needs root; run it with sudo.
 #
 # Phases 0 and 1 needed no privilege at all. Networking is where that ends, and
-# this script draws the line deliberately: it hands the daemon exactly one
+# this script draws the line deliberately: it hands ONE small binary a single
 # capability, installs a firewall that governs the whole machine pool, and does
-# nothing else. ephemerad never touches iptables, nftables, or a routing table
-# at runtime — the policy is host configuration, applied once, and the daemon's
-# only job is to plug interfaces into a subnet the firewall already polices.
+# nothing else. ephemerad and eph run with NO capability — they reach the network
+# only by executing eph-netadmin, which is the one component that may touch a TAP.
 #
 # Two consequences worth knowing:
-#   * The daemon runs with CAP_NET_ADMIN, not as root. It can create TAP devices
-#     and nothing more — it cannot read your files, load modules, or escalate.
+#   * The daemon itself is unprivileged. Only eph-netadmin carries CAP_NET_ADMIN,
+#     and all it can do is create and destroy TAP devices — it cannot read your
+#     files, load modules, or escalate. A bug in the daemon has nothing to launder.
 #   * The firewall matches on the pool's address range, not on interface names,
 #     so it covers every machine that will ever boot into the pool without the
 #     daemon adding a single rule per machine.
@@ -20,7 +20,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BINARIES=("$REPO/bin/ephemerad" "$REPO/bin/eph")
+# Only the network helper is privileged. The daemon and CLI hold nothing.
+BINARIES=("$REPO/bin/eph-netadmin")
 
 # Must match ephemerad's -pool / eph's -pool. The firewall is written in terms
 # of this range, so the two have to agree or machines get an address the rules
@@ -178,7 +179,7 @@ else
 fi
 
 echo
-echo ">> granting CAP_NET_ADMIN"
+echo ">> granting CAP_NET_ADMIN to the network helper"
 missing=0
 for bin in "${BINARIES[@]}"; do
   if [[ ! -f "$bin" ]]; then
@@ -192,18 +193,20 @@ done
 
 if [[ "$missing" -eq 1 ]]; then
   echo
-  echo "   build the missing binaries and re-run:"
-  echo "     go build -o bin/ephemerad ./cmd/ephemerad && go build -o bin/eph ./cmd/eph"
+  echo "   build the helper and re-run:"
+  echo "     go build -o bin/eph-netadmin ./cmd/eph-netadmin"
   echo "     sudo $0"
 fi
 
 echo
-echo ">> done."
+echo ">> done. the daemon and CLI hold no capability; only eph-netadmin does."
 echo "   networking (opt-in per machine):"
 echo "     ./bin/eph run -net -- wget -qO- https://example.com     # reaches the internet"
 echo "     ./bin/eph run -net -- wget -qO- http://172.19.0.1       # blocked, by design"
 echo "     ./bin/ephemerad -network"
+echo "   isolation composes now — jailed AND networked AND capped:"
+echo "     ./bin/eph run -jail -net -- wget -qO- https://example.com"
 echo "   resource caps (automatic once delegated — every machine, networked or not):"
 echo "     ./bin/eph run -- sh -c 'cat /sys/fs/cgroup/memory.max'  # capped, not 'max'"
 echo
-echo "   re-run this after every go build (file capabilities do not survive a rebuild)."
+echo "   re-run this after every go build of eph-netadmin (file caps do not survive a rebuild)."
