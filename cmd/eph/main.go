@@ -14,8 +14,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
+	"github.com/pyjeebz/ephemera/internal/agent"
+	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/client"
 	"github.com/pyjeebz/ephemera/internal/machine"
 )
 
@@ -32,6 +36,14 @@ func main() {
 		err = cmdBoot(args[1:])
 	case "run":
 		err = cmdRun(args[1:])
+	case "create":
+		err = cmdCreate(args[1:])
+	case "ls":
+		err = cmdList(args[1:])
+	case "exec":
+		err = cmdExec(args[1:])
+	case "rm":
+		err = cmdRm(args[1:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -56,9 +68,15 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: eph <command> [flags]
 
-commands:
-  boot   boot a machine and stream its serial console
-  run    boot a machine, run a command inside it, then destroy it
+standalone — drive a machine directly, no daemon needed:
+  boot     boot a machine and stream its serial console
+  run      boot a machine, run one command inside it, then destroy it
+
+managed — talk to ephemerad, machines outlive the command:
+  create   boot a machine and leave it running
+  ls       list running machines
+  exec     run a command in an existing machine
+  rm       destroy a machine
 
 run "eph <command> -h" for flags
 `)
@@ -226,6 +244,134 @@ func cmdRun(argv []string) error {
 		return guestExit{code: code}
 	}
 	return nil
+}
+
+// daemonAddr registers the flag every managed command shares.
+func daemonAddr(fs *flag.FlagSet) *string {
+	return fs.String("addr", envOr("EPHEMERA_ADDR", client.DefaultAddr), "ephemerad address")
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func cmdCreate(argv []string) error {
+	fs := flag.NewFlagSet("create", flag.ExitOnError)
+	addr := daemonAddr(fs)
+	vcpus := fs.Int("cpus", 0, "vCPU count (0 = daemon default)")
+	mem := fs.Int("mem", 0, "memory in MiB (0 = daemon default)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: eph create [flags]\n\nBoots a machine and leaves it running. Prints its id.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	m, err := client.New(*addr).Create(ctx, api.CreateRequest{VCPUs: *vcpus, MemMiB: *mem})
+	if err != nil {
+		return err
+	}
+	fmt.Println(m.ID)
+	return nil
+}
+
+func cmdList(argv []string) error {
+	fs := flag.NewFlagSet("ls", flag.ExitOnError)
+	addr := daemonAddr(fs)
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	machines, err := client.New(*addr).List(ctx)
+	if err != nil {
+		return err
+	}
+	if len(machines) == 0 {
+		fmt.Fprintln(os.Stderr, "no machines running")
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw, "ID\tPID\tCPUS\tMEM\tUPTIME")
+	for _, m := range machines {
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%d MiB\t%s\n", m.ID, m.PID, m.VCPUs, m.MemMiB,
+			time.Duration(m.UptimeSec*float64(time.Second)).Round(time.Second))
+	}
+	return tw.Flush()
+}
+
+func cmdExec(argv []string) error {
+	fs := flag.NewFlagSet("exec", flag.ExitOnError)
+	addr := daemonAddr(fs)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: eph exec [flags] <machine-id> <command> [args...]\n\n"+
+			"Runs a command in an existing machine, exiting with the command's status.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	if fs.NArg() < 2 {
+		fs.Usage()
+		return fmt.Errorf("need a machine id and a command")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	id, cmd := fs.Arg(0), fs.Args()[1:]
+	code, err := client.New(*addr).Exec(ctx, id, agent.ExecRequest{Cmd: cmd}, os.Stdout, os.Stderr)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return guestExit{code: code}
+	}
+	return nil
+}
+
+func cmdRm(argv []string) error {
+	fs := flag.NewFlagSet("rm", flag.ExitOnError)
+	addr := daemonAddr(fs)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: eph rm [flags] <machine-id>...\n\nDestroys machines.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		fs.Usage()
+		return fmt.Errorf("need at least one machine id")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c := client.New(*addr)
+	// Keep going after a failure so one bad id does not strand the rest.
+	var firstErr error
+	for _, id := range fs.Args() {
+		if err := c.Destroy(ctx, id); err != nil {
+			fmt.Fprintf(os.Stderr, "eph: %s: %v\n", id, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		fmt.Println(id)
+	}
+	return firstErr
 }
 
 // guestExit carries a command's non-zero status out to the process exit code
