@@ -46,6 +46,11 @@ type Record struct {
 	// TAP, it outlives its daemon and has to be removed by whoever reaps the
 	// orphaned VMM.
 	Cgroup string `json:"cgroup,omitempty"`
+
+	// JailDir is the machine's jail directory, empty when unjailed. Its sockets
+	// live inside it, so removing it is how an orphaned jailed machine is cleaned
+	// up — the reaper cannot rely on the VMM's own exit-path cleanup.
+	JailDir string `json:"jail_dir,omitempty"`
 }
 
 // Store is the daemon's machine registry.
@@ -201,6 +206,13 @@ func Reap(dir, netHelper string, log *slog.Logger) (int, error) {
 		if r.Cgroup != "" {
 			if err := cgroup.Remove(r.Cgroup); err != nil {
 				log.Error("could not remove orphaned cgroup", "id", r.ID, "cgroup", r.Cgroup, "err", err)
+			}
+		}
+		// A jailed machine's sockets live inside its jail directory, which the
+		// dead VMM never cleaned up, so remove the whole thing here.
+		if r.JailDir != "" {
+			if err := os.RemoveAll(r.JailDir); err != nil {
+				log.Error("could not remove orphaned jail", "id", r.ID, "jail", r.JailDir, "err", err)
 			}
 		}
 		_ = os.Remove(path)
