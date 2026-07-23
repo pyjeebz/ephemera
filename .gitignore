@@ -1,0 +1,16 @@
+# Go build output
+/bin/
+*.test
+*.out
+
+# VM build artifacts — large, rebuilt locally, never committed
+/build/kernel/
+/build/rootfs/
+*.ext4
+*.img
+vmlinux*
+
+# runtime / local
+*.log
+.env
+/run/
