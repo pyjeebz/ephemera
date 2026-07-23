@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 
 	"golang.org/x/sys/unix"
 )
@@ -40,6 +41,20 @@ func createTap(name string) error {
 	ifr.SetUint16(unix.IFF_TAP | unix.IFF_NO_PI)
 	if err := unix.IoctlIfreq(fd, unix.TUNSETIFF, ifr); err != nil {
 		return fmt.Errorf("vmnet: create tap %s: %w", name, err)
+	}
+
+	// Hand the device to the uid and gid that will run the VMM. This is what
+	// lets an *unprivileged* Firecracker attach it: the kernel normally requires
+	// CAP_NET_ADMIN over the netns to open a TAP, but it makes an exception for a
+	// process whose uid matches the device's owner. That exception is the whole
+	// reason a jailed VMM — running in a user namespace with no capability over
+	// the host network — can still open its own interface. Set before persisting,
+	// so the device never exists un-owned.
+	if err := unix.IoctlSetInt(fd, unix.TUNSETOWNER, os.Getuid()); err != nil {
+		return fmt.Errorf("vmnet: set owner on tap %s: %w", name, err)
+	}
+	if err := unix.IoctlSetInt(fd, unix.TUNSETGROUP, os.Getgid()); err != nil {
+		return fmt.Errorf("vmnet: set group on tap %s: %w", name, err)
 	}
 
 	// A TAP's default lifetime is the lifetime of the file descriptor that made
