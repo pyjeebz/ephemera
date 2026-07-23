@@ -478,3 +478,44 @@ so the guest was genuinely resumed.
   snapshot, so two restores of one snapshot would collide on it. Neat resolution waiting in the wings: the
   jail already gives every machine its own `/run/vsock.sock` inside its own chroot, so once snapshot
   composes with the jail, forks get distinct sockets for free.
+
+---
+
+## Phase 3 — fork (the <100 ms checkpoint)
+
+**Goal:** one snapshot → several live machines at once, each independent, under 100 ms each.
+
+**Numbers**
+
+| Thing | Value |
+| --- | --- |
+| Fork (jailed restore, per copy) | **78–85 ms** ✅ |
+| Cold boot, for comparison | ~1 s |
+| Disk copied per fork | ~50 MiB (sparse; image is 1 GiB in name) |
+
+**How the two collisions were solved.** A fork needs its own vsock socket and its own disk, or the copies
+are not independent.
+
+- **vsock — the jail gives it for free.** A jailed guest listens on the in-jail path `/run/vsock.sock`,
+  which is a *different host socket* in every chroot. So restoring the same snapshot into several jails
+  produces distinct sockets with no effort — which is exactly why fork restores a *jailed* snapshot: only
+  then is the stored path the chroot-relative one that varies per copy. This is the payoff of the deferred
+  "snapshot composes with jail" work.
+- **disk — a private sparse copy.** Each fork gets its own writable rootfs, copied from the snapshot's
+  frozen disk into its jail directory. Memory and state are bound **read-only**, so one memory image backs
+  every fork at once.
+
+**Gotcha — the copy, not the restore, was the whole cost.** First cut: a jailed fork took **11.8 seconds**.
+The memory restore was its usual ~63 ms; the other 11.7 s was `io.Copy` faithfully copying a 1 GiB rootfs
+image byte for byte. But the image is 1 GiB in *name* and ~50 MiB in *fact* — the rest is a hole. Copying
+only the data extents with `SEEK_DATA`/`SEEK_HOLE` dropped it to **~80 ms**, under the checkpoint, with no
+change to the guest or the image. **Lesson: before optimising the clever part (memory restore), check the
+boring part (a file copy) isn't quietly doing 20× the work by writing zeros.**
+
+**What's left for a *true* zero-copy fork.** Even sparse, the disk is O(data) per fork, not O(1). The
+zero-copy answer is a **read-only base image + a guest-side overlay**: the base attached read-only and
+shared by every fork, per-fork writes going to a tmpfs upper that rides along in each fork's own restored
+memory. That removes the copy entirely — and, usefully, fixes a **latent bug it surfaced**: two plain
+`create`s of jailed machines today share one rootfs image read-write (unnoticed only because machines have
+been booted one at a time). The overlay fixes fork's disk and that bug in one move. Deferred, documented in
+`docs/decisions/0006`.
