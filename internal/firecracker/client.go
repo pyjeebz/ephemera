@@ -60,6 +60,11 @@ func (c *Client) SetVsock(ctx context.Context, v Vsock) error {
 	return c.do(ctx, http.MethodPut, "/vsock", v, nil)
 }
 
+// SetNetworkInterface attaches a virtio-net device. Must be called before Start.
+func (c *Client) SetNetworkInterface(ctx context.Context, n NetworkInterface) error {
+	return c.do(ctx, http.MethodPut, "/network-interfaces/"+n.IfaceID, n, nil)
+}
+
 // Start boots the configured machine. The call returns as soon as the VMM has
 // accepted the action — the guest kernel is still starting at that point.
 func (c *Client) Start(ctx context.Context) error {

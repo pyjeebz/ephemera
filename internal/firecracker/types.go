@@ -38,6 +38,22 @@ type Vsock struct {
 	UDSPath  string `json:"uds_path"`
 }
 
+// NetworkInterface is PUT /network-interfaces/{iface_id}: one virtio-net device
+// backed by a TAP the host has already created.
+//
+// HostDevName is a name, not a descriptor — the VMM opens the interface itself,
+// so it has to exist and be up before this call, and the VMM's process needs
+// permission to open it.
+//
+// GuestMAC is optional; leaving it empty makes Firecracker invent one, which
+// changes on every boot. We always set it, because a stable MAC is what makes a
+// packet capture legible.
+type NetworkInterface struct {
+	IfaceID     string `json:"iface_id"`
+	HostDevName string `json:"host_dev_name"`
+	GuestMAC    string `json:"guest_mac,omitempty"`
+}
+
 // action is PUT /actions. The only one Phase 1 needs is InstanceStart; the VM is
 // stopped by killing the VMM process, not through the API.
 type action struct {
