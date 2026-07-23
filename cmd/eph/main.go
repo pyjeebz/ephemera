@@ -22,6 +22,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/cgroup"
 	"github.com/pyjeebz/ephemera/internal/client"
+	"github.com/pyjeebz/ephemera/internal/jail"
 	"github.com/pyjeebz/ephemera/internal/machine"
 	"github.com/pyjeebz/ephemera/internal/vmnet"
 )
@@ -96,6 +97,7 @@ type common struct {
 	pool       *string
 	dns        *string
 	cgroupRoot *string
+	jail       *bool
 }
 
 func addCommon(fs *flag.FlagSet) *common {
@@ -109,6 +111,7 @@ func addCommon(fs *flag.FlagSet) *common {
 		pool:       fs.String("pool", vmnet.DefaultPool, "address range the machine's link is carved from"),
 		dns:        fs.String("dns", machine.DefaultDNS.String(), "resolver handed to a networked guest"),
 		cgroupRoot: fs.String("cgroup-root", cgroup.DefaultRoot, "delegated cgroup subtree for resource caps (empty to disable)"),
+		jail:       fs.Bool("jail", false, "confine the VMM to a chroot and its own pid namespace (unprivileged)"),
 	}
 }
 
@@ -167,6 +170,17 @@ func (c *common) config() (machine.Config, error) {
 		if caps.Available() == nil {
 			cfg.Cgroup = caps
 		}
+	}
+
+	if *c.jail {
+		if err := jail.Available(); err != nil {
+			return machine.Config{}, err
+		}
+		helper, err := jail.HelperPath("")
+		if err != nil {
+			return machine.Config{}, err
+		}
+		cfg.Jail, cfg.JailHelper = true, helper
 	}
 	return cfg, nil
 }
