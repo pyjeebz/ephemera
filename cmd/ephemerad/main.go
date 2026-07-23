@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,7 +23,10 @@ import (
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/cgroup"
+	"github.com/pyjeebz/ephemera/internal/machine"
 	"github.com/pyjeebz/ephemera/internal/store"
+	"github.com/pyjeebz/ephemera/internal/vmnet"
 )
 
 func main() {
@@ -38,6 +42,10 @@ func run() error {
 	rootfs := flag.String("rootfs", "build/rootfs/rootfs.ext4", "guest root filesystem image")
 	runDir := flag.String("run-dir", "run", "directory for per-machine runtime state")
 	logLevel := flag.String("log-level", "info", "debug, info, warn, or error")
+	network := flag.Bool("network", false, "allow machines to request a network interface")
+	pool := flag.String("pool", vmnet.DefaultPool, "address range machine links are carved from")
+	dns := flag.String("dns", machine.DefaultDNS.String(), "resolver handed to networked guests")
+	cgroupRoot := flag.String("cgroup-root", cgroup.DefaultRoot, "delegated cgroup v2 subtree for resource caps (empty to disable)")
 	flag.Parse()
 
 	log := newLogger(*logLevel)
@@ -45,6 +53,40 @@ func run() error {
 	kernelPath, rootfsPath, err := resolveImages(*kernel, *rootfs)
 	if err != nil {
 		return err
+	}
+
+	resolver, err := netip.ParseAddr(*dns)
+	if err != nil {
+		return fmt.Errorf("bad -dns: %w", err)
+	}
+
+	// Networking is refused up front rather than on the first create: a daemon
+	// that cannot do what it was started to do should say so while someone is
+	// still looking at its output.
+	var machineNet *vmnet.Manager
+	if *network {
+		if err := vmnet.Available(); err != nil {
+			return fmt.Errorf("%w\nrun build/host-setup.sh once to grant it", err)
+		}
+		if machineNet, err = vmnet.New(*pool); err != nil {
+			return err
+		}
+		log.Info("machine networking enabled", "pool", *pool, "dns", resolver)
+	}
+
+	// Resource caps are a restriction, not a grant, so they apply automatically
+	// when the delegated subtree is there rather than on request. A daemon that
+	// cannot find it says so once and runs machines uncapped — capping is
+	// defence in depth, not a precondition for booting anything.
+	var caps *cgroup.Manager
+	if *cgroupRoot != "" {
+		mgr := cgroup.New(*cgroupRoot)
+		if err := mgr.Available(); err != nil {
+			log.Warn("resource caps disabled", "reason", err)
+		} else {
+			caps = mgr
+			log.Info("resource caps enabled", "cgroup_root", mgr.Root())
+		}
 	}
 
 	// Records live beside the sockets they describe, one directory per concern.
@@ -69,6 +111,9 @@ func run() error {
 		KernelPath: kernelPath,
 		RootfsPath: rootfsPath,
 		RunDir:     *runDir,
+		Net:        machineNet,
+		DNS:        resolver,
+		Cgroup:     caps,
 	}, st, log)
 
 	ln, err := listen(*addr)
