@@ -27,6 +27,17 @@ type MachineConfig struct {
 	SMT        bool `json:"smt"`
 }
 
+// Vsock is PUT /vsock: a virtio-vsock device for host/guest communication.
+//
+// UDSPath is the Unix socket the VMM creates on the host. Connections to it are
+// multiplexed into the guest by a text handshake (see internal/vsock), so one
+// path reaches every guest port without any network interface existing.
+type Vsock struct {
+	VsockID  string `json:"vsock_id,omitempty"`
+	GuestCID uint32 `json:"guest_cid"`
+	UDSPath  string `json:"uds_path"`
+}
+
 // action is PUT /actions. The only one Phase 1 needs is InstanceStart; the VM is
 // stopped by killing the VMM process, not through the API.
 type action struct {
