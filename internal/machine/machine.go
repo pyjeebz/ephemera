@@ -11,13 +11,17 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/agent"
+	"github.com/pyjeebz/ephemera/internal/cgroup"
 	"github.com/pyjeebz/ephemera/internal/firecracker"
+	"github.com/pyjeebz/ephemera/internal/vmnet"
 )
 
 // Defaults kept small deliberately: the dev box has 7.6 GB of RAM, so a machine
@@ -35,7 +39,19 @@ const (
 	// are reserved, so 3 is the first usable value — and since every machine
 	// gets its own VMM and its own socket, they can all share it.
 	guestCID = 3
+
+	// netIface is the id we give the virtio-net device. Firecracker allows
+	// several; a machine gets exactly one, so the name is a constant.
+	netIface = "eth0"
+
+	// guestHostname is set by the kernel from the ip= parameter, before init.
+	guestHostname = "ephemera"
 )
+
+// DefaultDNS is the resolver a networked guest is pointed at. It is handed over
+// on the kernel command line rather than baked into the image, so a machine's
+// firewall rules and its resolver cannot drift apart.
+var DefaultDNS = netip.MustParseAddr("1.1.1.1")
 
 // Config describes a machine to boot.
 type Config struct {
@@ -58,6 +74,19 @@ type Config struct {
 	// wired to a real TTY, since Firecracker will not forward piped input.
 	Console   io.Writer
 	ConsoleIn io.Reader
+
+	// Net, when set, gives the machine a network interface. Leaving it nil is
+	// the strongest isolation on offer and stays the default: a machine with no
+	// interface at all cannot be firewalled wrong.
+	Net *vmnet.Manager
+
+	// DNS is the resolver the guest is told to use. Zero means DefaultDNS.
+	DNS netip.Addr
+
+	// Cgroup, when set, caps the machine's host CPU and memory. Unlike the
+	// network it is a restriction rather than a grant, so it applies whenever
+	// the subtree is available rather than on explicit request.
+	Cgroup *cgroup.Manager
 }
 
 func (c *Config) applyDefaults() {
@@ -72,6 +101,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.RunDir == "" {
 		c.RunDir = "run"
+	}
+	if !c.DNS.IsValid() {
+		c.DNS = DefaultDNS
 	}
 }
 
@@ -98,10 +130,45 @@ type Machine struct {
 	cfg       Config
 	vmm       *firecracker.VMM
 	vsockPath string
+
+	lease    vmnet.Lease
+	hasLease bool
+	cg       *cgroup.Cgroup
+	released sync.Once
 }
 
 // VsockPath is the host socket through which the guest agent is reached.
 func (m *Machine) VsockPath() string { return m.vsockPath }
+
+// Lease reports the machine's network link, if it has one.
+func (m *Machine) Lease() (vmnet.Lease, bool) { return m.lease, m.hasLease }
+
+// CgroupPath reports the machine's cgroup, empty when it has none.
+func (m *Machine) CgroupPath() string {
+	if m.cg == nil {
+		return ""
+	}
+	return m.cg.Path()
+}
+
+// release frees the machine's host resources: its network link and its cgroup.
+//
+// Both share the VMM process's lifetime — the TAP is only useful while the VMM
+// holds it, and a cgroup cannot be removed until the VMM inside it is gone — and
+// a machine can end without anyone calling Destroy, because a guest that resets
+// itself takes the VMM with it. So this runs from whichever path gets there
+// first, and only once. It must not run before the VMM has exited, which every
+// caller arranges.
+func (m *Machine) release() {
+	m.released.Do(func() {
+		if m.hasLease {
+			_ = m.cfg.Net.Detach(m.lease)
+		}
+		if m.cg != nil {
+			_ = m.cg.Destroy()
+		}
+	})
+}
 
 // Pid is the VMM process id, recorded so a restarted daemon can find machines
 // it no longer supervises.
@@ -140,34 +207,69 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 		return nil, err
 	}
 
+	m := &Machine{ID: id, StartedAt: time.Now(), cfg: cfg}
+
+	// The interface has to exist and be up before the VMM is told to open it,
+	// and doing it first means a host that cannot build networks fails before
+	// anything has been spawned.
+	if cfg.Net != nil {
+		lease, err := cfg.Net.Attach(id)
+		if err != nil {
+			return nil, err
+		}
+		m.lease, m.hasLease = lease, true
+	}
+
+	// The cgroup exists with its limits written before the VMM is spawned into
+	// it, so the process is capped from its first instruction. If this fails,
+	// unwind the link we may already hold.
+	if cfg.Cgroup != nil {
+		cg, err := cfg.Cgroup.Create(id, cgroup.Limits{MemMiB: cfg.MemMiB, VCPUs: cfg.VCPUs})
+		if err != nil {
+			m.release()
+			return nil, err
+		}
+		m.cg = cg
+	}
+
 	vsockPath := filepath.Join(cfg.RunDir, id+".vsock")
 	// The VMM creates this socket itself and refuses to start if one is already
 	// there, so clear any remnant of a machine that did not shut down cleanly.
 	if err := os.Remove(vsockPath); err != nil && !os.IsNotExist(err) {
+		m.release()
 		return nil, fmt.Errorf("machine: clear stale vsock socket: %w", err)
 	}
 
+	var cgroupFD *int
+	if m.cg != nil {
+		fd := m.cg.FD()
+		cgroupFD = &fd
+	}
 	vmm, err := firecracker.Launch(ctx, firecracker.Options{
 		Binary:    cfg.Binary,
 		SockPath:  filepath.Join(cfg.RunDir, id+".sock"),
 		Console:   cfg.Console,
 		ConsoleIn: cfg.ConsoleIn,
 		Cleanup:   []string{vsockPath},
+		CgroupFD:  cgroupFD,
 	})
 	if err != nil {
+		m.release()
 		return nil, err
 	}
+	m.vmm, m.vsockPath = vmm, vsockPath
 
 	// Any failure past this point leaves a live VMM behind, so unwind it.
 	fail := func(err error) (*Machine, error) {
 		_ = vmm.Shutdown(context.Background())
+		m.release()
 		return nil, err
 	}
 
 	c := vmm.Client()
 	if err := c.SetBootSource(ctx, firecracker.BootSource{
 		KernelImagePath: cfg.KernelPath,
-		BootArgs:        BootArgs(cfg.Init),
+		BootArgs:        BootArgs(cfg.Init, m.netArgs()),
 	}); err != nil {
 		return fail(err)
 	}
@@ -193,17 +295,44 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 	}); err != nil {
 		return fail(err)
 	}
+	if m.hasLease {
+		if err := c.SetNetworkInterface(ctx, firecracker.NetworkInterface{
+			IfaceID:     netIface,
+			HostDevName: m.lease.Tap,
+			GuestMAC:    m.lease.MAC,
+		}); err != nil {
+			return fail(err)
+		}
+	}
 	if err := c.Start(ctx); err != nil {
 		return fail(err)
 	}
 
-	return &Machine{
-		ID:        id,
-		StartedAt: time.Now(),
-		cfg:       cfg,
-		vmm:       vmm,
-		vsockPath: vsockPath,
-	}, nil
+	// A machine can end without Destroy — the guest resets itself and the VMM
+	// exits — so its host resources are released by whoever notices first. Only
+	// worth a goroutine if there is something to release.
+	if m.hasLease || m.cg != nil {
+		go func() {
+			<-vmm.Done()
+			m.release()
+		}()
+	}
+
+	return m, nil
+}
+
+// netArgs describes the machine's network to BootArgs, or nil when it has none.
+func (m *Machine) netArgs() *NetArgs {
+	if !m.hasLease {
+		return nil
+	}
+	return &NetArgs{Lease: m.lease, DNS: m.cfg.DNS}
+}
+
+// NetArgs describes a machine's network to the guest kernel.
+type NetArgs struct {
+	Lease vmnet.Lease
+	DNS   netip.Addr
 }
 
 // BootArgs builds the guest kernel command line.
@@ -213,12 +342,50 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 //	                  what makes Firecracker exit when the guest reboots
 //	panic=1           reboot on panic rather than hanging forever
 //	pci=off           Firecracker exposes no PCI bus; skip probing for one
-func BootArgs(init string) string {
+//
+// A networked machine also gets ip=, which is handled below.
+func BootArgs(init string, net *NetArgs) string {
 	args := []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off"}
 	if init != "" {
 		args = append(args, "init="+init)
 	}
+	if net != nil {
+		args = append(args, net.ipArg())
+	}
 	return strings.Join(args, " ")
+}
+
+// ipArg renders the kernel's IP autoconfiguration parameter.
+//
+// This is the whole of the guest's networking code, and it is not code: the
+// kernel is built with CONFIG_IP_PNP=y, which means it configures the interface
+// itself during boot, before init exists. No DHCP client, no dhcpcd, no shell
+// script racing the interface — by the time PID 1 runs, the address is on and
+// the default route is in place.
+//
+// The field order is fixed and mostly empty, which is what makes it look like a
+// typo the first time you meet it:
+//
+//	ip=<client>:<server>:<gateway>:<netmask>:<hostname>:<device>:<autoconf>:<dns0>
+//
+// server is for NFS root, which we do not use, so it stays blank. autoconf=off
+// means "these values are final, do not go looking for a DHCP server" — leaving
+// it out makes the kernel try every autoconfiguration protocol it knows and
+// spend several seconds failing.
+//
+// dns0 does not configure anything by itself; the kernel writes it to
+// /proc/net/pnp, in the same format resolv.conf uses, and the guest's init
+// copies it over. That is why the resolver is a boot argument here rather than
+// a line in the image.
+func (n *NetArgs) ipArg() string {
+	return fmt.Sprintf("ip=%s::%s:%s:%s:%s:off:%s",
+		n.Lease.Guest,
+		n.Lease.Host,
+		n.Lease.Netmask(),
+		guestHostname,
+		netIface,
+		n.DNS,
+	)
 }
 
 // Wait blocks until the machine exits. A guest that resets itself returns nil.
@@ -231,7 +398,11 @@ func (m *Machine) Done() <-chan struct{} { return m.vmm.Done() }
 func (m *Machine) Uptime() time.Duration { return time.Since(m.StartedAt) }
 
 // Destroy tears the machine down and releases its runtime state.
-func (m *Machine) Destroy(ctx context.Context) error { return m.vmm.Shutdown(ctx) }
+func (m *Machine) Destroy(ctx context.Context) error {
+	err := m.vmm.Shutdown(ctx)
+	m.release()
+	return err
+}
 
 // newID returns a short, collision-resistant machine identifier.
 func newID() (string, error) {

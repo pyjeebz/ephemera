@@ -1,14 +1,17 @@
 package machine
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pyjeebz/ephemera/internal/vmnet"
 )
 
 func TestBootArgsCarryTheFlagsFirecrackerNeeds(t *testing.T) {
-	got := BootArgs("/sbin/eph-init")
+	got := BootArgs("/sbin/eph-init", nil)
 
 	// reboot=k is load-bearing: it routes guest resets through the i8042
 	// controller, which is what makes Firecracker exit when the guest reboots.
@@ -21,8 +24,51 @@ func TestBootArgsCarryTheFlagsFirecrackerNeeds(t *testing.T) {
 }
 
 func TestBootArgsOmitInitWhenEmpty(t *testing.T) {
-	if got := BootArgs(""); strings.Contains(got, "init=") {
+	if got := BootArgs("", nil); strings.Contains(got, "init=") {
 		t.Errorf("boot args %q should not set init when none was asked for", got)
+	}
+}
+
+// A machine with no link must not be told about one. This is the default and
+// the strongest isolation the project offers, so it gets a test of its own.
+func TestBootArgsHaveNoNetworkByDefault(t *testing.T) {
+	if got := BootArgs(AgentInit, nil); strings.Contains(got, "ip=") {
+		t.Errorf("boot args %q configured a network for a machine that has none", got)
+	}
+}
+
+func TestBootArgsConfigureTheGuestAddress(t *testing.T) {
+	pool, err := vmnet.NewPool(vmnet.DefaultPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := pool.Take("0f8bdebe")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := BootArgs(AgentInit, &NetArgs{Lease: lease, DNS: netip.MustParseAddr("9.9.9.9")})
+
+	// The kernel parses this positionally and silently ignores a malformed
+	// value, leaving a guest with no address and no clue why — so pin the
+	// exact string rather than its parts.
+	want := "ip=10.79.0.2::10.79.0.1:255.255.255.252:ephemera:eth0:off:9.9.9.9"
+	if !strings.Contains(got, want) {
+		t.Errorf("boot args\n  got  %q\n  want to contain %q", got, want)
+	}
+}
+
+func TestDefaultDNSAppliesWhenUnset(t *testing.T) {
+	var c Config
+	c.applyDefaults()
+	if c.DNS != DefaultDNS {
+		t.Errorf("DNS = %v, want %v", c.DNS, DefaultDNS)
+	}
+
+	explicit := Config{DNS: netip.MustParseAddr("8.8.8.8")}
+	explicit.applyDefaults()
+	if explicit.DNS.String() != "8.8.8.8" {
+		t.Errorf("defaults overwrote an explicit resolver: %v", explicit.DNS)
 	}
 }
 
