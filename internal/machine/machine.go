@@ -103,6 +103,13 @@ type Machine struct {
 // VsockPath is the host socket through which the guest agent is reached.
 func (m *Machine) VsockPath() string { return m.vsockPath }
 
+// Pid is the VMM process id, recorded so a restarted daemon can find machines
+// it no longer supervises.
+func (m *Machine) Pid() int { return m.vmm.Pid() }
+
+// Spec reports the machine's resource shape.
+func (m *Machine) Spec() (vcpus, memMiB int) { return m.cfg.VCPUs, m.cfg.MemMiB }
+
 // WaitAgent blocks until the guest agent is accepting commands.
 //
 // Boot returns as soon as the VMM accepts the start action, long before the
