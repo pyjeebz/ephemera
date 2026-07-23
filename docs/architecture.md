@@ -14,6 +14,20 @@ runs locally; there are no cloud dependencies.
 | MCP server    | Exposes the sandbox as MCP tools so Claude Code can drive it.           |
 | Web UI        | SvelteKit desktop-in-browser (VNC) — last phase.                       |
 
+## Control API
+
+`ephemerad` listens on a Unix socket (`run/ephemerad.sock`, mode 0600) by default — a local-first daemon
+has no reason to be on the network, and file permissions beat an open port.
+
+| Method   | Path                        | Purpose                                        |
+| -------- | --------------------------- | ---------------------------------------------- |
+| `GET`    | `/healthz`                  | liveness                                       |
+| `POST`   | `/v1/machines`              | boot a machine, returns once its agent is ready |
+| `GET`    | `/v1/machines`              | list                                           |
+| `GET`    | `/v1/machines/{id}`         | inspect                                        |
+| `DELETE` | `/v1/machines/{id}`         | destroy                                        |
+| `POST`   | `/v1/machines/{id}/exec`    | run a command, streams NDJSON frames           |
+
 ## Host layout
 
 - **Kernel**: a Firecracker-compatible `vmlinux`, shared read-only across VMs.
@@ -28,9 +42,12 @@ Each phase is a vertical slice that boots to a working checkpoint.
       minimal rootfs from a Docker image, boot it via the API socket, get a serial console.
       _Checkpoint met: guest boots in ~1.0s, selftest passes, VM self-terminates with exit 0
       (~1.7s wall for the whole cycle). Firecracker v1.16.1, kernel 6.1.128, Alpine 3.24.1._
-- [ ] **Phase 1 — Go control plane MVP.** `ephemerad` wraps firecracker-go-sdk. `POST /machines` boots,
-      exec a command, `DELETE` tears down and cleans up.
-      _Checkpoint: `eph run "uname -a"` boots, runs, cleans up._
+- [x] **Phase 1 — Go control plane MVP.** `ephemerad` drives Firecracker through our own client
+      (see [decision 0001](decisions/0001-own-firecracker-client.md)). Machines are booted, tracked,
+      executed in, and destroyed; commands reach the guest over a vsock agent, so a machine needs no
+      network interface to be useful.
+      _Checkpoint met: `eph run uname -a` boots, executes, and cleans up in ~2.5s. Managed machines via
+      `eph create/ls/exec/rm`; orphans from a crashed daemon are reaped on restart._
 - [ ] **Phase 2 — Isolation & networking.** TAP + bridge + NAT egress, egress allow-list by default,
       cgroup v2 CPU/mem caps, the jailer.
       _Checkpoint: VM has filtered network, capped resources, runs under jailer._
