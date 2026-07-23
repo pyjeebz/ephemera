@@ -15,23 +15,27 @@ import (
 	"github.com/pyjeebz/ephemera/internal/jail"
 )
 
-// buildJailHelper compiles eph-jail into a temp dir so the integration tests can
-// point Config.JailHelper at it. In a real install it sits beside ephemerad; in
+// buildHelper compiles one of the cmd/ helpers into a temp dir so an integration
+// test can point at it. In a real install these sit beside ephemerad; in
 // `go test` the running binary is the test binary, so there is nothing to find
-// beside it, and we build our own.
-func buildJailHelper(t *testing.T) string {
+// beside it, and we build our own. A helper that needs a capability (eph-netadmin)
+// still comes out uncapped, which is why the tests that use it skip rather than
+// run — the same as when the test binary itself was uncapped.
+func buildHelper(t *testing.T, name string) string {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..")
-	out := filepath.Join(t.TempDir(), "eph-jail")
+	out := filepath.Join(t.TempDir(), name)
 
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/eph-jail")
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/"+name)
 	cmd.Dir = root
 	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build eph-jail: %v\n%s", err, b)
+		t.Fatalf("build %s: %v\n%s", name, err, b)
 	}
 	return out
 }
+
+func buildJailHelper(t *testing.T) string { return buildHelper(t, "eph-jail") }
 
 func requireJail(t *testing.T) {
 	t.Helper()

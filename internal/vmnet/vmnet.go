@@ -13,11 +13,14 @@ import (
 // link and deciding where that link is allowed to reach are separate jobs, and
 // keeping them separate is what lets the second one default to "nowhere".
 type Manager struct {
-	pool *Pool
+	pool   *Pool
+	helper string // eph-netadmin, the one thing that holds CAP_NET_ADMIN
 }
 
-// New prepares a manager over cidr, or over DefaultPool when cidr is empty.
-func New(cidr string) (*Manager, error) {
+// New prepares a manager over cidr (or DefaultPool when empty) that builds
+// interfaces by executing helper — eph-netadmin, resolved by HelperPath when
+// the path is left empty.
+func New(cidr, helper string) (*Manager, error) {
 	if cidr == "" {
 		cidr = DefaultPool
 	}
@@ -25,7 +28,7 @@ func New(cidr string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{pool: p}, nil
+	return &Manager{pool: p, helper: helper}, nil
 }
 
 // Pool exposes the allocator, for callers that need to reserve links they
@@ -63,16 +66,13 @@ func (m *Manager) Attach(id string) (Lease, error) {
 			continue
 		}
 
-		// Unwind in reverse on the way out — a half-built link is worse than
-		// none, because its interface lingers holding the address.
-		if err := createTap(l.Tap); err != nil {
+		// One helper call creates and configures the interface. If it fails the
+		// helper leaves nothing behind, but ask it to remove the name anyway —
+		// idempotent, and a half-built link that lingers holds the address.
+		if err := createTapVia(m.helper, l.Tap, l.Host, l.Netmask()); err != nil {
+			_ = removeTapVia(m.helper, l.Tap)
 			m.pool.Put(l)
 			return Lease{}, err
-		}
-		if err := configureTap(l.Tap, l.Host, l.Netmask()); err != nil {
-			_ = destroyTap(l.Tap)
-			m.pool.Put(l)
-			return Lease{}, fmt.Errorf("%w (tap %s removed)", err, l.Tap)
 		}
 		return l, nil
 	}
@@ -104,11 +104,11 @@ func addressInUse(a netip.Addr) (bool, error) {
 // cleanly: a name we cannot delete is a problem, but refusing to reuse the
 // address behind it turns one stuck interface into a slow leak of the pool.
 func (m *Manager) Detach(l Lease) error {
-	err := destroyTap(l.Tap)
+	err := removeTapVia(m.helper, l.Tap)
 	m.pool.Put(l)
 	return err
 }
 
-// DestroyTap removes an interface by name, for cleaning up after a daemon that
-// is no longer around to hold the lease that made it.
-func DestroyTap(name string) error { return destroyTap(name) }
+// DestroyTap removes an interface by name through the helper, for cleaning up
+// after a daemon that is no longer around to hold the lease that made it.
+func DestroyTap(helper, name string) error { return removeTapVia(helper, name) }

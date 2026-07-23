@@ -147,14 +147,19 @@ func (c *common) config() (machine.Config, error) {
 		DNS:        resolver,
 	}
 
-	// Without -net the machine has no interface at all, which is both the
-	// default and the strongest thing on offer — so this is the only path that
-	// needs any privilege, and it says so before doing anything.
+	// Without -net the machine has no interface at all, the default and the
+	// strongest thing on offer. With it, the interface is built by eph-netadmin —
+	// eph itself holds no capability, so it checks the helper is usable before
+	// promising a network.
 	if *c.net {
-		if err := vmnet.Available(); err != nil {
+		netHelper, err := vmnet.HelperPath("")
+		if err != nil {
+			return machine.Config{}, err
+		}
+		if err := vmnet.Available(netHelper); err != nil {
 			return machine.Config{}, fmt.Errorf("%w\nrun build/host-setup.sh once to grant it", err)
 		}
-		mgr, err := vmnet.New(*c.pool)
+		mgr, err := vmnet.New(*c.pool, netHelper)
 		if err != nil {
 			return machine.Config{}, err
 		}

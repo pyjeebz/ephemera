@@ -158,7 +158,7 @@ func TestReapKillsALiveOrphan(t *testing.T) {
 	}
 	path := writeRecordFile(t, dir, Record{ID: "orphan", PID: victim.Process.Pid, APISock: sock})
 
-	n, err := Reap(dir, discardLogger())
+	n, err := Reap(dir, "", discardLogger())
 	if err != nil {
 		t.Fatalf("Reap: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestReapDropsRecordsForDeadProcesses(t *testing.T) {
 	}
 	path := writeRecordFile(t, dir, Record{ID: "dead", PID: dead.ProcessState.Pid()})
 
-	n, err := Reap(dir, discardLogger())
+	n, err := Reap(dir, "", discardLogger())
 	if err != nil {
 		t.Fatalf("Reap: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestReapDiscardsUnreadableRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Reap(dir, discardLogger()); err != nil {
+	if _, err := Reap(dir, "", discardLogger()); err != nil {
 		t.Fatalf("Reap: %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -223,7 +223,7 @@ func TestReapIgnoresNonRecords(t *testing.T) {
 	if err := os.WriteFile(keep, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Reap(dir, discardLogger()); err != nil {
+	if _, err := Reap(dir, "", discardLogger()); err != nil {
 		t.Fatalf("Reap: %v", err)
 	}
 	if _, err := os.Stat(keep); err != nil {
@@ -232,7 +232,7 @@ func TestReapIgnoresNonRecords(t *testing.T) {
 }
 
 func TestReapOnMissingDirIsNotAnError(t *testing.T) {
-	n, err := Reap(filepath.Join(t.TempDir(), "never-created"), discardLogger())
+	n, err := Reap(filepath.Join(t.TempDir(), "never-created"), "", discardLogger())
 	if err != nil {
 		t.Fatalf("Reap on missing dir: %v", err)
 	}

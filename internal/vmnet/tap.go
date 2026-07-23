@@ -14,7 +14,11 @@ import (
 // the creation itself — it is one ioctl on one character device.
 const tunDevice = "/dev/net/tun"
 
-// createTap makes a persistent TAP device the VMM can open by name.
+// CreateTap makes a persistent TAP device the VMM can open by name.
+//
+// It runs in the eph-netadmin helper, the one component that carries
+// CAP_NET_ADMIN. The daemon is unprivileged and reaches this only by executing
+// the helper, so the capability lives on a few hundred lines of tap code.
 //
 // Two flags decide what kind of device comes out:
 //
@@ -23,7 +27,7 @@ const tunDevice = "/dev/net/tun"
 //	           do with — the guest expects to be holding a network card.
 //	IFF_NO_PI  no packet-information header. Without it the kernel prepends four
 //	           bytes of its own to every frame and the VMM sees garbage.
-func createTap(name string) error {
+func CreateTap(name string) error {
 	if err := validTapName(name); err != nil {
 		return err
 	}
@@ -61,14 +65,14 @@ func createTap(name string) error {
 	// it, and we are about to close ours: Firecracker opens the device by name
 	// itself, so there is no reason for the daemon to hold an fd per machine
 	// open forever. Persisting it hands ownership to the kernel until somebody
-	// takes it back, which destroyTap does.
+	// takes it back, which RemoveTap does.
 	if err := unix.IoctlSetInt(fd, unix.TUNSETPERSIST, 1); err != nil {
 		return fmt.Errorf("vmnet: persist tap %s: %w", name, err)
 	}
 	return nil
 }
 
-// destroyTap removes a TAP device.
+// RemoveTap removes a TAP device.
 //
 // There is no "delete" ioctl — persistence is the only thing keeping the device
 // alive, so clearing it and closing the descriptor is the delete. If the VMM
@@ -79,7 +83,7 @@ func createTap(name string) error {
 // Calling this for a device that no longer exists briefly recreates it, because
 // TUNSETIFF creates on demand. That makes the function idempotent by accident
 // rather than by design, but idempotent is what teardown paths need.
-func destroyTap(name string) error {
+func RemoveTap(name string) error {
 	if err := validTapName(name); err != nil {
 		return err
 	}
@@ -107,7 +111,7 @@ func destroyTap(name string) error {
 	return nil
 }
 
-// configureTap gives the host end of the link an address and brings it up.
+// ConfigureTap gives the host end of the link an address and brings it up.
 //
 // These are the old ioctl interfaces — SIOCSIFADDR and friends, the ones
 // ifconfig used before ip existed. rtnetlink is the modern way and the only way
@@ -115,7 +119,7 @@ func destroyTap(name string) error {
 // but it means hand-encoding netlink messages for what is here three ioctls on
 // a datagram socket. The socket is a formality: nothing is sent on it, it is
 // just the handle the kernel wants these requests to arrive through.
-func configureTap(name string, addr, mask netip.Addr) error {
+func ConfigureTap(name string, addr, mask netip.Addr) error {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("vmnet: open control socket: %w", err)
@@ -156,17 +160,17 @@ func configureTap(name string, addr, mask netip.Addr) error {
 	return nil
 }
 
-// ErrNoNetAdmin says the process cannot manage interfaces.
+// ErrNoNetAdmin says the helper cannot manage interfaces.
 var ErrNoNetAdmin = errors.New("vmnet: CAP_NET_ADMIN is required to create TAP devices")
 
-// Available reports whether this process can build machine networks, and is
-// meant to be called at startup so the answer arrives before the first machine
-// rather than during it.
+// CheckNetAdmin reports whether *this* process can build machine networks. It is
+// what eph-netadmin runs for its `check` subcommand, so the daemon can confirm
+// the helper is properly capped before it ever needs to make a machine.
 //
 // The check is a capability query rather than a trial run: making a throwaway
-// TAP would work, but a daemon that probes by mutating the host's network is a
-// daemon nobody should run.
-func Available() error {
+// TAP would work, but probing by mutating the host's network is not something to
+// do at startup.
+func CheckNetAdmin() error {
 	ok, err := hasNetAdmin()
 	if err != nil {
 		return fmt.Errorf("vmnet: read own capabilities: %w", err)

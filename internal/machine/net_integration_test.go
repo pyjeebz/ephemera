@@ -21,11 +21,17 @@ import (
 // see docs/buildlog.md.
 func TestNetworkedGuestConfiguresItself(t *testing.T) {
 	cfg := requireVM(t)
-	if err := vmnet.Available(); err != nil {
+	// Networking runs through the eph-netadmin helper, which needs CAP_NET_ADMIN.
+	// A freshly built test helper has none, so this skips in a plain `go test` —
+	// the same as it skipped before, when the test binary itself was uncapped.
+	// Reachability is verified by hand against the installed, capped helper; see
+	// docs/buildlog.md.
+	netHelper := buildHelper(t, "eph-netadmin")
+	if err := vmnet.Available(netHelper); err != nil {
 		t.Skipf("machine networking not available: %v", err)
 	}
 
-	mgr, err := vmnet.New(vmnet.DefaultPool)
+	mgr, err := vmnet.New(vmnet.DefaultPool, netHelper)
 	if err != nil {
 		t.Fatalf("vmnet.New: %v", err)
 	}

@@ -62,15 +62,23 @@ func run() error {
 		return fmt.Errorf("bad -dns: %w", err)
 	}
 
+	// The daemon holds no capability of its own: networking is done by executing
+	// eph-netadmin, the one binary that carries CAP_NET_ADMIN. Resolve it once so
+	// both machine creation and orphan reaping use the same helper.
+	netHelper, err := vmnet.HelperPath("")
+	if err != nil {
+		return err
+	}
+
 	// Networking is refused up front rather than on the first create: a daemon
 	// that cannot do what it was started to do should say so while someone is
 	// still looking at its output.
 	var machineNet *vmnet.Manager
 	if *network {
-		if err := vmnet.Available(); err != nil {
+		if err := vmnet.Available(netHelper); err != nil {
 			return fmt.Errorf("%w\nrun build/host-setup.sh once to grant it", err)
 		}
-		if machineNet, err = vmnet.New(*pool); err != nil {
+		if machineNet, err = vmnet.New(*pool, netHelper); err != nil {
 			return err
 		}
 		log.Info("machine networking enabled", "pool", *pool, "dns", resolver)
@@ -101,7 +109,7 @@ func run() error {
 	// cannot wait on a VMM it did not spawn, so orphans are destroyed, not
 	// resumed. Doing it before serving means a fresh daemon starts from a
 	// known-empty world.
-	reaped, err := store.Reap(filepath.Join(*runDir, "machines"), log)
+	reaped, err := store.Reap(filepath.Join(*runDir, "machines"), netHelper, log)
 	if err != nil {
 		return err
 	}

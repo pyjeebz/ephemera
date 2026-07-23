@@ -142,14 +142,16 @@ func (s *Store) writeRecord(r Record) error {
 	return nil
 }
 
-// Reap cleans up machines left behind by a previous daemon.
+// Reap cleans up machines left behind by a previous daemon. netHelper is the
+// eph-netadmin binary used to remove any orphaned TAPs, since the daemon that
+// calls this holds no capability of its own.
 //
 // A VMM cannot be re-adopted: supervising a process means owning its wait
 // status, and a process we did not spawn cannot be waited on. So machines that
 // outlived their daemon are destroyed rather than resumed. That is the honest
 // behaviour for a sandbox that is ephemeral by design, but it does mean
 // restarting the daemon takes running machines with it.
-func Reap(dir string, log *slog.Logger) (int, error) {
+func Reap(dir, netHelper string, log *slog.Logger) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -190,7 +192,7 @@ func Reap(dir string, log *slog.Logger) (int, error) {
 		// address the pool believes is free, so the next machine to be handed
 		// that index cannot create its own.
 		if r.Tap != "" {
-			if err := vmnet.DestroyTap(r.Tap); err != nil {
+			if err := vmnet.DestroyTap(netHelper, r.Tap); err != nil {
 				log.Error("could not remove orphaned interface", "id", r.ID, "tap", r.Tap, "err", err)
 			}
 		}
