@@ -5,9 +5,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,68 +20,125 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	args := os.Args[1:]
+	if len(args) == 0 {
+		usage()
+		os.Exit(2)
+	}
+
+	var err error
+	switch args[0] {
+	case "boot":
+		err = cmdBoot(args[1:])
+	case "run":
+		err = cmdRun(args[1:])
+	case "-h", "--help", "help":
+		usage()
+		return
+	default:
+		fmt.Fprintf(os.Stderr, "eph: unknown command %q\n\n", args[0])
+		usage()
+		os.Exit(2)
+	}
+
+	if err != nil {
+		// A command that ran and failed reports the guest's status, so scripts
+		// can tell "the sandbox broke" from "the command exited 1".
+		var ge guestExit
+		if ok := asGuestExit(err, &ge); ok {
+			os.Exit(ge.code)
+		}
 		fmt.Fprintln(os.Stderr, "eph:", err)
 		os.Exit(1)
 	}
 }
 
-func run(argv []string) error {
-	fs := flag.NewFlagSet("eph boot", flag.ExitOnError)
-	kernel := fs.String("kernel", "build/kernel/vmlinux", "guest kernel (uncompressed ELF vmlinux)")
-	rootfs := fs.String("rootfs", "build/rootfs/rootfs.ext4", "guest root filesystem image")
+func usage() {
+	fmt.Fprint(os.Stderr, `usage: eph <command> [flags]
+
+commands:
+  boot   boot a machine and stream its serial console
+  run    boot a machine, run a command inside it, then destroy it
+
+run "eph <command> -h" for flags
+`)
+}
+
+// common holds the flags every command shares.
+type common struct {
+	kernel *string
+	rootfs *string
+	vcpus  *int
+	mem    *int
+	runDir *string
+}
+
+func addCommon(fs *flag.FlagSet) *common {
+	return &common{
+		kernel: fs.String("kernel", "build/kernel/vmlinux", "guest kernel (uncompressed ELF vmlinux)"),
+		rootfs: fs.String("rootfs", "build/rootfs/rootfs.ext4", "guest root filesystem image"),
+		vcpus:  fs.Int("cpus", machine.DefaultVCPUs, "vCPU count"),
+		mem:    fs.Int("mem", machine.DefaultMemMiB, "memory in MiB"),
+		runDir: fs.String("run-dir", "run", "directory for per-machine runtime state"),
+	}
+}
+
+// config resolves the shared flags into a machine config.
+//
+// Firecracker opens the kernel and rootfs itself, so the paths are made
+// absolute here — a bad path then fails locally with context instead of coming
+// back as a fault message from the VMM.
+func (c *common) config() (machine.Config, error) {
+	kernelPath, err := filepath.Abs(*c.kernel)
+	if err != nil {
+		return machine.Config{}, err
+	}
+	if resolved, err := filepath.EvalSymlinks(kernelPath); err == nil {
+		kernelPath = resolved
+	}
+	rootfsPath, err := filepath.Abs(*c.rootfs)
+	if err != nil {
+		return machine.Config{}, err
+	}
+	return machine.Config{
+		KernelPath: kernelPath,
+		RootfsPath: rootfsPath,
+		VCPUs:      *c.vcpus,
+		MemMiB:     *c.mem,
+		RunDir:     *c.runDir,
+	}, nil
+}
+
+func cmdBoot(argv []string) error {
+	fs := flag.NewFlagSet("boot", flag.ExitOnError)
+	cf := addCommon(fs)
 	init := fs.String("init", machine.DefaultInit, "guest init; /sbin/eph-selftest runs a check and halts")
-	vcpus := fs.Int("cpus", machine.DefaultVCPUs, "vCPU count")
-	mem := fs.Int("mem", machine.DefaultMemMiB, "memory in MiB")
-	runDir := fs.String("run-dir", "run", "directory for per-machine runtime state")
 	timeout := fs.Duration("timeout", 0, "destroy the machine after this long (0 = no limit)")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph boot [flags]\n\nBoots a microVM and streams its console until it exits.\n\nflags:\n")
+		fmt.Fprintf(os.Stderr, "usage: eph boot [flags]\n\nBoots a machine and streams its console until it exits.\n\nflags:\n")
 		fs.PrintDefaults()
-	}
-
-	// Only one subcommand so far; accept it optionally to keep the shape.
-	if len(argv) > 0 && argv[0] == "boot" {
-		argv = argv[1:]
 	}
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
 
-	// Firecracker opens these paths itself, so resolve them before handing over
-	// to get a clear error here rather than a fault message from the VMM.
-	kernelPath, err := filepath.Abs(*kernel)
+	cfg, err := cf.config()
 	if err != nil {
 		return err
 	}
-	if resolved, err := filepath.EvalSymlinks(kernelPath); err == nil {
-		kernelPath = resolved
-	}
-	rootfsPath, err := filepath.Abs(*rootfs)
-	if err != nil {
-		return err
-	}
+	cfg.Init = *init
+	cfg.Console = os.Stdout
+	cfg.ConsoleIn = os.Stdin
 
-	// Ctrl-C should destroy the machine, not orphan it.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	started := time.Now()
-	m, err := machine.Boot(ctx, machine.Config{
-		KernelPath: kernelPath,
-		RootfsPath: rootfsPath,
-		VCPUs:      *vcpus,
-		MemMiB:     *mem,
-		Init:       *init,
-		RunDir:     *runDir,
-		Console:    os.Stdout,
-		ConsoleIn:  os.Stdin,
-	})
+	m, err := machine.Boot(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "eph: machine %s booted in %s (pid path %s)\n",
-		m.ID, time.Since(started).Round(time.Millisecond), filepath.Join(*runDir, m.ID+".sock"))
+	fmt.Fprintf(os.Stderr, "eph: machine %s booted in %s\n", m.ID, since(started))
 
 	var deadline <-chan time.Time
 	if *timeout > 0 {
@@ -88,8 +147,6 @@ func run(argv []string) error {
 		deadline = t.C
 	}
 
-	// Whichever happens first: the guest exits, the deadline passes, or the
-	// operator interrupts. The last two require an explicit teardown.
 	select {
 	case <-m.Done():
 		err = m.Wait()
@@ -100,13 +157,89 @@ func run(argv []string) error {
 		fmt.Fprintf(os.Stderr, "\neph: interrupted, destroying %s\n", m.ID)
 		err = destroy(m)
 	}
-
 	if err != nil {
 		return fmt.Errorf("machine %s: %w", m.ID, err)
 	}
-	fmt.Fprintf(os.Stderr, "eph: machine %s exited cleanly after %s\n",
-		m.ID, m.Uptime().Round(time.Millisecond))
+	fmt.Fprintf(os.Stderr, "eph: machine %s exited cleanly after %s\n", m.ID, m.Uptime().Round(time.Millisecond))
 	return nil
+}
+
+func cmdRun(argv []string) error {
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	cf := addCommon(fs)
+	bootTimeout := fs.Duration("boot-timeout", 30*time.Second, "how long to wait for the guest agent")
+	verbose := fs.Bool("v", false, "stream the guest's serial console to stderr")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: eph run [flags] <command> [args...]\n\n"+
+			"Boots a machine, runs one command inside it, and destroys it.\n"+
+			"Exits with the command's own status.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	cmd := fs.Args()
+	if len(cmd) == 0 {
+		fs.Usage()
+		return fmt.Errorf("no command given")
+	}
+
+	cfg, err := cf.config()
+	if err != nil {
+		return err
+	}
+	cfg.Init = machine.AgentInit
+
+	// The console is the only place boot failures explain themselves, so keep it
+	// even when not streaming — it is the error message if the agent never
+	// arrives.
+	var console bytes.Buffer
+	if *verbose {
+		cfg.Console = io.MultiWriter(os.Stderr, &console)
+	} else {
+		cfg.Console = &console
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	started := time.Now()
+	m, err := machine.Boot(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = destroy(m) }()
+
+	readyCtx, cancel := context.WithTimeout(ctx, *bootTimeout)
+	defer cancel()
+	if err := m.WaitAgent(readyCtx); err != nil {
+		return fmt.Errorf("%w\n--- guest console ---\n%s", err, console.String())
+	}
+	booted := since(started)
+
+	code, err := m.Exec(ctx, cmd, os.Stdout, os.Stderr)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "eph: machine %s ready in %s, command exited %d\n", m.ID, booted, code)
+	if code != 0 {
+		return guestExit{code: code}
+	}
+	return nil
+}
+
+// guestExit carries a command's non-zero status out to the process exit code
+// without being reported as an ephemera failure.
+type guestExit struct{ code int }
+
+func (g guestExit) Error() string { return fmt.Sprintf("command exited with status %d", g.code) }
+
+func asGuestExit(err error, out *guestExit) bool {
+	if ge, ok := err.(guestExit); ok {
+		*out = ge
+		return true
+	}
+	return false
 }
 
 func destroy(m *machine.Machine) error {
@@ -114,3 +247,5 @@ func destroy(m *machine.Machine) error {
 	defer cancel()
 	return m.Destroy(ctx)
 }
+
+func since(t time.Time) time.Duration { return time.Since(t).Round(time.Millisecond) }
