@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,8 +20,10 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/agent"
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/cgroup"
 	"github.com/pyjeebz/ephemera/internal/client"
 	"github.com/pyjeebz/ephemera/internal/machine"
+	"github.com/pyjeebz/ephemera/internal/vmnet"
 )
 
 func main() {
@@ -88,7 +91,11 @@ type common struct {
 	rootfs *string
 	vcpus  *int
 	mem    *int
-	runDir *string
+	runDir     *string
+	net        *bool
+	pool       *string
+	dns        *string
+	cgroupRoot *string
 }
 
 func addCommon(fs *flag.FlagSet) *common {
@@ -98,6 +105,10 @@ func addCommon(fs *flag.FlagSet) *common {
 		vcpus:  fs.Int("cpus", machine.DefaultVCPUs, "vCPU count"),
 		mem:    fs.Int("mem", machine.DefaultMemMiB, "memory in MiB"),
 		runDir: fs.String("run-dir", "run", "directory for per-machine runtime state"),
+		net:        fs.Bool("net", false, "give the machine a network interface (needs CAP_NET_ADMIN)"),
+		pool:       fs.String("pool", vmnet.DefaultPool, "address range the machine's link is carved from"),
+		dns:        fs.String("dns", machine.DefaultDNS.String(), "resolver handed to a networked guest"),
+		cgroupRoot: fs.String("cgroup-root", cgroup.DefaultRoot, "delegated cgroup subtree for resource caps (empty to disable)"),
 	}
 }
 
@@ -118,13 +129,46 @@ func (c *common) config() (machine.Config, error) {
 	if err != nil {
 		return machine.Config{}, err
 	}
-	return machine.Config{
+
+	resolver, err := netip.ParseAddr(*c.dns)
+	if err != nil {
+		return machine.Config{}, fmt.Errorf("bad -dns: %w", err)
+	}
+
+	cfg := machine.Config{
 		KernelPath: kernelPath,
 		RootfsPath: rootfsPath,
 		VCPUs:      *c.vcpus,
 		MemMiB:     *c.mem,
 		RunDir:     *c.runDir,
-	}, nil
+		DNS:        resolver,
+	}
+
+	// Without -net the machine has no interface at all, which is both the
+	// default and the strongest thing on offer — so this is the only path that
+	// needs any privilege, and it says so before doing anything.
+	if *c.net {
+		if err := vmnet.Available(); err != nil {
+			return machine.Config{}, fmt.Errorf("%w\nrun build/host-setup.sh once to grant it", err)
+		}
+		mgr, err := vmnet.New(*c.pool)
+		if err != nil {
+			return machine.Config{}, err
+		}
+		cfg.Net = mgr
+	}
+
+	// Caps apply whenever the subtree is there — a restriction, not a request —
+	// so a plain `eph run` is capped too once host-setup has been run. If the
+	// subtree is missing the machine simply runs uncapped; only an explicit -net
+	// is ever hard-refused.
+	if *c.cgroupRoot != "" {
+		caps := cgroup.New(*c.cgroupRoot)
+		if caps.Available() == nil {
+			cfg.Cgroup = caps
+		}
+	}
+	return cfg, nil
 }
 
 func cmdBoot(argv []string) error {
@@ -263,6 +307,7 @@ func cmdCreate(argv []string) error {
 	addr := daemonAddr(fs)
 	vcpus := fs.Int("cpus", 0, "vCPU count (0 = daemon default)")
 	mem := fs.Int("mem", 0, "memory in MiB (0 = daemon default)")
+	network := fs.Bool("net", false, "give the machine a network interface")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: eph create [flags]\n\nBoots a machine and leaves it running. Prints its id.\n\nflags:\n")
 		fs.PrintDefaults()
@@ -274,7 +319,11 @@ func cmdCreate(argv []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	m, err := client.New(*addr).Create(ctx, api.CreateRequest{VCPUs: *vcpus, MemMiB: *mem})
+	m, err := client.New(*addr).Create(ctx, api.CreateRequest{
+		VCPUs:   *vcpus,
+		MemMiB:  *mem,
+		Network: *network,
+	})
 	if err != nil {
 		return err
 	}
@@ -302,9 +351,13 @@ func cmdList(argv []string) error {
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "ID\tPID\tCPUS\tMEM\tUPTIME")
+	fmt.Fprintln(tw, "ID\tPID\tCPUS\tMEM\tADDRESS\tUPTIME")
 	for _, m := range machines {
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%d MiB\t%s\n", m.ID, m.PID, m.VCPUs, m.MemMiB,
+		addr := m.GuestIP
+		if addr == "" {
+			addr = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%d MiB\t%s\t%s\n", m.ID, m.PID, m.VCPUs, m.MemMiB, addr,
 			time.Duration(m.UptimeSec*float64(time.Second)).Round(time.Second))
 	}
 	return tw.Flush()
@@ -329,7 +382,18 @@ func cmdExec(argv []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// flag stops parsing at the machine id (the first non-flag argument), so a
+	// "--" after it is never consumed as the usual end-of-flags marker and
+	// arrives as a literal command token. Drop it, so "eph exec id -- cmd" runs
+	// cmd rather than trying to exec "--".
 	id, cmd := fs.Arg(0), fs.Args()[1:]
+	if len(cmd) > 0 && cmd[0] == "--" {
+		cmd = cmd[1:]
+	}
+	if len(cmd) == 0 {
+		fs.Usage()
+		return fmt.Errorf("need a command to run")
+	}
 	code, err := client.New(*addr).Exec(ctx, id, agent.ExecRequest{Cmd: cmd}, os.Stdout, os.Stderr)
 	if err != nil {
 		return err
