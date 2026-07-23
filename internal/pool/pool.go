@@ -76,6 +76,12 @@ func New(template machine.RestoreConfig, size int, log *slog.Logger) (*Pool, err
 func (p *Pool) Get(ctx context.Context) (*machine.Machine, error) {
 	select {
 	case m := <-p.ready:
+		// A nil receive means Close drained and closed the channel — a receive
+		// from a closed channel succeeds immediately with the zero value, so this
+		// is how a closed pool looks from here, not a real machine.
+		if m == nil {
+			return nil, ErrClosed
+		}
 		p.spawn() // replace the one just taken
 		return m, nil
 	case <-ctx.Done():
