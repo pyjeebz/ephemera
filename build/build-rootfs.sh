@@ -51,9 +51,14 @@ truncate -s "$ROOTFS_SIZE" "$img"
 fakeroot -- bash -euo pipefail -s "$tarball" "$staging" "$img" <<'BUILD'
 tarball="$1"; staging="$2"; img="$3"
 tar -xf "$tarball" -C "$staging"
-# Firecracker exposes the rootfs as /dev/vda; give the guest a matching fstab.
-printf '/dev/vda / ext4 rw,relatime 0 1\n' > "$staging/etc/fstab"
-mkfs.ext4 -F -q -L ephemera-root -d "$staging" "$img"
+# Firecracker exposes the rootfs as /dev/vda. The guest boots it read-only and
+# overlays a RAM upper for writes, so the fstab and the image both say read-only.
+printf '/dev/vda / ext4 ro,relatime 0 1\n' > "$staging/etc/fstab"
+# No journal: the image is only ever mounted read-only, so a journal buys
+# nothing — and worse, a journal flagged "needs recovery" cannot be replayed on
+# a read-only mount, which makes the kernel refuse to mount root at all. Build
+# it out and the read-only mount is always clean.
+mkfs.ext4 -F -q -L ephemera-root -O '^has_journal' -d "$staging" "$img"
 BUILD
 
 echo ">> rootfs ready: $img"
