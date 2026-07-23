@@ -21,14 +21,18 @@ runs locally; there are no cloud dependencies.
 `ephemerad` listens on a Unix socket (`run/ephemerad.sock`, mode 0600) by default — a local-first daemon
 has no reason to be on the network, and file permissions beat an open port.
 
-| Method   | Path                        | Purpose                                        |
-| -------- | --------------------------- | ---------------------------------------------- |
-| `GET`    | `/healthz`                  | liveness                                       |
-| `POST`   | `/v1/machines`              | boot a machine, returns once its agent is ready |
-| `GET`    | `/v1/machines`              | list                                           |
-| `GET`    | `/v1/machines/{id}`         | inspect                                        |
-| `DELETE` | `/v1/machines/{id}`         | destroy                                        |
-| `POST`   | `/v1/machines/{id}/exec`    | run a command, streams NDJSON frames           |
+| Method   | Path                          | Purpose                                         |
+| -------- | ----------------------------- | ----------------------------------------------- |
+| `GET`    | `/healthz`                    | liveness                                        |
+| `POST`   | `/v1/machines`                | boot a machine, returns once its agent is ready |
+| `GET`    | `/v1/machines`                | list                                            |
+| `GET`    | `/v1/machines/{id}`           | inspect                                         |
+| `DELETE` | `/v1/machines/{id}`           | destroy                                         |
+| `POST`   | `/v1/machines/{id}/exec`      | run a command, streams NDJSON frames            |
+| `POST`   | `/v1/machines/{id}/snapshot`  | freeze a jailed machine to disk (keeps running) |
+| `GET`    | `/v1/snapshots`               | list snapshots                                  |
+| `DELETE` | `/v1/snapshots/{id}`          | delete a snapshot and its files                 |
+| `POST`   | `/v1/snapshots/{id}/fork`     | start a new machine from a snapshot             |
 
 ## Host layout
 
