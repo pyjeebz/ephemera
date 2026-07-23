@@ -60,6 +60,45 @@ type action struct {
 	ActionType string `json:"action_type"`
 }
 
+// vmState is PATCH /vm: pause or resume a running guest. A snapshot can only be
+// taken while the guest is paused, so the memory being written is not changing
+// underneath the snapshot.
+type vmState struct {
+	State string `json:"state"` // "Paused" or "Resumed"
+}
+
+// SnapshotCreate is PUT /snapshot/create: write a paused guest's full state to
+// two files — the device/vCPU state, and the guest RAM. Together they are a
+// complete machine that can be brought back to life in a fresh VMM.
+//
+// Full is the only type we take for now. Diff snapshots record only pages
+// changed since a prior snapshot and need dirty-page tracking enabled at boot;
+// they belong with the fork work, where a base snapshot is shared.
+type SnapshotCreate struct {
+	SnapshotType string `json:"snapshot_type,omitempty"` // "Full" or "Diff"
+	SnapshotPath string `json:"snapshot_path"`           // device + vCPU state
+	MemFilePath  string `json:"mem_file_path"`           // guest RAM
+}
+
+// MemBackend is how restore is told where the guest RAM lives. Only the File
+// backend is used here; Firecracker also supports a UDS backend for restoring
+// memory over a socket, which is a page-server optimisation we do not need yet.
+type MemBackend struct {
+	BackendType string `json:"backend_type"` // "File"
+	BackendPath string `json:"backend_path"`
+}
+
+// SnapshotLoad is PUT /snapshot/load: rebuild a guest in this VMM from the two
+// files a create produced. With ResumeVM the guest is running the instant this
+// returns — and because the in-guest agent was already up when the snapshot was
+// taken, the machine is ready to take commands with no boot to wait through.
+type SnapshotLoad struct {
+	SnapshotPath        string     `json:"snapshot_path"`
+	MemBackend          MemBackend `json:"mem_backend"`
+	EnableDiffSnapshots bool       `json:"enable_diff_snapshots,omitempty"`
+	ResumeVM            bool       `json:"resume_vm,omitempty"`
+}
+
 // InstanceInfo is GET /: the VMM's own view of itself. Useful as a readiness
 // probe — the API answers before the guest has booted.
 type InstanceInfo struct {

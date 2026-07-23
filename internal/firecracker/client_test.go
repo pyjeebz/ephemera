@@ -141,6 +141,65 @@ func TestClientSendsTheBootSequence(t *testing.T) {
 	}
 }
 
+func TestClientSendsTheSnapshotSequence(t *testing.T) {
+	vmm, sock := startFakeVMM(t)
+	c := NewClient(sock)
+	ctx := context.Background()
+
+	// Taking a snapshot: pause, then write state and memory.
+	if err := c.Pause(ctx); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if err := c.CreateSnapshot(ctx, SnapshotCreate{
+		SnapshotType: "Full", SnapshotPath: "/s/state", MemFilePath: "/s/mem",
+	}); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	got := vmm.recorded()
+	if len(got) != 2 {
+		t.Fatalf("made %d calls, want 2: %+v", len(got), got)
+	}
+	// Pause is a PATCH of the vm state, not an action — a common thing to get
+	// wrong, and the VMM answers a wrong method with a confusing 405.
+	if got[0].method != "PATCH" || got[0].path != "/vm" || got[0].body["state"] != "Paused" {
+		t.Errorf("pause call = %s %s %v", got[0].method, got[0].path, got[0].body)
+	}
+	if got[1].method != "PUT" || got[1].path != "/snapshot/create" {
+		t.Errorf("create call = %s %s", got[1].method, got[1].path)
+	}
+	if got[1].body["snapshot_path"] != "/s/state" || got[1].body["mem_file_path"] != "/s/mem" {
+		t.Errorf("snapshot paths not sent: %+v", got[1].body)
+	}
+}
+
+func TestClientSendsSnapshotLoadWithMemBackend(t *testing.T) {
+	vmm, sock := startFakeVMM(t)
+	c := NewClient(sock)
+
+	if err := c.LoadSnapshot(context.Background(), SnapshotLoad{
+		SnapshotPath: "/s/state",
+		MemBackend:   MemBackend{BackendType: "File", BackendPath: "/s/mem"},
+		ResumeVM:     true,
+	}); err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+
+	got := vmm.recorded()
+	if len(got) != 1 || got[0].method != "PUT" || got[0].path != "/snapshot/load" {
+		t.Fatalf("load call = %+v", got)
+	}
+	// The memory backend is a nested object; a flat mem_file_path would be the
+	// older API and this VMM would reject it.
+	mb, ok := got[0].body["mem_backend"].(map[string]any)
+	if !ok || mb["backend_type"] != "File" || mb["backend_path"] != "/s/mem" {
+		t.Errorf("mem_backend not sent correctly: %+v", got[0].body)
+	}
+	if got[0].body["resume_vm"] != true {
+		t.Errorf("resume_vm not set: %+v", got[0].body)
+	}
+}
+
 func TestClientSurfacesTheVmmsFaultMessage(t *testing.T) {
 	vmm, sock := startFakeVMM(t)
 	vmm.failWith(http.StatusBadRequest, "Kvm error: Permission denied")

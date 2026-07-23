@@ -71,6 +71,29 @@ func (c *Client) Start(ctx context.Context) error {
 	return c.do(ctx, http.MethodPut, "/actions", action{ActionType: "InstanceStart"}, nil)
 }
 
+// Pause freezes the guest's vCPUs. Required before a snapshot, so the memory
+// image is a coherent instant rather than a moving target.
+func (c *Client) Pause(ctx context.Context) error {
+	return c.do(ctx, http.MethodPatch, "/vm", vmState{State: "Paused"}, nil)
+}
+
+// Resume unfreezes a paused guest.
+func (c *Client) Resume(ctx context.Context) error {
+	return c.do(ctx, http.MethodPatch, "/vm", vmState{State: "Resumed"}, nil)
+}
+
+// CreateSnapshot writes a paused guest's state and memory to disk.
+func (c *Client) CreateSnapshot(ctx context.Context, s SnapshotCreate) error {
+	return c.do(ctx, http.MethodPut, "/snapshot/create", s, nil)
+}
+
+// LoadSnapshot rebuilds a guest from a snapshot. It must be the first
+// configuration call on a fresh VMM — a snapshot carries its own devices, so
+// there is nothing to set up beforehand.
+func (c *Client) LoadSnapshot(ctx context.Context, s SnapshotLoad) error {
+	return c.do(ctx, http.MethodPut, "/snapshot/load", s, nil)
+}
+
 // Info reports the VMM's state. It succeeds as soon as the API server is up,
 // which is why WaitReady uses it as a readiness probe.
 func (c *Client) Info(ctx context.Context) (*InstanceInfo, error) {
