@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/pyjeebz/ephemera/internal/jail"
 )
 
 // DefaultBinary is the VMM executable looked up on PATH when none is configured.
@@ -42,6 +44,12 @@ type Options struct {
 	// an int because 0 is a valid descriptor (stdin), so there is no in-band way
 	// to say "unset". The caller owns the descriptor's lifetime.
 	CgroupFD *int
+
+	// Jail, when non-nil, confines the VMM to a chroot and its own process tree.
+	// The VMM is then reached through the sockets inside the jail rather than
+	// SockPath, and JailHelper is the eph-jail binary that enters the namespaces.
+	Jail       *jail.Spec
+	JailHelper string
 }
 
 // VMM is one running firecracker process and the API client bound to it.
@@ -64,53 +72,44 @@ type VMM struct {
 // The returned VMM owns the socket path: a stale socket is removed first, since
 // Firecracker refuses to start when one already exists.
 func Launch(ctx context.Context, o Options) (*VMM, error) {
-	if o.SockPath == "" {
-		return nil, errors.New("firecracker: SockPath is required")
+	cmd, apiSock, err := buildCommand(o)
+	if err != nil {
+		return nil, err
 	}
-	bin := o.Binary
-	if bin == "" {
-		bin = DefaultBinary
-	}
-	if _, err := exec.LookPath(bin); err != nil {
-		return nil, fmt.Errorf("firecracker: %q not found on PATH: %w", bin, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(o.SockPath), 0o755); err != nil {
-		return nil, fmt.Errorf("firecracker: prepare socket dir: %w", err)
-	}
-	if err := os.Remove(o.SockPath); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("firecracker: clear stale socket: %w", err)
-	}
-
-	cmd := exec.Command(bin, "--api-sock", o.SockPath)
 	cmd.Stdout, cmd.Stderr = o.Console, o.Console
 	cmd.Stdin = o.ConsoleIn
 
-	// Placed into its cgroup by the clone that starts it, so the VMM is inside
-	// its memory and CPU limits before it executes anything — no uncapped window.
-	if o.CgroupFD != nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: *o.CgroupFD}
-	}
-
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("firecracker: start %s: %w", bin, err)
+		// buildCommand already created the jail directory; nothing will reap it
+		// if the process never started, so remove it here.
+		if o.Jail != nil {
+			_ = o.Jail.Cleanup()
+		}
+		return nil, fmt.Errorf("firecracker: start: %w", err)
 	}
 
 	v := &VMM{
 		cmd:    cmd,
-		sock:   o.SockPath,
-		client: NewClient(o.SockPath),
+		sock:   apiSock,
+		client: NewClient(apiSock),
 		done:   make(chan struct{}),
 	}
 
 	// One reaper for the child's lifetime. Writing waitErr before closing done
 	// publishes it safely to everyone blocked in Wait.
 	//
-	// The socket is removed here rather than in Shutdown because its lifetime is
-	// exactly the process's: a guest that resets itself exits the VMM without
-	// anyone calling Shutdown, and that path must not leave the socket behind.
+	// Cleanup happens here rather than in Shutdown because the sockets' lifetime
+	// is exactly the process's: a guest that resets itself exits the VMM without
+	// anyone calling Shutdown, and that path must not leave anything behind. A
+	// jailed VMM's sockets live inside the jail directory, so removing the
+	// directory removes them; a direct VMM's socket is removed by path.
 	go func() {
 		v.waitErr = cmd.Wait()
-		_ = os.Remove(o.SockPath)
+		if o.Jail != nil {
+			_ = o.Jail.Cleanup()
+		} else {
+			_ = os.Remove(apiSock)
+		}
 		for _, p := range o.Cleanup {
 			_ = os.Remove(p)
 		}
@@ -127,6 +126,57 @@ func Launch(ctx context.Context, o Options) (*VMM, error) {
 	}
 
 	return v, nil
+}
+
+// buildCommand assembles the exec.Cmd for a VMM, in one of two shapes, and
+// returns the host path its API socket will appear at.
+//
+// Direct: exec firecracker with --api-sock, the socket at a host path we clear
+// first. Jailed: exec eph-jail, which enters the namespaces and pivots before
+// exec'ing firecracker itself, so the socket appears inside the jail directory.
+// A cgroup descriptor, when present, is folded into whichever SysProcAttr the
+// mode already needs, so the VMM lands in its cgroup either way.
+func buildCommand(o Options) (*exec.Cmd, string, error) {
+	if o.Jail != nil {
+		if o.JailHelper == "" {
+			return nil, "", errors.New("firecracker: JailHelper is required for a jailed launch")
+		}
+		if _, err := exec.LookPath(o.JailHelper); err != nil {
+			return nil, "", fmt.Errorf("firecracker: jail helper %q not usable: %w", o.JailHelper, err)
+		}
+		if err := o.Jail.Prepare(); err != nil {
+			return nil, "", err
+		}
+		cmd := exec.Command(o.JailHelper, o.Jail.HelperArgs()...)
+		sp := o.Jail.SysProcAttr()
+		if o.CgroupFD != nil {
+			sp.UseCgroupFD, sp.CgroupFD = true, *o.CgroupFD
+		}
+		cmd.SysProcAttr = sp
+		return cmd, o.Jail.HostAPISock(), nil
+	}
+
+	if o.SockPath == "" {
+		return nil, "", errors.New("firecracker: SockPath is required")
+	}
+	bin := o.Binary
+	if bin == "" {
+		bin = DefaultBinary
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		return nil, "", fmt.Errorf("firecracker: %q not found on PATH: %w", bin, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(o.SockPath), 0o755); err != nil {
+		return nil, "", fmt.Errorf("firecracker: prepare socket dir: %w", err)
+	}
+	if err := os.Remove(o.SockPath); err != nil && !os.IsNotExist(err) {
+		return nil, "", fmt.Errorf("firecracker: clear stale socket: %w", err)
+	}
+	cmd := exec.Command(bin, "--api-sock", o.SockPath)
+	if o.CgroupFD != nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: *o.CgroupFD}
+	}
+	return cmd, o.SockPath, nil
 }
 
 // Client returns the API client for this VMM.
