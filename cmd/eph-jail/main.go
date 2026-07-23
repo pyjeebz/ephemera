@@ -31,6 +31,8 @@ func main() {
 	flag.StringVar(&s.Rootfs, "rootfs", "", "guest rootfs on the host")
 	flag.StringVar(&s.APISock, "api-sock", "run/firecracker.sock", "API socket path inside the jail")
 	flag.StringVar(&s.VsockSock, "vsock-sock", "run/vsock.sock", "vsock socket path inside the jail")
+	flag.StringVar(&s.SnapState, "snap-state", "", "snapshot state file to bind read-only (restore)")
+	flag.StringVar(&s.SnapMem, "snap-mem", "", "snapshot memory file to bind read-only (restore)")
 	flag.BoolVar(&s.Network, "network", false, "bind /dev/net/tun for a networked machine")
 	flag.Parse()
 	s.Dir = jail.Dir(dir)

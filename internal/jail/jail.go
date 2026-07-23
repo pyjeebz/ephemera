@@ -53,9 +53,16 @@ type mount struct {
 type Spec struct {
 	Dir     Dir    // host directory to build the jail in
 	Binary  string // firecracker binary on the host, bound in as /firecracker
-	Kernel  string // host kernel path, bound in as /vmlinux
+	Kernel  string // host kernel path, bound in as /vmlinux; empty on a restore
 	Rootfs  string // host rootfs path, bound in as /rootfs.ext4
 	Network bool   // bind /dev/net/tun so the VMM can open its interface
+
+	// SnapState and SnapMem, when set, bind a snapshot's state and memory files
+	// read-only into the jail for a restore. Their fixed in-jail names are how a
+	// restore refers to them, and being read-only is what lets many forks share
+	// one memory image without treading on each other.
+	SnapState string
+	SnapMem   string
 
 	// APISock and VsockSock are the socket paths *inside* the jail. Their host
 	// locations are these joined onto Dir, which is how the daemon reaches them.
@@ -66,10 +73,12 @@ type Spec struct {
 // Guest paths — fixed names inside the jail, so the boot arguments and drive
 // paths the daemon sends refer to files that are actually there.
 const (
-	GuestBinary = "/firecracker"
-	GuestKernel = "/vmlinux"
-	GuestRootfs = "/rootfs.ext4"
-	guestRunDir = "run"
+	GuestBinary    = "/firecracker"
+	GuestKernel    = "/vmlinux"
+	GuestRootfs    = "/rootfs.ext4"
+	GuestSnapState = "/snapshot.state"
+	GuestSnapMem   = "/snapshot.mem"
+	guestRunDir    = "run"
 )
 
 // HostAPISock is where the VMM's API socket lands on the host.
@@ -132,11 +141,29 @@ func (s Spec) Cleanup() error {
 func (s Spec) mounts() []mount {
 	m := []mount{
 		{source: s.Binary, target: GuestBinary[1:], dev: true, ro: true},
-		{source: s.Kernel, target: GuestKernel[1:], dev: true, ro: true},
-		{source: s.Rootfs, target: GuestRootfs[1:], dev: true},
 		{source: "/dev/kvm", target: "dev/kvm", dev: true},
 		{source: "/dev/urandom", target: "dev/urandom", dev: true},
 		{source: "/dev/null", target: "dev/null", dev: true},
+	}
+	// A boot binds the shared rootfs image in. A restore instead places a private
+	// copy of the disk directly in the jail directory (so it lands at /rootfs.ext4
+	// after the pivot and is cleaned up with the jail), and leaves this empty.
+	if s.Rootfs != "" {
+		m = append(m, mount{source: s.Rootfs, target: GuestRootfs[1:], dev: true})
+	}
+	// The kernel is only needed to boot. A restore rebuilds the guest from a
+	// memory image that already holds a running kernel, so there is nothing to
+	// bind — and nothing to leak into the jail.
+	if s.Kernel != "" {
+		m = append(m, mount{source: s.Kernel, target: GuestKernel[1:], dev: true, ro: true})
+	}
+	// A restore binds its snapshot read-only. Read-only is load-bearing: it is
+	// what lets several forks share one memory file at once.
+	if s.SnapState != "" {
+		m = append(m, mount{source: s.SnapState, target: GuestSnapState[1:], dev: true, ro: true})
+	}
+	if s.SnapMem != "" {
+		m = append(m, mount{source: s.SnapMem, target: GuestSnapMem[1:], dev: true, ro: true})
 	}
 	if s.Network {
 		m = append(m, mount{source: "/dev/net/tun", target: "dev/net/tun", dev: true})
@@ -261,6 +288,9 @@ func (s Spec) HelperArgs() []string {
 		"-rootfs", s.Rootfs,
 		"-api-sock", s.APISock,
 		"-vsock-sock", s.VsockSock,
+	}
+	if s.SnapState != "" {
+		args = append(args, "-snap-state", s.SnapState, "-snap-mem", s.SnapMem)
 	}
 	if s.Network {
 		args = append(args, "-network")
