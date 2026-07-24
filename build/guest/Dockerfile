@@ -8,7 +8,12 @@ FROM alpine:3.24
 
 RUN apk add --no-cache \
       util-linux \
-      e2fsprogs-extra
+      e2fsprogs-extra \
+      python3
+
+# python3 gives the agent something to build and run with in a task like "write
+# a snake game" — the Phase 4 checkpoint. It is the one real toolchain in an
+# otherwise minimal image; a networked machine can apk-add or pip-install more.
 
 # Note: /etc/hostname and /etc/resolv.conf are bind-mounted by Docker during a
 # build and cannot be written here — the guest sets both at boot instead.

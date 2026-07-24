@@ -1,13 +1,18 @@
 #!/bin/sh
 # Shared early-boot setup, sourced by whichever init the kernel was pointed at.
 #
-# The kernel is built with CONFIG_DEVTMPFS_MOUNT=y, so /dev already exists by the
-# time we run — that is what gives us /dev/console for stdio without anyone ever
-# creating device nodes as root on the host. We mount the rest ourselves.
+# The kernel mounts devtmpfs at /dev at boot (CONFIG_DEVTMPFS_MOUNT=y), but the
+# overlay init pivots into a new root and the kernel's /dev is left behind on the
+# old one — so the new /dev is just the base image's static stub. Remount a fresh
+# devtmpfs here to get the live device nodes back: /dev/ptmx for pseudo-terminals
+# (interactive shells), /dev/kvm, the disks, everything. devtmpfs is a singleton,
+# so this is the same instance the kernel mounted, not a second copy.
+mount -t devtmpfs devtmpfs /dev
 mount -t proc  proc  /proc
 mount -t sysfs sysfs /sys
 mkdir -p /dev/pts /dev/shm
-mount -t devpts devpts /dev/pts
+# ptmxmode makes /dev/ptmx usable; the guest opens it to allocate a pty pair.
+mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts
 mount -t tmpfs  tmpfs  /dev/shm
 
 # A networked guest already has its hostname, address and default route: the
