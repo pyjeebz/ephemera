@@ -36,7 +36,7 @@ func TestShellRunsAnInteractiveSession(t *testing.T) {
 	// so the session ends and Shell returns.
 	input := strings.NewReader("echo result-$((6*7))\nexit\n")
 	var out bytes.Buffer
-	if err := m.Shell(ctx, agent.ExecRequest{Rows: 24, Cols: 80, Term: "xterm-256color"}, input, &out); err != nil {
+	if err := m.Shell(ctx, agent.ExecRequest{Rows: 24, Cols: 80, Term: "xterm-256color"}, input, &out, nil); err != nil {
 		t.Fatalf("Shell: %v", err)
 	}
 	if !strings.Contains(out.String(), "result-42") {

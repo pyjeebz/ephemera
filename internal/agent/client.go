@@ -78,13 +78,15 @@ func Exec(ctx context.Context, udsPath string, req ExecRequest, stdout, stderr i
 	}
 }
 
-// Shell opens an interactive session in the guest and relays raw bytes between
-// the local terminal (in and out) and a shell running on a pseudo-terminal
-// inside the machine. It returns when the shell exits or the connection drops.
+// Shell opens an interactive session in the guest and relays between the local
+// terminal (in and out) and a shell running on a pseudo-terminal inside the
+// machine. Resize events sent on the resize channel are forwarded so the guest
+// pty follows the local terminal's size; resize may be nil for a fixed size.
+// It returns when the shell exits or the connection drops.
 //
 // The caller is responsible for putting the local terminal into raw mode and
 // restoring it; this function only moves bytes.
-func Shell(ctx context.Context, udsPath string, req ExecRequest, in io.Reader, out io.Writer) error {
+func Shell(ctx context.Context, udsPath string, req ExecRequest, in io.Reader, out io.Writer, resize <-chan WinSize) error {
 	req.PTY = true
 	conn, err := vsock.Dial(udsPath, Port, DialTimeout)
 	if err != nil {
@@ -103,25 +105,72 @@ func Shell(ctx context.Context, udsPath string, req ExecRequest, in io.Reader, o
 		}
 	}()
 
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
+	// Marshal without a trailing newline: the stream switches to binary frames
+	// immediately after the request, and an Encoder's newline would be read as a
+	// frame kind. The guest's JSON decoder stops cleanly at the closing brace.
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("agent: encode shell request: %w", err)
+	}
+	if _, err := conn.Write(body); err != nil {
 		return fmt.Errorf("agent: send shell request: %w", err)
 	}
 
-	// Local keystrokes to the guest, in the background. This copy blocks reading
-	// the local input and only unblocks when the process exits, which is fine for
-	// a foreground command like `eph shell`; the important direction is the other
-	// one, which returns cleanly when the shell ends.
-	go func() { _, _ = io.Copy(conn, in) }()
+	sw := NewSessionWriter(conn)
+
+	// Local keystrokes to the guest, as data frames. This read blocks on the
+	// local input and only unblocks when the process exits, which is fine for a
+	// foreground command like `eph shell`.
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, rerr := in.Read(buf)
+			if n > 0 {
+				if werr := sw.WriteData(buf[:n]); werr != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+
+	// Resize events as resize frames, until the channel closes or the session ends.
+	go func() {
+		for {
+			select {
+			case ws, ok := <-resize:
+				if !ok {
+					return
+				}
+				_ = sw.WriteResize(ws)
+			case <-done:
+				return
+			}
+		}
+	}()
 
 	// Guest output to the local terminal, in the foreground. Returns when the
 	// shell exits (the guest closes the connection).
-	if _, err := io.Copy(out, conn); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	reader := NewSessionReader(conn)
+	for {
+		kind, data, _, rerr := reader.Next()
+		if rerr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("agent: shell session: %w", rerr)
 		}
-		return fmt.Errorf("agent: shell session: %w", err)
+		if kind == FrameData {
+			if _, werr := out.Write(data); werr != nil {
+				return werr
+			}
+		}
 	}
-	return nil
 }
 
 // WaitReady blocks until the guest agent accepts a connection.

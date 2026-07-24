@@ -49,7 +49,12 @@ func runPTY(req agent.ExecRequest, in io.Reader, conn *os.File) error {
 
 	argv := req.Cmd
 	if len(argv) == 0 {
-		argv = []string{"/bin/sh"}
+		// A real box has bash; fall back to sh only if it somehow does not.
+		if _, err := os.Stat("/bin/bash"); err == nil {
+			argv = []string{"/bin/bash"}
+		} else {
+			argv = []string{"/bin/sh"}
+		}
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
@@ -64,15 +69,44 @@ func runPTY(req agent.ExecRequest, in io.Reader, conn *os.File) error {
 	// The child holds its own copy of the slave now; the parent does not need one.
 	_ = slave.Close()
 
-	// Relay both directions. The host's keystrokes go to the pty; the pty's
-	// output goes back. The session ends when the shell exits (the master read
-	// fails) or the host hangs up (the connection read fails); either way, close
-	// both ends so the other copy unblocks, then reap the shell.
+	// Relay both directions over the session framing. Host frames carry either
+	// keystrokes (written to the pty) or resize events (applied to the pty);
+	// pty output goes back as data frames. The session ends when the shell exits
+	// (master read fails) or the host hangs up (frame read fails); either way,
+	// close both ends so the other side unblocks, then reap the shell.
 	go func() {
-		_, _ = io.Copy(masterFile, in) // host -> pty
-		_ = masterFile.Close()         // hang up the pty: the shell gets SIGHUP
+		reader := agent.NewSessionReader(in)
+	relay:
+		for {
+			kind, data, ws, err := reader.Next()
+			if err != nil {
+				break
+			}
+			switch kind {
+			case agent.FrameData:
+				if _, err := masterFile.Write(data); err != nil {
+					break relay
+				}
+			case agent.FrameResize:
+				_ = unix.IoctlSetWinsize(master, unix.TIOCSWINSZ, &unix.Winsize{Row: ws.Rows, Col: ws.Cols})
+			}
+		}
+		_ = masterFile.Close() // hang up the pty: the shell gets SIGHUP
 	}()
-	_, _ = io.Copy(conn, masterFile) // pty -> host
+
+	sw := agent.NewSessionWriter(conn)
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := masterFile.Read(buf)
+		if n > 0 {
+			if werr := sw.WriteData(buf[:n]); werr != nil {
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
 	_ = conn.Close()
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()

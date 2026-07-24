@@ -231,9 +231,10 @@ func (m *Machine) Exec(ctx context.Context, cmd []string, stdout, stderr io.Writ
 
 // Shell opens an interactive terminal session in the guest, relaying between the
 // given local input/output and a shell on a pseudo-terminal inside the machine.
-// req carries the terminal's initial size and type.
-func (m *Machine) Shell(ctx context.Context, req agent.ExecRequest, in io.Reader, out io.Writer) error {
-	return agent.Shell(ctx, m.vsockPath, req, in, out)
+// req carries the terminal's initial size and type; resize forwards later size
+// changes and may be nil.
+func (m *Machine) Shell(ctx context.Context, req agent.ExecRequest, in io.Reader, out io.Writer, resize <-chan agent.WinSize) error {
+	return agent.Shell(ctx, m.vsockPath, req, in, out, resize)
 }
 
 // Boot starts a machine and returns once the VMM has accepted the boot action.

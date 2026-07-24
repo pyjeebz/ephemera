@@ -484,10 +484,26 @@ func cmdShell(argv []string) error {
 	}
 	defer restoreTerm(int(os.Stdin.Fd()), old)
 
+	// Forward terminal resizes: on SIGWINCH, read the new size and push it to the
+	// session so the guest's pty follows along and full-screen programs reflow.
+	resize := make(chan agent.WinSize, 1)
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	defer signal.Stop(winch)
+	go func() {
+		for range winch {
+			r, c := termSize(os.Stdout)
+			select {
+			case resize <- agent.WinSize{Rows: r, Cols: c}:
+			default:
+			}
+		}
+	}()
+
 	fmt.Fprintf(os.Stderr, "eph: connected to %s (Ctrl-D or 'exit' to leave)\r\n", label)
 	err = agent.Shell(ctx, vsockPath, agent.ExecRequest{
 		Rows: rows, Cols: cols, Term: os.Getenv("TERM"),
-	}, os.Stdin, os.Stdout)
+	}, os.Stdin, os.Stdout, resize)
 	restoreTerm(int(os.Stdin.Fd()), old)
 	fmt.Fprintf(os.Stderr, "\neph: session ended\n")
 	return err
