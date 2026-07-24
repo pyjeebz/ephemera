@@ -94,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/machines/{id}", s.get)
 	mux.HandleFunc("DELETE /v1/machines/{id}", s.destroy)
 	mux.HandleFunc("POST /v1/machines/{id}/exec", s.exec)
+	mux.HandleFunc("GET /v1/machines/{id}/desktop/ws", s.desktopWS)
 	mux.HandleFunc("POST /v1/machines/{id}/snapshot", s.snapshot)
 	mux.HandleFunc("GET /v1/snapshots", s.listSnapshots)
 	mux.HandleFunc("DELETE /v1/snapshots/{id}", s.deleteSnapshot)

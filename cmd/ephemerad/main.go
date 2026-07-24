@@ -39,6 +39,7 @@ func main() {
 
 func run() error {
 	addr := flag.String("addr", "unix://run/ephemerad.sock", "listen address (unix://path or tcp://host:port)")
+	httpAddr := flag.String("http", "", "also serve the API and web UI on this TCP address for a browser (e.g. 127.0.0.1:8080); off by default")
 	kernel := flag.String("kernel", "build/kernel/vmlinux", "guest kernel (uncompressed ELF vmlinux)")
 	rootfs := flag.String("rootfs", "build/rootfs/rootfs.ext4", "guest root filesystem image")
 	desktopRootfs := flag.String("desktop-rootfs", "build/rootfs/rootfs-desktop.ext4", "guest image for desktop boxes (optional; built by build-rootfs.sh --desktop)")
@@ -181,6 +182,29 @@ func run() error {
 		}
 	}()
 
+	// The browser surface is opt-in and separate from the control socket. It
+	// serves the same handler, so a browser reaches the whole API plus the web UI
+	// and the desktop WebSocket — but only when asked for, and it should stay on
+	// loopback: this is the full control plane, protected by nothing but the
+	// address it binds. One http.Server can serve several listeners; Shutdown
+	// stops them all.
+	if *httpAddr != "" {
+		if !isLoopback(*httpAddr) {
+			log.Warn("http surface is not on loopback — this exposes the full control plane", "http", *httpAddr)
+		}
+		tcpLn, err := net.Listen("tcp", *httpAddr)
+		if err != nil {
+			return fmt.Errorf("listen on -http %s: %w", *httpAddr, err)
+		}
+		defer tcpLn.Close()
+		go func() {
+			log.Info("web surface listening", "http", *httpAddr)
+			if err := httpSrv.Serve(tcpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errc <- err
+			}
+		}()
+	}
+
 	select {
 	case err := <-errc:
 		return err
@@ -257,6 +281,22 @@ func resolveImages(kernel, rootfs string) (string, string, error) {
 		}
 	}
 	return kernelPath, rootfsPath, nil
+}
+
+// isLoopback reports whether a host:port address binds only the loopback
+// interface. A hostname (not an IP) is treated as loopback only when it is
+// literally localhost; anything else is assumed routable and warned about.
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	// An empty host (":8080") binds every interface — the opposite of loopback.
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // resolveOptional makes an optional image path absolute, returning "" when it is
