@@ -1,0 +1,107 @@
+# 0009 — A graphical desktop, streamed out of a box over vsock
+
+- **Status:** Accepted
+- **Date:** 2026-07-24
+- **Phase:** 5 (web UI + live desktop), Increment 1
+
+## Context
+
+The Phase 4 reframe is that ephemera is a computer you use like a laptop. So far you use it through a
+terminal (`eph ssh`). Phase 5 is the rest of the laptop: a graphical desktop you can watch and drive — the
+payoff of "use it like a laptop," and the thing that lets you watch an agent work in a browser.
+
+There is one hard constraint that shapes everything: **a Firecracker microVM has no display device.** Its
+device model is virtio-block, -net, -vsock, -rng, and a serial console — no GPU, no VGA, no framebuffer, no
+PCI graphics at all. This is deliberate on Firecracker's part, not a config we have not found. So the
+usual "point a VNC client at the VM's virtual screen" (QEMU + virtio-gpu/SPICE) is simply not available:
+there is no screen to point at.
+
+The pixels have to be *manufactured inside the guest* and streamed out over a channel we already have.
+
+## Decision
+
+**Run a headless X server and a VNC server inside the box, and tunnel the RFB stream out over vsock** — the
+same private channel exec and the interactive shell already use. The host re-exposes that stream as a plain
+local TCP port for any VNC viewer.
+
+```
+[ box: Xvfb (RAM framebuffer) + openbox + xterm + x11vnc on 127.0.0.1:5900 ]
+                    │  RFB bytes
+                    ▼  eph-agent bridges vsock port 1025 ⇄ 127.0.0.1:5900
+[ host: `eph desktop <box>` bridges vsock ⇄ 127.0.0.1:<local port> ]
+                    │
+                    ▼
+[ a VNC viewer connects to 127.0.0.1:<local port> ]
+```
+
+- The guest boots a **desktop init** (`/sbin/eph-desktop-init`) that starts Xvfb (a framebuffer in RAM,
+  since there is no display), a minimal window manager, a terminal, and **x11vnc** bound to localhost, then
+  execs the agent as before.
+- The agent listens on a **second vsock port** (`1025`) and splices each connection to the local VNC server.
+  A box with no desktop simply finds nothing listening on 5900 and drops the connection, so the bridge costs
+  nothing when unused.
+- `eph desktop <box>` opens a local TCP listener and splices each viewer connection to the box's desktop
+  vsock port. Bring your own viewer.
+
+Desktop boxes are a **separate, heavier image** (`rootfs-desktop.ext4`, built with
+`build/build-rootfs.sh --desktop`) with more RAM by default. The lean default box keeps its ~1 s boot and
+tiny footprint; you opt into pixels.
+
+## Reasons
+
+1. **vsock is the only honest transport here.** x11vnc could bind the guest's network interface, but then
+   the desktop is on IP — firewalled, exposed, one misconfiguration from reachable. Over vsock it is exactly
+   as private as the shell: no guest NIC required, no open port, reachable only by whoever owns the box. The
+   desktop inherits the box's isolation for free.
+2. **We own the transport, which is the whole differentiator.** Batteries-included stacks (KasmVNC,
+   Guacamole) bundle their own web server and want to serve HTTP straight to the browser — which throws away
+   the vsock property. x11vnc is a dumb RFB server we tunnel ourselves. That keeps the isolation model
+   intact and keeps the encoder swappable: to chase smoothness later we replace the guest-side server
+   (wayvnc, or a WebRTC video pipeline) behind the *same* vsock bridge, and nothing above it moves.
+3. **Prove the pipe before marrying an encoder.** Increment 1 uses the simplest possible framebuffer + RFB
+   server precisely to measure the load-bearing risk — RFB latency and throughput through the vsock bridge —
+   before investing in a codec. A native VNC viewer is the client; the browser (noVNC over a WebSocket
+   proxy) is Increment 2, and a video-codec path is a later stretch only if responsiveness demands it.
+4. **A separate image keeps the fast box fast.** A desktop stack is heavy; folding it into the default image
+   would tax every throwaway box that never wanted pixels. Two images, one shared build path.
+
+## Honest about the number
+
+The roadmap says "60 fps." RFB/VNC gives a *responsive, usable* desktop — good for watching an agent, for
+editing and browsing — but it is not smooth 60 fps full-motion video. True 60 fps means capturing frames and
+encoding a video codec (VP8/H.264) over WebRTC, and **with no GPU that is software encoding — expensive
+CPU.** So the Phase 5 checkpoint is *"a usable browser desktop,"* and the video path is a stretch we take
+only if it is worth the cost. Under-promise the number, over-deliver the experience.
+
+## Costs we are accepting
+
+- **No authentication or encryption on the RFB stream yet.** x11vnc runs `-nopw`, bound to localhost. The
+  security boundary is the vsock socket (owner-only) and the local bridge (127.0.0.1), the same boundary the
+  shell trusts. A remote/multi-user story needs auth; a local-first single-user box does not, yet.
+- **Software-only rendering.** No GPU acceleration; heavy graphics will be slow. Fine for a desktop, a
+  terminal, a browser watching an agent.
+- **Increment 1 desktop boxes are throwaway.** A *named, persistent* desktop computer (a set-up desktop you
+  keep) composes with the persist disk (ADR 0008) but is not wired yet.
+- **A bigger image and more RAM per desktop box.** The cost of pixels; you pay it only when you ask for them.
+
+## Verified (Increment 1)
+
+A desktop box boots from the desktop image in ~1.4 s, with Xvfb, openbox, xterm, and x11vnc all running and
+x11vnc listening on `127.0.0.1:5900`. Driving `eph desktop <box>` and speaking RFB through the local port,
+the handshake completes end-to-end over vsock — ProtocolVersion `RFB 003.008`, security negotiation, and a
+ServerInit reporting a **1280×800** desktop named `ephemera:0`. The pixels are flowing out of the box over
+the same private channel the shell uses; no guest network, no open port.
+
+**The load-bearing question — is vsock the wall? — is answered: no.** A full **3.91 MiB uncompressed** frame
+(1280×800 @ 32 bpp, Raw encoding, cold) came back in ~0.53 s, but first-byte was ~510 ms and the bytes
+themselves streamed in ~20 ms — so that half-second is x11vnc *rendering* a cold full-screen Raw frame, not
+the transport. vsock moved ~4 MiB in ~20 ms. The cost is encoding, not the pipe, which is exactly what a
+real viewer (Tight/ZRLE compression + incremental damage) is built to cut down.
+
+**One bug the live boot caught:** a box with no external network never brought its **loopback** interface
+up, so x11vnc could *bind* `127.0.0.1:5900` but the agent's bridge could not *connect* to it
+("Network unreachable"). Fixed by raising `lo` in the shared guest mounts — every box now has working
+loopback, the way any real computer does.
+
+_(Still to come: Increment 2 puts this in a browser — a WebSocket proxy in the daemon and a self-hosted
+noVNC page — so "point a VNC viewer at it" becomes "open a tab.")_
