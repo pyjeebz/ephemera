@@ -56,6 +56,8 @@ func main() {
 		err = cmdSnapshots(args[1:])
 	case "fork":
 		err = cmdFork(args[1:])
+	case "computer":
+		err = cmdComputer(args[1:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -93,6 +95,7 @@ managed — talk to ephemerad, machines outlive the command:
   snapshot   freeze a running machine to disk (machine keeps running)
   snapshots  list snapshots
   fork       start a new machine from a snapshot, in milliseconds
+  computer   manage named, persistent computers (create/ls/start/stop/rm)
 
 run "eph <command> -h" for flags
 `)
@@ -439,9 +442,9 @@ func cmdShell(argv []string) error {
 	fs := flag.NewFlagSet("shell", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph shell [flags] <machine-id>\n\n"+
-			"Opens an interactive terminal inside a machine — a real shell with line\n"+
-			"editing and full-screen programs. Ctrl-D or 'exit' to leave.\n\nflags:\n")
+		fmt.Fprintf(os.Stderr, "usage: eph shell [flags] <computer-name | machine-id>\n\n"+
+			"Opens an interactive terminal inside a computer or machine — a real shell\n"+
+			"with line editing and full-screen programs. Ctrl-D or 'exit' to leave.\n\nflags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(argv); err != nil {
@@ -449,7 +452,7 @@ func cmdShell(argv []string) error {
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
-		return fmt.Errorf("need exactly one machine id")
+		return fmt.Errorf("need exactly one computer name or machine id")
 	}
 
 	if !isTerminal(os.Stdin) {
@@ -459,14 +462,17 @@ func cmdShell(argv []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	getCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	m, err := client.New(*addr).Get(getCtx, fs.Arg(0))
-	cancel()
+	cl := client.New(*addr)
+	target := fs.Arg(0)
+
+	// Resolve the target's agent socket. A name is tried as a computer first —
+	// that is the everyday case — and then as a raw machine id.
+	vsockPath, label, err := resolveShellTarget(ctx, cl, target)
 	if err != nil {
 		return err
 	}
-	if m.VsockPath == "" {
-		return fmt.Errorf("machine %s has no reachable agent socket", m.ID)
+	if vsockPath == "" {
+		return fmt.Errorf("%s has no reachable agent socket", label)
 	}
 
 	// Raw mode: the local terminal must stop interpreting keystrokes so they pass
@@ -478,13 +484,35 @@ func cmdShell(argv []string) error {
 	}
 	defer restoreTerm(int(os.Stdin.Fd()), old)
 
-	fmt.Fprintf(os.Stderr, "eph: connected to %s (Ctrl-D or 'exit' to leave)\r\n", m.ID)
-	err = agent.Shell(ctx, m.VsockPath, agent.ExecRequest{
+	fmt.Fprintf(os.Stderr, "eph: connected to %s (Ctrl-D or 'exit' to leave)\r\n", label)
+	err = agent.Shell(ctx, vsockPath, agent.ExecRequest{
 		Rows: rows, Cols: cols, Term: os.Getenv("TERM"),
 	}, os.Stdin, os.Stdout)
 	restoreTerm(int(os.Stdin.Fd()), old)
 	fmt.Fprintf(os.Stderr, "\neph: session ended\n")
 	return err
+}
+
+// resolveShellTarget finds the agent socket for a shell target, which may be a
+// computer name or a machine id. It returns the socket, a label for messages,
+// and any error. A computer that exists but is not running is a clear error
+// rather than a confusing fall-through to a machine-id lookup.
+func resolveShellTarget(ctx context.Context, cl *client.Client, target string) (vsockPath, label string, err error) {
+	lookup, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if c, cerr := cl.GetComputer(lookup, target); cerr == nil {
+		if !c.Running {
+			return "", "", fmt.Errorf("computer %q is stopped — 'eph computer start %s' first", target, target)
+		}
+		return c.VsockPath, "computer " + target, nil
+	}
+
+	m, merr := cl.Get(lookup, target)
+	if merr != nil {
+		return "", "", fmt.Errorf("no computer or machine %q", target)
+	}
+	return m.VsockPath, "machine " + m.ID, nil
 }
 
 func cmdRm(argv []string) error {

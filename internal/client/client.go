@@ -106,6 +106,48 @@ func (c *Client) Fork(ctx context.Context, snapshotID string) (api.MachineRespon
 	return out, err
 }
 
+// CreateComputer makes a persistent computer and boots it.
+func (c *Client) CreateComputer(ctx context.Context, name string) (api.ComputerResponse, error) {
+	var out api.ComputerResponse
+	err := c.do(ctx, http.MethodPost, "/v1/computers", map[string]string{"name": name}, &out)
+	return out, err
+}
+
+// ListComputers returns every computer the daemon knows.
+func (c *Client) ListComputers(ctx context.Context) ([]api.ComputerResponse, error) {
+	var out struct {
+		Computers []api.ComputerResponse `json:"computers"`
+	}
+	err := c.do(ctx, http.MethodGet, "/v1/computers", nil, &out)
+	return out.Computers, err
+}
+
+// GetComputer returns one computer, including its running machine if any.
+func (c *Client) GetComputer(ctx context.Context, name string) (api.ComputerResponse, error) {
+	var out api.ComputerResponse
+	err := c.do(ctx, http.MethodGet, "/v1/computers/"+name, nil, &out)
+	return out, err
+}
+
+// StartComputer boots a stopped computer from its disk.
+func (c *Client) StartComputer(ctx context.Context, name string) (api.ComputerResponse, error) {
+	var out api.ComputerResponse
+	err := c.do(ctx, http.MethodPost, "/v1/computers/"+name+"/start", nil, &out)
+	return out, err
+}
+
+// StopComputer stops a computer's running machine, keeping its disk.
+func (c *Client) StopComputer(ctx context.Context, name string) (api.ComputerResponse, error) {
+	var out api.ComputerResponse
+	err := c.do(ctx, http.MethodPost, "/v1/computers/"+name+"/stop", nil, &out)
+	return out, err
+}
+
+// DeleteComputer stops and permanently removes a computer and its disk.
+func (c *Client) DeleteComputer(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/computers/"+name, nil, nil)
+}
+
 // Exec runs a command in a machine, writing its output as it arrives.
 //
 // The returned status is the command's own; a non-zero value comes back with a
