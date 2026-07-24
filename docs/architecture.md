@@ -102,12 +102,16 @@ Each phase is a vertical slice that boots to a working checkpoint.
       - [x] **Interactive shell.** `eph shell <id>` opens a real terminal in a machine — a pty over vsock,
             with job control and full-screen programs, not just one-shot `exec`. This is what makes it usable
             as a computer rather than a place to fire commands.
-      - [ ] **Persistence.** A mode: the overlay's writable upper is either tmpfs (ephemeral, the default for
-            a throwaway or a fork) or a per-computer data disk (persistent, the default for a named computer
-            you keep). Same shared read-only base, so fork/snapshot are unaffected.
+      - [x] **Persistence — named computers.** The overlay's writable upper is either tmpfs (ephemeral, for
+            a throwaway or a fork) or a per-computer writable disk (persistent). A **computer** is a named,
+            persistent machine: `eph computer create/ls/start/stop/rm`, and `eph shell <name>`. `stop` syncs
+            then parks it (disk kept); `start` boots a fresh machine on the same disk with state intact. Same
+            shared read-only base, so fork/snapshot are unaffected. See
+            [decision 0008](decisions/0008-persistent-computers.md).
       - [ ] **A computer's toolchain.** bash, git, curl, an editor — the basics a real box has; users install
             the rest, including their agent.
-      _Checkpoint: `eph shell` into a machine, install and run an agent, snapshot it, fork the setup._
+      - [ ] **Live terminal resize** (SIGWINCH) for `eph shell`.
+      _Checkpoint: `eph shell` into a computer, install and run an agent, stop and start it with state intact._
 - [ ] **Phase 5 — Web UI + live desktop.** VNC/RFB desktop, SvelteKit UI, live preview URLs.
       _Checkpoint: a browser desktop you watch an agent use._
 

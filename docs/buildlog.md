@@ -650,3 +650,35 @@ this clean: the socket is right there, owned by the same user.
 
 **Next:** persistence — a computer you keep should keep its state. The overlay's writable upper becomes a
 mode: tmpfs (ephemeral) or a per-computer data disk (persistent), over the same shared read-only base.
+
+---
+
+## Phase 4 — persistence, and named computers
+
+**Goal:** a computer you keep keeps its state. Install something, stop it, start it, and it's still there.
+
+**The mechanism, in one sentence:** the overlay's writable upper layer becomes swappable — a **tmpfs** for
+an ephemeral machine, a **per-computer writable disk** for a persistent one — and nothing below it changes.
+The guest's overlay init already stacks a writable upper over the read-only base; persistence is just
+pointing that upper at a disk (attached as `/dev/vdb`, named by `eph.persist=` on the cmdline) instead of
+RAM. The base stays shared and read-only, so fork and snapshot are untouched. `docs/decisions/0008`.
+
+**Named computers — the laptop surface.** A *computer* is a name plus one of these disks: `eph computer
+create <name>` makes the disk and boots it, `stop` parks it (disk kept), `start` boots a fresh machine on
+the same disk with the state back, `rm` deletes it, and `eph shell <name>` drops you in. A stopped computer
+is just a disk sitting on disk; the daemon reaps its records like anything else, so a daemon restart parks
+every computer, and its state waits on the disk for the next `start`.
+
+**Gotcha — a kill is not a clean stop.** The first lifecycle test wrote a config file, stopped the
+computer, started it, and the file was *gone* — even though the direct persistence test passed. The base
+mechanism was fine; the difference was `sync`. A machine has no graceful shutdown: `stop` kills the VMM,
+and the guest's page cache — where a just-written file still lives — dies with it, never reaching the disk.
+So `stop` now runs `sync` in the guest first, flushing the overlay's dirty pages onto the persist disk. An
+*unclean* stop (daemon crash) still loses the last unsynced writes, exactly like pulling power from a
+laptop: the journal keeps the disk consistent, recent unsaved work is the cost. **Lesson: "persistent
+disk" is only half of it; without a flush on the way out, a kill throws away whatever the guest had not
+yet written down.**
+
+**Verified:** a computer with a config file and a project survived stop/start intact, on a new machine and
+a fresh kernel reading the same disk; an ephemeral machine was confirmed to run on a tmpfs overlay that
+does not persist.
