@@ -51,6 +51,11 @@ type Record struct {
 	// live inside it, so removing it is how an orphaned jailed machine is cleaned
 	// up — the reaper cannot rely on the VMM's own exit-path cleanup.
 	JailDir string `json:"jail_dir,omitempty"`
+
+	// Computer is the name of the persistent computer this machine is a running
+	// instance of, empty for an anonymous machine. It links the two so a computer
+	// can be found by its running machine and vice versa.
+	Computer string `json:"computer,omitempty"`
 }
 
 // Store is the daemon's machine registry.
