@@ -46,6 +46,8 @@ func main() {
 		err = cmdList(args[1:])
 	case "exec":
 		err = cmdExec(args[1:])
+	case "shell":
+		err = cmdShell(args[1:])
 	case "rm":
 		err = cmdRm(args[1:])
 	case "snapshot":
@@ -86,6 +88,7 @@ managed — talk to ephemerad, machines outlive the command:
   create     boot a machine and leave it running
   ls         list running machines
   exec       run a command in an existing machine
+  shell      open an interactive terminal in a machine
   rm         destroy a machine
   snapshot   freeze a running machine to disk (machine keeps running)
   snapshots  list snapshots
@@ -430,6 +433,58 @@ func cmdExec(argv []string) error {
 		return guestExit{code: code}
 	}
 	return nil
+}
+
+func cmdShell(argv []string) error {
+	fs := flag.NewFlagSet("shell", flag.ExitOnError)
+	addr := daemonAddr(fs)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: eph shell [flags] <machine-id>\n\n"+
+			"Opens an interactive terminal inside a machine — a real shell with line\n"+
+			"editing and full-screen programs. Ctrl-D or 'exit' to leave.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return fmt.Errorf("need exactly one machine id")
+	}
+
+	if !isTerminal(os.Stdin) {
+		return fmt.Errorf("eph shell needs an interactive terminal")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	getCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	m, err := client.New(*addr).Get(getCtx, fs.Arg(0))
+	cancel()
+	if err != nil {
+		return err
+	}
+	if m.VsockPath == "" {
+		return fmt.Errorf("machine %s has no reachable agent socket", m.ID)
+	}
+
+	// Raw mode: the local terminal must stop interpreting keystrokes so they pass
+	// through untouched to the guest's pty, which does the echoing and editing.
+	rows, cols := termSize(os.Stdout)
+	old, err := makeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return fmt.Errorf("set terminal to raw mode: %w", err)
+	}
+	defer restoreTerm(int(os.Stdin.Fd()), old)
+
+	fmt.Fprintf(os.Stderr, "eph: connected to %s (Ctrl-D or 'exit' to leave)\r\n", m.ID)
+	err = agent.Shell(ctx, m.VsockPath, agent.ExecRequest{
+		Rows: rows, Cols: cols, Term: os.Getenv("TERM"),
+	}, os.Stdin, os.Stdout)
+	restoreTerm(int(os.Stdin.Fd()), old)
+	fmt.Fprintf(os.Stderr, "\neph: session ended\n")
+	return err
 }
 
 func cmdRm(argv []string) error {
