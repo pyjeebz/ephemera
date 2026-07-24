@@ -613,3 +613,40 @@ or match the executable name exactly (`pgrep -x ephemerad`), never a substring t
 
 **Phase 3 complete:** boot once, snapshot, and fork ready copies in ~20 ms or serve pre-forked ones in
 microseconds — all drivable from `eph`.
+
+---
+
+## Phase 4 — the reframe: ephemera is a computer
+
+**The pivot.** Phase 4 was going to be a host-side agent loop — ephemera calls Claude, Claude drives the
+VM. Building it clarified that it is the wrong shape. The goal is to *use ephemera like a laptop*: a fast,
+forkable, disposable-or-persistent **computer**, and one that is **agent-agnostic** — you run your own
+agent (Claude Code, aider, your own) *inside* the machine, the way an app runs on a laptop. So the
+host-side loop got deleted, and the work turned to making ephemera a real computer you can log into and
+use. The first thing that needs: an interactive shell.
+
+**Interactive shell — `eph shell <id>`.** A real terminal in a machine, not one-shot `exec`. The guest
+agent allocates a pseudo-terminal (`/dev/ptmx` → `/dev/pts/N`), runs a shell on it, and relays raw bytes
+over the same vsock the exec path uses; the host puts the local terminal into raw mode (hand-rolled
+termios) so keystrokes pass through untouched and the guest's pty does the echoing and line editing. Job
+control, Ctrl-C, `vi` — all work. A pty request turns the vsock connection into a raw byte stream instead
+of the JSON frame stream exec uses.
+
+**Gotcha — the overlay ate `/dev`.** The first pty attempt failed: `python3 -c "import pty"` →
+`out of pty devices`, and `/dev/ptmx` was missing. Cause: the read-only-base overlay from Phase 3
+`pivot_root`s into a new root, and the kernel's `devtmpfs` — mounted at `/dev` before init — stays behind
+on the *old* root. So the new `/dev` was just the base image's static stub (a couple of nodes), not the
+live device tree. Nothing had needed the difference until pty allocation did. Fix: remount `devtmpfs` on
+the new `/dev` in the guest's mount setup, which also brings back `/dev/kvm`, the disks, everything.
+**Lesson: `pivot_root` does not carry sub-mounts across; the new root's `/dev` (and `/proc`, `/sys`) is
+whatever the image baked in until you remount the real thing.**
+
+**Connecting for a shell.** A pty needs a full-duplex byte stream, which the HTTP control API does not
+carry well. So the machine response now exposes the machine's `vsock_path`, and `eph shell` — running on
+the same host as the daemon — connects **directly** to that socket for the raw relay. Local-first makes
+this clean: the socket is right there, owned by the same user.
+
+**Also:** added `python3` to the guest image, so a machine is something you can actually build on.
+
+**Next:** persistence — a computer you keep should keep its state. The overlay's writable upper becomes a
+mode: tmpfs (ephemeral) or a per-computer data disk (persistent), over the same shared read-only base.

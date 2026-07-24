@@ -95,11 +95,21 @@ Each phase is a vertical slice that boots to a working checkpoint.
             one and reforks a replacement in the background, so a request waits for a channel receive, not a
             VM. **Measured ~12 µs to serve** from a full pool (vs ~20 ms to fork, ~1 s to boot).
       _Checkpoint: fork a running VM in <100 ms ✅ (15–31 ms); warm pool serves instant machines ✅ (~12 µs)._
-- [ ] **Phase 4 — AI agent loop.** Anthropic-driven loop with exec/file tools, budgets, rate limits,
-      safety; exposed MCP-native.
-      _Checkpoint: "build a snake game" runs end-to-end in a sandbox._
+- [~] **Phase 4 — ephemera as a computer.** The reframe: ephemera is a fast, forkable, disposable-or-
+      persistent **computer you use like a laptop**, and it is **agent-agnostic** — you bring your own agent
+      (Claude Code, aider, your own) and run it *inside* the machine. Ephemera's job is to be a great
+      computer; the agent is just software on it.
+      - [x] **Interactive shell.** `eph shell <id>` opens a real terminal in a machine — a pty over vsock,
+            with job control and full-screen programs, not just one-shot `exec`. This is what makes it usable
+            as a computer rather than a place to fire commands.
+      - [ ] **Persistence.** A mode: the overlay's writable upper is either tmpfs (ephemeral, the default for
+            a throwaway or a fork) or a per-computer data disk (persistent, the default for a named computer
+            you keep). Same shared read-only base, so fork/snapshot are unaffected.
+      - [ ] **A computer's toolchain.** bash, git, curl, an editor — the basics a real box has; users install
+            the rest, including their agent.
+      _Checkpoint: `eph shell` into a machine, install and run an agent, snapshot it, fork the setup._
 - [ ] **Phase 5 — Web UI + live desktop.** VNC/RFB desktop, SvelteKit UI, live preview URLs.
-      _Checkpoint: a browser desktop you watch the agent use._
+      _Checkpoint: a browser desktop you watch an agent use._
 
 ## Host requirements (verified on this box)
 
