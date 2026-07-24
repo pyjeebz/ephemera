@@ -11,6 +11,12 @@ package agent
 // host connections to it over a single Unix socket.
 const Port = 1024
 
+// DesktopPort is a second guest vsock port the agent bridges to the in-guest VNC
+// server, so a graphical desktop streams out over the same private channel as
+// exec and the shell — no guest network, no open port. A box with no desktop has
+// nothing listening behind it, and the bridge simply drops the connection.
+const DesktopPort = 1025
+
 // ExecRequest asks the guest to run one command. It is sent as a single JSON
 // object, after which the host half-closes nothing and simply reads frames.
 //

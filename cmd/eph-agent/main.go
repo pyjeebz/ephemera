@@ -39,6 +39,15 @@ func main() {
 	}
 	fmt.Printf("eph-agent: listening on vsock port %d\n", agent.Port)
 
+	// A second port bridges to the guest's VNC server for desktop boxes. It is
+	// harmless on a box without a desktop — nothing is listening behind it — so it
+	// is always offered, and a failure to bind it is not fatal to the agent.
+	if dfd, err := listen(agent.DesktopPort); err == nil {
+		go bridgeDesktop(dfd)
+	} else {
+		fmt.Printf("eph-agent: desktop bridge unavailable: %v\n", err)
+	}
+
 	for {
 		// SOCK_CLOEXEC keeps the connection out of the commands we exec, so a
 		// long-lived child cannot hold the stream open after we close it.
