@@ -100,7 +100,7 @@ usage: ephemera <verb> [args]
   rm <box>      delete a box
   snapshot <box>  freeze a box to disk
   fork <snap>   clone a box from a snapshot, in milliseconds
-  desktop <box> bridge a box's graphical desktop to a local VNC port
+  desktop <box> open a box's graphical desktop in your browser (--raw for VNC)
 
   new --desktop   a throwaway box with a graphical desktop
   run […] <cmd>   throwaway box: boot, run one command, destroy
