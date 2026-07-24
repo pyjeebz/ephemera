@@ -58,14 +58,15 @@ type Config struct {
 
 // Server implements the control plane.
 type Server struct {
-	cfg   Config
-	store *store.Store
-	snaps *store.SnapshotStore
-	log   *slog.Logger
+	cfg       Config
+	store     *store.Store
+	snaps     *store.SnapshotStore
+	computers *store.ComputerStore
+	log       *slog.Logger
 }
 
-// New returns a server backed by the machine and snapshot stores.
-func New(cfg Config, st *store.Store, snaps *store.SnapshotStore, log *slog.Logger) *Server {
+// New returns a server backed by the machine, snapshot, and computer stores.
+func New(cfg Config, st *store.Store, snaps *store.SnapshotStore, computers *store.ComputerStore, log *slog.Logger) *Server {
 	if cfg.VCPUs == 0 {
 		cfg.VCPUs = machine.DefaultVCPUs
 	}
@@ -75,7 +76,7 @@ func New(cfg Config, st *store.Store, snaps *store.SnapshotStore, log *slog.Logg
 	if cfg.BootTimeout == 0 {
 		cfg.BootTimeout = 30 * time.Second
 	}
-	return &Server{cfg: cfg, store: st, snaps: snaps, log: log}
+	return &Server{cfg: cfg, store: st, snaps: snaps, computers: computers, log: log}
 }
 
 // Handler returns the routed control plane.
@@ -91,6 +92,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/snapshots", s.listSnapshots)
 	mux.HandleFunc("DELETE /v1/snapshots/{id}", s.deleteSnapshot)
 	mux.HandleFunc("POST /v1/snapshots/{id}/fork", s.fork)
+	mux.HandleFunc("POST /v1/computers", s.createComputer)
+	mux.HandleFunc("GET /v1/computers", s.listComputers)
+	mux.HandleFunc("GET /v1/computers/{name}", s.getComputer)
+	mux.HandleFunc("POST /v1/computers/{name}/start", s.startComputer)
+	mux.HandleFunc("POST /v1/computers/{name}/stop", s.stopComputer)
+	mux.HandleFunc("DELETE /v1/computers/{name}", s.deleteComputer)
 	return s.logRequests(mux)
 }
 
@@ -178,15 +185,28 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.BootTimeout)
 	defer cancel()
 
-	m, err := machine.Boot(ctx, cfg)
+	rec, err := s.bootAndTrack(ctx, cfg, "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	s.log.Info("machine created", "id", rec.ID, "pid", rec.PID, "vcpus", rec.VCPUs,
+		"mem_mib", rec.MemMiB, "guest_ip", rec.GuestIP)
+	writeJSON(w, http.StatusCreated, toResponse(rec))
+}
+
+// bootAndTrack boots a machine, waits for its agent, records it (linking it to a
+// computer when computer is non-empty), and returns the record. On any failure
+// it leaves nothing running.
+func (s *Server) bootAndTrack(ctx context.Context, cfg machine.Config, computer string) (store.Record, error) {
+	m, err := machine.Boot(ctx, cfg)
+	if err != nil {
+		return store.Record{}, err
+	}
 	if err := m.WaitAgent(ctx); err != nil {
 		_ = m.Destroy(context.Background())
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return store.Record{}, err
 	}
 
 	rec := store.Record{
@@ -197,6 +217,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		VCPUs:     cfg.VCPUs,
 		MemMiB:    cfg.MemMiB,
 		StartedAt: m.StartedAt,
+		Computer:  computer,
 	}
 	if lease, ok := m.Lease(); ok {
 		rec.Tap, rec.GuestIP = lease.Tap, lease.Guest.String()
@@ -207,13 +228,26 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.Add(m, rec); err != nil {
 		_ = m.Destroy(context.Background())
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return store.Record{}, err
 	}
+	return rec, nil
+}
 
-	s.log.Info("machine created", "id", m.ID, "pid", m.Pid(), "vcpus", cfg.VCPUs,
-		"mem_mib", cfg.MemMiB, "guest_ip", rec.GuestIP)
-	writeJSON(w, http.StatusCreated, toResponse(rec))
+// machineConfig returns the daemon's base machine config, before per-request
+// tweaks like network, resources, or a persist disk.
+func (s *Server) machineConfig() machine.Config {
+	return machine.Config{
+		KernelPath: s.cfg.KernelPath,
+		RootfsPath: s.cfg.RootfsPath,
+		RunDir:     s.cfg.RunDir,
+		VCPUs:      s.cfg.VCPUs,
+		MemMiB:     s.cfg.MemMiB,
+		Init:       machine.AgentInit,
+		DNS:        s.cfg.DNS,
+		Cgroup:     s.cfg.Cgroup,
+		Jail:       s.cfg.Jail,
+		JailHelper: s.cfg.JailHelper,
+	}
 }
 
 func (s *Server) list(w http.ResponseWriter, _ *http.Request) {

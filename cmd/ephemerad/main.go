@@ -109,6 +109,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Computers — named, persistent machines — outlive the daemon too.
+	computers, err := store.OpenComputers(filepath.Join(*runDir, "computers"))
+	if err != nil {
+		return err
+	}
 
 	// Anything still running from a previous daemon is unowned: this process
 	// cannot wait on a VMM it did not spawn, so orphans are destroyed, not
@@ -144,7 +149,7 @@ func run() error {
 		Cgroup:     caps,
 		Jail:       *jailed,
 		JailHelper: jailHelper,
-	}, st, snaps, log)
+	}, st, snaps, computers, log)
 
 	ln, err := listen(*addr)
 	if err != nil {
