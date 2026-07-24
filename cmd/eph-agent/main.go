@@ -90,16 +90,32 @@ func serve(fd int) {
 		}
 	}()
 
+	dec := json.NewDecoder(f)
 	var req agent.ExecRequest
-	if err := json.NewDecoder(f).Decode(&req); err != nil {
+	if err := dec.Decode(&req); err != nil {
 		w.send(agent.Frame{Kind: agent.FrameError, Error: "decode request: " + err.Error()})
 		return
 	}
+
+	// An interactive session speaks raw bytes, not frames, so it takes over the
+	// connection entirely and the frame writer above is not used for it. The
+	// decoder may have read past the request into the first keystrokes, so the
+	// raw relay starts from its leftover buffer before reading the socket — the
+	// same care the vsock handshake needs, for the same reason.
+	if req.PTY {
+		in := io.MultiReader(dec.Buffered(), f)
+		if err := runPTY(req, in, f); err != nil {
+			// The stream is raw; there is no frame to report an error in, so the
+			// best we can do is write a line the terminal will show.
+			fmt.Fprintf(f, "\r\neph-agent: %v\r\n", err)
+		}
+		return
+	}
+
 	if len(req.Cmd) == 0 {
 		w.send(agent.Frame{Kind: agent.FrameError, Error: "empty command"})
 		return
 	}
-
 	if err := run(req, w); err != nil {
 		w.send(agent.Frame{Kind: agent.FrameError, Error: err.Error()})
 	}

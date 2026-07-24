@@ -17,10 +17,20 @@ const Port = 1024
 // Cmd is passed to execve directly rather than through a shell, so callers that
 // want shell semantics ask for them explicitly: ["sh", "-c", "..."]. That keeps
 // quoting bugs from silently becoming command injection.
+//
+// When PTY is set the request is an interactive session instead: the guest runs
+// Cmd (or a login shell when Cmd is empty) attached to a pseudo-terminal, and
+// the connection becomes a raw, bidirectional byte stream — the host's keystrokes
+// in, the terminal's output back — with no frames at all. Rows, Cols, and Term
+// give the terminal its initial size and type.
 type ExecRequest struct {
-	Cmd []string `json:"cmd"`
-	Env []string `json:"env,omitempty"`
-	Cwd string   `json:"cwd,omitempty"`
+	Cmd  []string `json:"cmd,omitempty"`
+	Env  []string `json:"env,omitempty"`
+	Cwd  string   `json:"cwd,omitempty"`
+	PTY  bool     `json:"pty,omitempty"`
+	Rows uint16   `json:"rows,omitempty"`
+	Cols uint16   `json:"cols,omitempty"`
+	Term string   `json:"term,omitempty"`
 }
 
 // Frame is one message in the response stream. The stream is a sequence of JSON

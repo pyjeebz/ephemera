@@ -78,6 +78,52 @@ func Exec(ctx context.Context, udsPath string, req ExecRequest, stdout, stderr i
 	}
 }
 
+// Shell opens an interactive session in the guest and relays raw bytes between
+// the local terminal (in and out) and a shell running on a pseudo-terminal
+// inside the machine. It returns when the shell exits or the connection drops.
+//
+// The caller is responsible for putting the local terminal into raw mode and
+// restoring it; this function only moves bytes.
+func Shell(ctx context.Context, udsPath string, req ExecRequest, in io.Reader, out io.Writer) error {
+	req.PTY = true
+	conn, err := vsock.Dial(udsPath, Port, DialTimeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Cancellation closes the connection, which ends both relays.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
+
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return fmt.Errorf("agent: send shell request: %w", err)
+	}
+
+	// Local keystrokes to the guest, in the background. This copy blocks reading
+	// the local input and only unblocks when the process exits, which is fine for
+	// a foreground command like `eph shell`; the important direction is the other
+	// one, which returns cleanly when the shell ends.
+	go func() { _, _ = io.Copy(conn, in) }()
+
+	// Guest output to the local terminal, in the foreground. Returns when the
+	// shell exits (the guest closes the connection).
+	if _, err := io.Copy(out, conn); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("agent: shell session: %w", err)
+	}
+	return nil
+}
+
 // WaitReady blocks until the guest agent accepts a connection.
 //
 // The VMM's socket exists from the moment vsock is configured, so connecting is
