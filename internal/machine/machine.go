@@ -49,12 +49,16 @@ const (
 	// guestHostname is set by the kernel from the ip= parameter, before init.
 	guestHostname = "ephemera"
 
-	// overlayInit is the guest's real PID 1. It makes the root a RAM-backed
-	// overlay over the read-only disk, then execs the init named in eph.init=.
-	// Every machine boots through it, which is what keeps the disk image
-	// read-only and shareable — the fix for both fork's per-copy disk and the
-	// corruption two machines would cause sharing one writable image.
+	// overlayInit is the guest's real PID 1. It makes the root a writable overlay
+	// over the read-only disk, then execs the init named in eph.init=. Every
+	// machine boots through it, which is what keeps the disk image read-only and
+	// shareable — the fix for both fork's per-copy disk and the corruption two
+	// machines would cause sharing one writable image.
 	overlayInit = "/sbin/eph-overlay-init"
+
+	// persistDevice is where a persist disk appears in the guest: the second
+	// drive, so /dev/vdb. The overlay init is told this via eph.persist=.
+	persistDevice = "/dev/vdb"
 )
 
 // DefaultDNS is the resolver a networked guest is pointed at. It is handed over
@@ -102,6 +106,14 @@ type Config struct {
 	// binary that does the entering; both must be set together.
 	Jail       bool
 	JailHelper string
+
+	// PersistDisk, when set, is a writable ext4 image attached as a second drive
+	// (/dev/vdb) and used by the guest as the overlay's writable upper layer, so
+	// the machine's changes survive across stops and starts. Empty means the
+	// upper is tmpfs and the machine is ephemeral. The image outlives the machine
+	// and is never placed inside the jail, so a jailed machine's teardown cannot
+	// take it with it.
+	PersistDisk string
 }
 
 func (c *Config) applyDefaults() {
@@ -271,6 +283,7 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 	vsockPath := filepath.Join(cfg.RunDir, id+".vsock")
 	vsockForVMM := vsockPath
 	kernelPath, rootfsPath := cfg.KernelPath, cfg.RootfsPath
+	persistForVMM := cfg.PersistDisk
 	var cleanup []string
 
 	if cfg.Jail {
@@ -288,6 +301,7 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 			Binary:    fcBin,
 			Kernel:    cfg.KernelPath,
 			Rootfs:    cfg.RootfsPath,
+			Persist:   cfg.PersistDisk,
 			Network:   m.hasLease,
 			APISock:   "run/firecracker.sock",
 			VsockSock: "run/vsock.sock",
@@ -298,6 +312,9 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 		kernelPath, rootfsPath = jail.GuestKernel, jail.GuestRootfs
 		vsockForVMM = spec.GuestVsock()
 		vsockPath = spec.HostVsockSock()
+		if cfg.PersistDisk != "" {
+			persistForVMM = jail.GuestPersist
+		}
 	} else {
 		// The VMM creates this socket itself and refuses to start if one is
 		// already there, so clear any remnant of a machine that did not shut down
@@ -340,7 +357,7 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 	c := vmm.Client()
 	if err := c.SetBootSource(ctx, firecracker.BootSource{
 		KernelImagePath: kernelPath,
-		BootArgs:        BootArgs(cfg.Init, m.netArgs()),
+		BootArgs:        BootArgs(cfg.Init, m.netArgs(), cfg.PersistDisk != ""),
 	}); err != nil {
 		return fail(err)
 	}
@@ -348,12 +365,24 @@ func Boot(ctx context.Context, cfg Config) (*Machine, error) {
 		DriveID:      "rootfs",
 		PathOnHost:   rootfsPath,
 		IsRootDevice: true,
-		// Read-only on purpose: the guest overlays a RAM upper over it, so it
+		// Read-only on purpose: the guest overlays a writable upper over it, so it
 		// never needs to write the disk — and a read-only image is one many
 		// machines and forks can share without treading on each other.
 		IsReadOnly: true,
 	}); err != nil {
 		return fail(err)
+	}
+	// A persist disk is the machine's second drive (/dev/vdb), writable, and is
+	// what the guest overlays its changes onto so they survive a stop.
+	if cfg.PersistDisk != "" {
+		if err := c.SetDrive(ctx, firecracker.Drive{
+			DriveID:      "persist",
+			PathOnHost:   persistForVMM,
+			IsRootDevice: false,
+			IsReadOnly:   false,
+		}); err != nil {
+			return fail(err)
+		}
 	}
 	if err := c.SetMachineConfig(ctx, firecracker.MachineConfig{
 		VcpuCount:  cfg.VCPUs,
@@ -418,12 +447,16 @@ type NetArgs struct {
 //	pci=off           Firecracker exposes no PCI bus; skip probing for one
 //
 // The kernel boots into the overlay init, and the requested init rides along as
-// eph.init= for the overlay init to exec once the RAM root is in place. A
-// networked machine also gets ip=, handled below.
-func BootArgs(init string, net *NetArgs) string {
+// eph.init= for the overlay init to exec once the root is in place. persist adds
+// eph.persist=, telling the overlay init to keep the writable upper on a disk
+// rather than in RAM. A networked machine also gets ip=, handled below.
+func BootArgs(init string, net *NetArgs, persist bool) string {
 	args := []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off"}
 	if init != "" {
 		args = append(args, "init="+overlayInit, "eph.init="+init)
+		if persist {
+			args = append(args, "eph.persist="+persistDevice)
+		}
 	}
 	if net != nil {
 		args = append(args, net.ipArg())

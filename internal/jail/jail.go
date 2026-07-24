@@ -55,6 +55,7 @@ type Spec struct {
 	Binary  string // firecracker binary on the host, bound in as /firecracker
 	Kernel  string // host kernel path, bound in as /vmlinux; empty on a restore
 	Rootfs  string // host rootfs path, bound in as /rootfs.ext4
+	Persist string // host persist-disk path, bound writable as /persist.ext4; empty for none
 	Network bool   // bind /dev/net/tun so the VMM can open its interface
 
 	// SnapState and SnapMem, when set, bind a snapshot's state and memory files
@@ -76,6 +77,7 @@ const (
 	GuestBinary    = "/firecracker"
 	GuestKernel    = "/vmlinux"
 	GuestRootfs    = "/rootfs.ext4"
+	GuestPersist   = "/persist.ext4"
 	GuestSnapState = "/snapshot.state"
 	GuestSnapMem   = "/snapshot.mem"
 	guestRunDir    = "run"
@@ -150,6 +152,11 @@ func (s Spec) mounts() []mount {
 	// after the pivot and is cleaned up with the jail), and leaves this empty.
 	if s.Rootfs != "" {
 		m = append(m, mount{source: s.Rootfs, target: GuestRootfs[1:], dev: true})
+	}
+	// The persist disk is bound writable and — unlike a fork's disk — from a path
+	// outside the jail directory, so it survives the jail's teardown.
+	if s.Persist != "" {
+		m = append(m, mount{source: s.Persist, target: GuestPersist[1:], dev: true})
 	}
 	// The kernel is only needed to boot. A restore rebuilds the guest from a
 	// memory image that already holds a running kernel, so there is nothing to
@@ -288,6 +295,9 @@ func (s Spec) HelperArgs() []string {
 		"-rootfs", s.Rootfs,
 		"-api-sock", s.APISock,
 		"-vsock-sock", s.VsockSock,
+	}
+	if s.Persist != "" {
+		args = append(args, "-persist", s.Persist)
 	}
 	if s.SnapState != "" {
 		args = append(args, "-snap-state", s.SnapState, "-snap-mem", s.SnapMem)

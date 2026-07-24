@@ -11,7 +11,7 @@ import (
 )
 
 func TestBootArgsCarryTheFlagsFirecrackerNeeds(t *testing.T) {
-	got := BootArgs("/sbin/eph-agent-init", nil)
+	got := BootArgs("/sbin/eph-agent-init", nil, false)
 
 	// reboot=k is load-bearing: it routes guest resets through the i8042
 	// controller, which is what makes Firecracker exit when the guest reboots.
@@ -32,15 +32,25 @@ func TestBootArgsCarryTheFlagsFirecrackerNeeds(t *testing.T) {
 }
 
 func TestBootArgsOmitInitWhenEmpty(t *testing.T) {
-	if got := BootArgs("", nil); strings.Contains(got, "init=") {
+	if got := BootArgs("", nil, false); strings.Contains(got, "init=") {
 		t.Errorf("boot args %q should not set init when none was asked for", got)
+	}
+}
+
+func TestBootArgsCarryPersistOnlyWhenAsked(t *testing.T) {
+	if got := BootArgs(AgentInit, nil, false); strings.Contains(got, "eph.persist") {
+		t.Errorf("boot args %q set persistence for an ephemeral machine", got)
+	}
+	got := BootArgs(AgentInit, nil, true)
+	if !strings.Contains(got, "eph.persist=/dev/vdb") {
+		t.Errorf("boot args %q do not point the overlay at the persist disk", got)
 	}
 }
 
 // A machine with no link must not be told about one. This is the default and
 // the strongest isolation the project offers, so it gets a test of its own.
 func TestBootArgsHaveNoNetworkByDefault(t *testing.T) {
-	if got := BootArgs(AgentInit, nil); strings.Contains(got, "ip=") {
+	if got := BootArgs(AgentInit, nil, false); strings.Contains(got, "ip=") {
 		t.Errorf("boot args %q configured a network for a machine that has none", got)
 	}
 }
@@ -55,7 +65,7 @@ func TestBootArgsConfigureTheGuestAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := BootArgs(AgentInit, &NetArgs{Lease: lease, DNS: netip.MustParseAddr("9.9.9.9")})
+	got := BootArgs(AgentInit, &NetArgs{Lease: lease, DNS: netip.MustParseAddr("9.9.9.9")}, false)
 
 	// The kernel parses this positionally and silently ignores a malformed
 	// value, leaving a guest with no address and no clue why — so pin the
