@@ -682,3 +682,52 @@ yet written down.**
 **Verified:** a computer with a config file and a project survived stop/start intact, on a new machine and
 a fresh kernel reading the same disk; an ephemeral machine was confirmed to run on a tmpfs overlay that
 does not persist.
+
+---
+
+## Phase 4 — the finishing touches: a toolchain, a resizable terminal, and box verbs
+
+Three smaller pieces to make ephemera feel like a computer rather than a demo.
+
+**A toolchain.** A box you can't build on isn't a computer, it's a screensaver. The guest image now ships
+the basics a real box has — bash (and it's the default shell now), coreutils, git, curl, vim, less, ssh,
+ca-certificates, python3. Everything else, including your agent, you install yourself. That's the whole
+point of agent-agnostic: ephemera hands you a machine and a package manager, not opinions.
+
+**A terminal that resizes.** `eph ssh` gave you a real pty, but drag the window wider and vim stayed
+convinced it was 80×24 — the guest never heard that the terminal changed size. The fix was to stop treating
+the connection as a plain byte pipe and give it *frames*: a one-byte kind, then a payload. Kind `0` is
+terminal data, kind `1` is a resize (rows, cols). The host catches `SIGWINCH`, sends a resize frame, and
+the guest calls `TIOCSWINSZ` on the pty. Full-screen programs reflow.
+
+One properly stupid bug on the way there. The session opens by sending the request as JSON, then the two
+sides start framing. I wrote the request with a `json.Encoder` — which helpfully appends a `\n`. The guest
+read that trailing newline as the *next frame's kind byte*: `0x0A`, an unknown frame kind, and the session
+wedged. The framing was fine; the encoder's good manners weren't. `json.Marshal` and write the bytes
+myself, no newline. **Lesson: when you hand-roll a wire protocol, a convenience that appends a byte you
+didn't ask for is not a convenience.**
+
+**Box verbs.** The CLI had grown a `computer` sub-noun (`eph computer create`, `eph computer start`…) and
+it read like filling out a form. A computer should have a short, physical vocabulary. So the CLI is now
+`ephemera`, with `eph` as a symlink alias, and the verbs are single words on a **box**:
+
+```console
+$ eph new dev          # a box named dev — kept
+$ eph new              # a throwaway box
+$ eph ssh dev          # a terminal in it
+$ eph scp ./x dev:/root/x
+$ eph fork snap        # a clone from a snapshot
+$ eph stop dev / start dev / rm dev
+$ eph list             # kept boxes and throwaways, together
+```
+
+`new` with a name makes a persistent computer; without one, a throwaway. `list` and `rm` stopped caring
+whether a thing is a named computer or an anonymous machine — you have *boxes*, some kept, some not.
+
+A word on the name. I wanted `box` as the command — it's the noun the whole UX leans on. But there's an
+existing `box` CLI (box.ascii.dev) and, more to the point, Box, Inc. owns the word as a trademark in
+software. So `box` stays the noun in the *language* — help text, docs, how you think about it — and
+`ephemera`/`eph` is what you type. `eph` is three characters; the ergonomics survive. **Lesson: a great
+command name you can't legally own is a liability, not a brand — keep it as vocabulary, not as the binary.**
+
+**Next:** Phase 5 — the desktop. A box you watch, in a browser, at 60fps.

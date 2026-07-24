@@ -1,19 +1,19 @@
 # Architecture
 
 ephemera is a control-plane daemon (`ephemerad`) that boots, isolates, and tears down Firecracker
-microVMs on a single Linux host, plus a CLI (`eph`) and — later — an MCP server and web UI. Everything
-runs locally; there are no cloud dependencies.
+microVMs — **boxes** — on a single Linux host, plus a CLI (`ephemera`, aliased `eph`) and — later — a web
+UI. Everything runs locally; there are no cloud dependencies. ephemera is **agent-agnostic**: it gives you
+the computer, and you run your own agent (Claude Code, aider, your own) *inside* a box.
 
 ## Components
 
 | Component      | What it is                                                              |
 | -------------- | ----------------------------------------------------------------------- |
-| `ephemerad`    | Long-running daemon. HTTP control API, owns VM lifecycle. Unprivileged. |
-| `eph`          | CLI client for the daemon (also drives a machine directly). Unprivileged. |
+| `ephemerad`    | Long-running daemon. HTTP control API, owns box lifecycle. Unprivileged. |
+| `ephemera`     | CLI client for the daemon (also drives a box directly); `eph` is its alias. Unprivileged. |
 | `eph-jail`     | Helper spawned per VMM: enters the namespaces, pivots, execs Firecracker. |
 | `eph-netadmin` | The one privileged binary — carries `CAP_NET_ADMIN`, creates/destroys TAPs. |
-| Guest agent    | Tiny in-VM process (over vsock) for exec / file / tty.                  |
-| MCP server     | Exposes the sandbox as MCP tools so Claude Code can drive it.           |
+| Guest agent    | Tiny in-box process (over vsock) for exec / file / tty.                 |
 | Web UI         | SvelteKit desktop-in-browser (VNC) — last phase.                       |
 
 ## Control API
@@ -108,10 +108,16 @@ Each phase is a vertical slice that boots to a working checkpoint.
             then parks it (disk kept); `start` boots a fresh machine on the same disk with state intact. Same
             shared read-only base, so fork/snapshot are unaffected. See
             [decision 0008](decisions/0008-persistent-computers.md).
-      - [ ] **A computer's toolchain.** bash, git, curl, an editor — the basics a real box has; users install
-            the rest, including their agent.
-      - [ ] **Live terminal resize** (SIGWINCH) for `eph shell`.
-      _Checkpoint: `eph shell` into a computer, install and run an agent, stop and start it with state intact._
+      - [x] **A computer's toolchain.** The guest image ships bash, coreutils, git, curl, vim, less, ssh, and
+            python3 — the basics a real box has; users install the rest, including their agent. Shell defaults
+            to bash.
+      - [x] **Live terminal resize.** The interactive session is a framed protocol (data vs resize), so
+            SIGWINCH on the host reaches the guest pty and full-screen programs reflow.
+      - [x] **Box verbs.** The CLI is `ephemera` (with `eph` a symlink alias): `new`, `list`, `ssh`, `scp`,
+            `exec`, `stop`, `start`, `rm`, `snapshot`, `fork` — single-word verbs over a "box". `new [name]`
+            makes a kept computer or a throwaway; `list`/`rm` unify both; `scp` copies files in and out.
+      _Checkpoint met: `eph new dev`, `eph ssh dev`, install and run your own agent, `eph stop`/`start` with
+      state intact._
 - [ ] **Phase 5 — Web UI + live desktop.** VNC/RFB desktop, SvelteKit UI, live preview URLs.
       _Checkpoint: a browser desktop you watch an agent use._
 
