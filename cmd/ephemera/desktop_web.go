@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+
+	"github.com/pyjeebz/ephemera/internal/wsutil"
 )
 
 // desktopHTML is the self-hosted RFB client: a single page that renders the
@@ -61,7 +63,7 @@ func runWebDesktop(ctx context.Context, vsockPath, label string, port int, open 
 // proxyDesktopWS upgrades to a WebSocket and pumps the RFB stream both ways
 // between the browser and the box's desktop vsock port.
 func proxyDesktopWS(w http.ResponseWriter, r *http.Request, vsockPath string) {
-	ws, err := upgradeWebSocket(w, r)
+	ws, err := wsutil.Upgrade(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -75,37 +77,7 @@ func proxyDesktopWS(w http.ResponseWriter, r *http.Request, vsockPath string) {
 	}
 	defer guest.Close()
 
-	done := make(chan struct{}, 2)
-	// guest -> browser: RFB bytes wrapped in binary WebSocket frames.
-	go func() {
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := guest.Read(buf)
-			if n > 0 {
-				if werr := ws.WriteBinary(buf[:n]); werr != nil {
-					break
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-		done <- struct{}{}
-	}()
-	// browser -> guest: each WebSocket message's payload, straight to the box.
-	go func() {
-		for {
-			msg, err := ws.ReadBinary()
-			if err != nil {
-				break
-			}
-			if _, err := guest.Write(msg); err != nil {
-				break
-			}
-		}
-		done <- struct{}{}
-	}()
-	<-done
+	wsutil.Proxy(ws, guest)
 }
 
 // openBrowser makes a best effort to open a URL in the user's browser. Failure is
