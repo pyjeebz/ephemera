@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ephemera desktop</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #14110f; color: #e8e2da;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 6px 12px;
+    background: #1d1916; border-bottom: 1px solid #2c2622; user-select: none; }
+  header .name { font-weight: 600; letter-spacing: .02em; }
+  header .status { color: #9b9086; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b625a; }
+  header .dot.up { background: #46a758; }
+  header .dot.err { background: #e5484d; }
+  #stage { flex: 1; display: grid; place-items: center; overflow: auto; padding: 12px; }
+  canvas { background: #000; image-rendering: pixelated; max-width: 100%; max-height: 100%;
+    box-shadow: 0 8px 40px rgba(0,0,0,.5); outline: none; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <span class="name" id="name">ephemera desktop</span>
+  <span class="status" id="status">connecting…</span>
+</header>
+<div id="stage"><canvas id="screen" tabindex="0" width="800" height="600"></canvas></div>
+<script>
+// A minimal RFB (VNC) client over WebSocket. It speaks just enough of the
+// protocol for a working desktop: no-auth handshake, a forced 32-bpp pixel
+// format so blitting to a canvas is a plain byte reorder, Raw and CopyRect
+// framebuffer updates, and pointer/keyboard input. The RFB stream arrives from
+// the box over vsock, proxied through this page's own origin at /ws.
+
+const $ = id => document.getElementById(id);
+const canvas = $('screen'), ctx = canvas.getContext('2d', { alpha: false });
+const setStatus = (t, cls) => { $('status').textContent = t; $('dot').className = 'dot' + (cls ? ' ' + cls : ''); };
+
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+ws.binaryType = 'arraybuffer';
+
+// --- an async byte reader over incoming WebSocket chunks -------------------
+let inbuf = new Uint8Array(0);
+let waiter = null; // { n, resolve }
+function feed(chunk) {
+  const merged = new Uint8Array(inbuf.length + chunk.length);
+  merged.set(inbuf); merged.set(chunk, inbuf.length);
+  inbuf = merged;
+  if (waiter && inbuf.length >= waiter.n) {
+    const { n, resolve } = waiter; waiter = null;
+    const out = inbuf.slice(0, n); inbuf = inbuf.slice(n); resolve(out);
+  }
+}
+function readExactly(n) {
+  if (inbuf.length >= n) { const out = inbuf.slice(0, n); inbuf = inbuf.slice(n); return Promise.resolve(out); }
+  return new Promise(resolve => { waiter = { n, resolve }; });
+}
+const u16 = b => (b[0] << 8) | b[1];
+const u32 = b => ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+
+// --- outbound helpers ------------------------------------------------------
+function send(bytes) { if (ws.readyState === 1) ws.send(bytes); }
+function requestUpdate(incremental) {
+  const m = new Uint8Array(10), dv = new DataView(m.buffer);
+  m[0] = 3; m[1] = incremental ? 1 : 0;
+  dv.setUint16(2, 0); dv.setUint16(4, 0);
+  dv.setUint16(6, canvas.width); dv.setUint16(8, canvas.height);
+  send(m);
+}
+
+// --- the protocol driver ---------------------------------------------------
+async function run() {
+  // ProtocolVersion: read the server's, answer 3.8.
+  await readExactly(12);
+  send(new TextEncoder().encode('RFB 003.008\n'));
+
+  // Security: pick "None" (1) if offered.
+  const count = (await readExactly(1))[0];
+  if (count === 0) { const rl = u32(await readExactly(4)); const r = await readExactly(rl); throw new Error('rejected: ' + new TextDecoder().decode(r)); }
+  const types = await readExactly(count);
+  if (![...types].includes(1)) throw new Error('server requires authentication (unsupported)');
+  send(new Uint8Array([1]));
+  if (u32(await readExactly(4)) !== 0) throw new Error('security handshake failed');
+
+  // ClientInit (shared) -> ServerInit.
+  send(new Uint8Array([1]));
+  const si = await readExactly(24);
+  const w = u16(si.subarray(0, 2)), h = u16(si.subarray(2, 4));
+  const nameLen = u32(si.subarray(20, 24));
+  const name = new TextDecoder().decode(await readExactly(nameLen));
+  canvas.width = w; canvas.height = h;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+  $('name').textContent = name || 'ephemera desktop';
+  setStatus(w + '×' + h, 'up');
+
+  // Force a known 32-bpp true-colour format: little-endian, R<<16 G<<8 B<<0, so
+  // each pixel arrives as bytes [B, G, R, x] and the canvas mapping is trivial.
+  const pf = new Uint8Array([
+    0, 0, 0, 0,          // SetPixelFormat, 3 pad
+    32, 24, 0, 1,        // bpp, depth, big-endian=0, true-colour=1
+    0, 255, 0, 255, 0, 255, // red-max, green-max, blue-max (u16 each)
+    16, 8, 0,            // red-shift, green-shift, blue-shift
+    0, 0, 0,             // pad
+  ]);
+  send(pf);
+
+  // Encodings we understand: Raw (0) and CopyRect (1).
+  const enc = new Uint8Array(4 + 2 * 4), edv = new DataView(enc.buffer);
+  enc[0] = 2; edv.setUint16(2, 2); edv.setInt32(4, 0); edv.setInt32(8, 1);
+  send(enc);
+
+  requestUpdate(false); // first frame: the whole screen
+  canvas.focus();
+
+  // Message loop.
+  while (true) {
+    const type = (await readExactly(1))[0];
+    if (type === 0) await framebufferUpdate();
+    else if (type === 1) await readColourMap();
+    else if (type === 2) { /* bell */ }
+    else if (type === 3) await readCutText();
+    else throw new Error('unknown server message ' + type);
+  }
+}
+
+async function framebufferUpdate() {
+  await readExactly(1); // pad
+  const nrects = u16(await readExactly(2));
+  for (let i = 0; i < nrects; i++) {
+    const r = await readExactly(12), dv = new DataView(r.buffer, r.byteOffset, r.byteLength);
+    const x = dv.getUint16(0), y = dv.getUint16(2), w = dv.getUint16(4), h = dv.getUint16(6);
+    const encoding = dv.getInt32(8);
+    if (encoding === 0) {          // Raw: w*h pixels, 4 bytes each
+      if (w === 0 || h === 0) continue;
+      const px = await readExactly(w * h * 4);
+      const img = ctx.createImageData(w, h), o = img.data;
+      for (let p = 0; p < w * h; p++) {
+        o[p * 4]     = px[p * 4 + 2]; // R
+        o[p * 4 + 1] = px[p * 4 + 1]; // G
+        o[p * 4 + 2] = px[p * 4];     // B
+        o[p * 4 + 3] = 255;
+      }
+      ctx.putImageData(img, x, y);
+    } else if (encoding === 1) {   // CopyRect: move a region already on screen
+      const s = await readExactly(4), sdv = new DataView(s.buffer, s.byteOffset, s.byteLength);
+      ctx.drawImage(canvas, sdv.getUint16(0), sdv.getUint16(2), w, h, x, y, w, h);
+    } else {
+      throw new Error('unsupported encoding ' + encoding);
+    }
+  }
+  requestUpdate(true); // keep updates flowing (incremental from here on)
+}
+
+async function readColourMap() { // we use true colour, so just consume it
+  const h = await readExactly(5), n = u16(h.subarray(3, 5));
+  await readExactly(n * 6);
+}
+async function readCutText() { const h = await readExactly(7); await readExactly(u32(h.subarray(3, 7))); }
+
+// --- input -----------------------------------------------------------------
+let buttons = 0;
+function pointer(e) {
+  const r = canvas.getBoundingClientRect();
+  const x = Math.max(0, Math.min(canvas.width - 1, Math.round((e.clientX - r.left) * canvas.width / r.width)));
+  const y = Math.max(0, Math.min(canvas.height - 1, Math.round((e.clientY - r.top) * canvas.height / r.height)));
+  const m = new Uint8Array(6), dv = new DataView(m.buffer);
+  m[0] = 5; m[1] = buttons; dv.setUint16(2, x); dv.setUint16(4, y);
+  send(m);
+}
+canvas.addEventListener('mousedown', e => { canvas.focus(); buttons |= 1 << e.button; pointer(e); e.preventDefault(); });
+canvas.addEventListener('mouseup', e => { buttons &= ~(1 << e.button); pointer(e); e.preventDefault(); });
+canvas.addEventListener('mousemove', e => { if (buttons || true) pointer(e); });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('wheel', e => {
+  const bit = e.deltaY < 0 ? 3 : 4; // buttons 4/5 are wheel up/down
+  buttons |= 1 << bit; pointer(e); buttons &= ~(1 << bit); pointer(e); e.preventDefault();
+}, { passive: false });
+
+// Keyboard -> X keysyms.
+const SPECIAL = {
+  Backspace: 0xff08, Tab: 0xff09, Enter: 0xff0d, Escape: 0xff1b, Delete: 0xffff,
+  Home: 0xff50, End: 0xff57, PageUp: 0xff55, PageDown: 0xff56, Insert: 0xff63,
+  ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54,
+  Shift: 0xffe1, Control: 0xffe3, Alt: 0xffe9, Meta: 0xffeb, CapsLock: 0xffe5,
+  F1: 0xffbe, F2: 0xffbf, F3: 0xffc0, F4: 0xffc1, F5: 0xffc2, F6: 0xffc3,
+  F7: 0xffc4, F8: 0xffc5, F9: 0xffc6, F10: 0xffc7, F11: 0xffc8, F12: 0xffc9,
+};
+function keysym(e) {
+  if (e.key in SPECIAL) return SPECIAL[e.key];
+  if (e.key.length === 1) { const c = e.key.codePointAt(0); return c < 0x100 ? c : 0x01000000 + c; }
+  return 0;
+}
+function key(e, down) {
+  const ks = keysym(e);
+  if (!ks) return;
+  const m = new Uint8Array(8), dv = new DataView(m.buffer);
+  m[0] = 4; m[1] = down ? 1 : 0; dv.setUint32(4, ks >>> 0);
+  send(m); e.preventDefault();
+}
+canvas.addEventListener('keydown', e => key(e, true));
+canvas.addEventListener('keyup', e => key(e, false));
+
+// --- lifecycle -------------------------------------------------------------
+ws.onmessage = ev => feed(new Uint8Array(ev.data));
+ws.onopen = () => run().catch(err => { setStatus(String(err.message || err), 'err'); ws.close(); });
+ws.onclose = () => setStatus('disconnected', 'err');
+ws.onerror = () => setStatus('connection error', 'err');
+</script>
+</body>
+</html>
