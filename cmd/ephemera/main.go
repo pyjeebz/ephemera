@@ -1,4 +1,4 @@
-// Command eph drives ephemera machines.
+// Command ephemera drives ephemera machines.
 //
 // Phase 1 talks to the machine package directly so the VM path can be exercised
 // before ephemerad exists; later it becomes a client of the daemon's API.
@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/agent"
-	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/cgroup"
 	"github.com/pyjeebz/ephemera/internal/client"
 	"github.com/pyjeebz/ephemera/internal/jail"
@@ -36,33 +35,39 @@ func main() {
 
 	var err error
 	switch args[0] {
-	case "boot":
-		err = cmdBoot(args[1:])
-	case "run":
-		err = cmdRun(args[1:])
-	case "create":
-		err = cmdCreate(args[1:])
-	case "ls":
+	case "new":
+		err = cmdNew(args[1:])
+	case "list", "ls":
 		err = cmdList(args[1:])
+	case "ssh", "shell":
+		err = cmdSSH(args[1:])
+	case "scp":
+		err = cmdSCP(args[1:])
 	case "exec":
 		err = cmdExec(args[1:])
-	case "shell":
-		err = cmdShell(args[1:])
-	case "rm":
-		err = cmdRm(args[1:])
+	case "run":
+		err = cmdRun(args[1:])
 	case "snapshot":
 		err = cmdSnapshot(args[1:])
 	case "snapshots":
 		err = cmdSnapshots(args[1:])
 	case "fork":
 		err = cmdFork(args[1:])
-	case "computer":
-		err = cmdComputer(args[1:])
+	case "stop":
+		err = cmdStop(args[1:])
+	case "start":
+		err = cmdStart(args[1:])
+	case "rm":
+		err = cmdRm(args[1:])
+	case "boot":
+		err = cmdBoot(args[1:])
+	case "desktop":
+		err = cmdDesktop(args[1:])
 	case "-h", "--help", "help":
 		usage()
 		return
 	default:
-		fmt.Fprintf(os.Stderr, "eph: unknown command %q\n\n", args[0])
+		fmt.Fprintf(os.Stderr, "ephemera: unknown command %q\n\n", args[0])
 		usage()
 		os.Exit(2)
 	}
@@ -74,30 +79,33 @@ func main() {
 		if ok := asGuestExit(err, &ge); ok {
 			os.Exit(ge.code)
 		}
-		fmt.Fprintln(os.Stderr, "eph:", err)
+		fmt.Fprintln(os.Stderr, "ephemera:", err)
 		os.Exit(1)
 	}
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `usage: eph <command> [flags]
+	fmt.Fprint(os.Stderr, `ephemera — spin up boxes: fast, isolated Linux machines you use like a laptop.
+(aliased as "eph" — same command, fewer keystrokes.)
 
-standalone — drive a machine directly, no daemon needed:
-  boot     boot a machine and stream its serial console
-  run      boot a machine, run one command inside it, then destroy it
+usage: ephemera <verb> [args]
 
-managed — talk to ephemerad, machines outlive the command:
-  create     boot a machine and leave it running
-  ls         list running machines
-  exec       run a command in an existing machine
-  shell      open an interactive terminal in a machine
-  rm         destroy a machine
-  snapshot   freeze a running machine to disk (machine keeps running)
-  snapshots  list snapshots
-  fork       start a new machine from a snapshot, in milliseconds
-  computer   manage named, persistent computers (create/ls/start/stop/rm)
+  new [name]    spin up a box; give it a name to keep it, omit for a throwaway
+  list          your boxes
+  ssh <box>     open a terminal in a box
+  scp <a> <b>   copy files in or out (box:path <-> local path)
+  exec <box> …  run one command in a box
+  stop <box>    stop a box, keeping its disk
+  start <box>   start a stopped box, state intact
+  rm <box>      delete a box
+  snapshot <box>  freeze a box to disk
+  fork <snap>   clone a box from a snapshot, in milliseconds
+  desktop <box> open the box's graphical desktop (coming soon)
 
-run "eph <command> -h" for flags
+  run […] <cmd>   throwaway box: boot, run one command, destroy
+  boot            boot a box and stream its console (dev)
+
+run "ephemera <verb> -h" for flags
 `)
 }
 
@@ -211,7 +219,7 @@ func cmdBoot(argv []string) error {
 	init := fs.String("init", machine.DefaultInit, "guest init; /sbin/eph-selftest runs a check and halts")
 	timeout := fs.Duration("timeout", 0, "destroy the machine after this long (0 = no limit)")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph boot [flags]\n\nBoots a machine and streams its console until it exits.\n\nflags:\n")
+		fmt.Fprintf(os.Stderr, "usage: ephemera boot [flags]\n\nBoots a machine and streams its console until it exits.\n\nflags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(argv); err != nil {
@@ -234,7 +242,7 @@ func cmdBoot(argv []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "eph: machine %s booted in %s\n", m.ID, since(started))
+	fmt.Fprintf(os.Stderr, "ephemera: machine %s booted in %s\n", m.ID, since(started))
 
 	var deadline <-chan time.Time
 	if *timeout > 0 {
@@ -247,7 +255,7 @@ func cmdBoot(argv []string) error {
 	case <-m.Done():
 		err = m.Wait()
 	case <-deadline:
-		fmt.Fprintf(os.Stderr, "eph: timeout reached, destroying %s\n", m.ID)
+		fmt.Fprintf(os.Stderr, "ephemera: timeout reached, destroying %s\n", m.ID)
 		err = destroy(m)
 	case <-ctx.Done():
 		fmt.Fprintf(os.Stderr, "\neph: interrupted, destroying %s\n", m.ID)
@@ -256,7 +264,7 @@ func cmdBoot(argv []string) error {
 	if err != nil {
 		return fmt.Errorf("machine %s: %w", m.ID, err)
 	}
-	fmt.Fprintf(os.Stderr, "eph: machine %s exited cleanly after %s\n", m.ID, m.Uptime().Round(time.Millisecond))
+	fmt.Fprintf(os.Stderr, "ephemera: machine %s exited cleanly after %s\n", m.ID, m.Uptime().Round(time.Millisecond))
 	return nil
 }
 
@@ -266,7 +274,7 @@ func cmdRun(argv []string) error {
 	bootTimeout := fs.Duration("boot-timeout", 30*time.Second, "how long to wait for the guest agent")
 	verbose := fs.Bool("v", false, "stream the guest's serial console to stderr")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph run [flags] <command> [args...]\n\n"+
+		fmt.Fprintf(os.Stderr, "usage: ephemera run [flags] <command> [args...]\n\n"+
 			"Boots a machine, runs one command inside it, and destroys it.\n"+
 			"Exits with the command's own status.\n\nflags:\n")
 		fs.PrintDefaults()
@@ -317,7 +325,7 @@ func cmdRun(argv []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "eph: machine %s ready in %s, command exited %d\n", m.ID, booted, code)
+	fmt.Fprintf(os.Stderr, "ephemera: machine %s ready in %s, command exited %d\n", m.ID, booted, code)
 	if code != 0 {
 		return guestExit{code: code}
 	}
@@ -336,37 +344,8 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func cmdCreate(argv []string) error {
-	fs := flag.NewFlagSet("create", flag.ExitOnError)
-	addr := daemonAddr(fs)
-	vcpus := fs.Int("cpus", 0, "vCPU count (0 = daemon default)")
-	mem := fs.Int("mem", 0, "memory in MiB (0 = daemon default)")
-	network := fs.Bool("net", false, "give the machine a network interface")
-	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph create [flags]\n\nBoots a machine and leaves it running. Prints its id.\n\nflags:\n")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(argv); err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	m, err := client.New(*addr).Create(ctx, api.CreateRequest{
-		VCPUs:   *vcpus,
-		MemMiB:  *mem,
-		Network: *network,
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Println(m.ID)
-	return nil
-}
-
 func cmdList(argv []string) error {
-	fs := flag.NewFlagSet("ls", flag.ExitOnError)
+	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	if err := fs.Parse(argv); err != nil {
 		return err
@@ -374,25 +353,50 @@ func cmdList(argv []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	cl := client.New(*addr)
 
-	machines, err := client.New(*addr).List(ctx)
+	computers, err := cl.ListComputers(ctx)
 	if err != nil {
 		return err
 	}
-	if len(machines) == 0 {
-		fmt.Fprintln(os.Stderr, "no machines running")
-		return nil
+	machines, err := cl.List(ctx)
+	if err != nil {
+		return err
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "ID\tPID\tCPUS\tMEM\tADDRESS\tUPTIME")
+	fmt.Fprintln(tw, "BOX\tKIND\tSTATE\tADDRESS\tAGE")
+	rows := 0
+
+	// Named computers — kept boxes — running or stopped.
+	for _, c := range computers {
+		state, addr := "stopped", "-"
+		if c.Running {
+			state = "running"
+			if c.GuestIP != "" {
+				addr = c.GuestIP
+			}
+		}
+		fmt.Fprintf(tw, "%s\tkept\t%s\t%s\t%s\n", c.Name, state, addr, time.Since(c.CreatedAt).Round(time.Second))
+		rows++
+	}
+	// Throwaway machines — those not backing a computer.
 	for _, m := range machines {
+		if m.Computer != "" {
+			continue
+		}
 		addr := m.GuestIP
 		if addr == "" {
 			addr = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%d MiB\t%s\t%s\n", m.ID, m.PID, m.VCPUs, m.MemMiB, addr,
+		fmt.Fprintf(tw, "%s\ttemp\trunning\t%s\t%s\n", m.ID, addr,
 			time.Duration(m.UptimeSec*float64(time.Second)).Round(time.Second))
+		rows++
+	}
+
+	if rows == 0 {
+		fmt.Fprintln(os.Stderr, "no boxes — 'ephemera new [name]' to spin one up")
+		return nil
 	}
 	return tw.Flush()
 }
@@ -401,7 +405,7 @@ func cmdExec(argv []string) error {
 	fs := flag.NewFlagSet("exec", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph exec [flags] <machine-id> <command> [args...]\n\n"+
+		fmt.Fprintf(os.Stderr, "usage: ephemera exec [flags] <machine-id> <command> [args...]\n\n"+
 			"Runs a command in an existing machine, exiting with the command's status.\n\nflags:\n")
 		fs.PrintDefaults()
 	}
@@ -438,11 +442,11 @@ func cmdExec(argv []string) error {
 	return nil
 }
 
-func cmdShell(argv []string) error {
+func cmdSSH(argv []string) error {
 	fs := flag.NewFlagSet("shell", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph shell [flags] <computer-name | machine-id>\n\n"+
+		fmt.Fprintf(os.Stderr, "usage: ephemera shell [flags] <computer-name | machine-id>\n\n"+
 			"Opens an interactive terminal inside a computer or machine — a real shell\n"+
 			"with line editing and full-screen programs. Ctrl-D or 'exit' to leave.\n\nflags:\n")
 		fs.PrintDefaults()
@@ -500,7 +504,7 @@ func cmdShell(argv []string) error {
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "eph: connected to %s (Ctrl-D or 'exit' to leave)\r\n", label)
+	fmt.Fprintf(os.Stderr, "ephemera: connected to %s (Ctrl-D or 'exit' to leave)\r\n", label)
 	err = agent.Shell(ctx, vsockPath, agent.ExecRequest{
 		Rows: rows, Cols: cols, Term: os.Getenv("TERM"),
 	}, os.Stdin, os.Stdout, resize)
@@ -519,7 +523,7 @@ func resolveShellTarget(ctx context.Context, cl *client.Client, target string) (
 
 	if c, cerr := cl.GetComputer(lookup, target); cerr == nil {
 		if !c.Running {
-			return "", "", fmt.Errorf("computer %q is stopped — 'eph computer start %s' first", target, target)
+			return "", "", fmt.Errorf("computer %q is stopped — 'ephemera computer start %s' first", target, target)
 		}
 		return c.VsockPath, "computer " + target, nil
 	}
@@ -535,7 +539,8 @@ func cmdRm(argv []string) error {
 	fs := flag.NewFlagSet("rm", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph rm [flags] <machine-id>...\n\nDestroys machines.\n\nflags:\n")
+		fmt.Fprintf(os.Stderr, "usage: ephemera rm [flags] <box>...\n\n"+
+			"Deletes boxes. A kept box's disk goes with it; a throwaway just stops.\n\nflags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(argv); err != nil {
@@ -543,24 +548,31 @@ func cmdRm(argv []string) error {
 	}
 	if fs.NArg() == 0 {
 		fs.Usage()
-		return fmt.Errorf("need at least one machine id")
+		return fmt.Errorf("need at least one box")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	c := client.New(*addr)
-	// Keep going after a failure so one bad id does not strand the rest.
+	cl := client.New(*addr)
+	// Keep going after a failure so one bad name does not strand the rest. Each
+	// target is tried as a computer first, then as a raw machine id.
 	var firstErr error
-	for _, id := range fs.Args() {
-		if err := c.Destroy(ctx, id); err != nil {
-			fmt.Fprintf(os.Stderr, "eph: %s: %v\n", id, err)
+	for _, box := range fs.Args() {
+		var err error
+		if _, gerr := cl.GetComputer(ctx, box); gerr == nil {
+			err = cl.DeleteComputer(ctx, box)
+		} else {
+			err = cl.Destroy(ctx, box)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ephemera: %s: %v\n", box, err)
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		fmt.Println(id)
+		fmt.Println(box)
 	}
 	return firstErr
 }
@@ -569,7 +581,7 @@ func cmdSnapshot(argv []string) error {
 	fs := flag.NewFlagSet("snapshot", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph snapshot [flags] <machine-id>\n\n"+
+		fmt.Fprintf(os.Stderr, "usage: ephemera snapshot [flags] <machine-id>\n\n"+
 			"Freezes a running machine to disk and prints the snapshot id. The\n"+
 			"machine keeps running. Fork the snapshot to start copies of it.\n\nflags:\n")
 		fs.PrintDefaults()
@@ -625,7 +637,7 @@ func cmdFork(argv []string) error {
 	fs := flag.NewFlagSet("fork", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: eph fork [flags] <snapshot-id>\n\n"+
+		fmt.Fprintf(os.Stderr, "usage: ephemera fork [flags] <snapshot-id>\n\n"+
 			"Starts a new machine from a snapshot and prints its id. The copy comes\n"+
 			"up ready in milliseconds — its agent was already running when the\n"+
 			"snapshot was taken.\n\nflags:\n")

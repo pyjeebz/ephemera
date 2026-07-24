@@ -201,12 +201,12 @@ fi
 echo
 echo ">> done. the daemon and CLI hold no capability; only eph-netadmin does."
 echo "   networking (opt-in per machine):"
-echo "     ./bin/eph run -net -- wget -qO- https://example.com     # reaches the internet"
-echo "     ./bin/eph run -net -- wget -qO- http://172.19.0.1       # blocked, by design"
+echo "     ./bin/ephemera run -net -- wget -qO- https://example.com     # reaches the internet"
+echo "     ./bin/ephemera run -net -- wget -qO- http://172.19.0.1       # blocked, by design"
 echo "     ./bin/ephemerad -network"
 echo "   isolation composes now — jailed AND networked AND capped:"
-echo "     ./bin/eph run -jail -net -- wget -qO- https://example.com"
+echo "     ./bin/ephemera run -jail -net -- wget -qO- https://example.com"
 echo "   resource caps (automatic once delegated — every machine, networked or not):"
-echo "     ./bin/eph run -- sh -c 'cat /sys/fs/cgroup/memory.max'  # capped, not 'max'"
+echo "     ./bin/ephemera run -- sh -c 'cat /sys/fs/cgroup/memory.max'  # capped, not 'max'"
 echo
 echo "   re-run this after every go build of eph-netadmin (file caps do not survive a rebuild)."

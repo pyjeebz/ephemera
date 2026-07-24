@@ -5,141 +5,64 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"text/tabwriter"
 	"time"
 
+	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/client"
 )
 
-// The `eph computer` family: named, persistent machines you keep around and use
-// like a laptop. Create makes and boots one; stop parks it (its disk survives);
-// start brings it back with its state; rm deletes it for good.
+// The box lifecycle verbs. A box is the unit you work with: give it a name and
+// it is a persistent computer that survives stop/start; leave it unnamed and it
+// is a throwaway that is gone when you remove it.
 
-func cmdComputer(argv []string) error {
-	if len(argv) == 0 {
-		computerUsage()
-		return fmt.Errorf("need a subcommand")
-	}
-	sub, rest := argv[0], argv[1:]
-	switch sub {
-	case "create":
-		return computerCreate(rest)
-	case "ls":
-		return computerList(rest)
-	case "start":
-		return computerStart(rest)
-	case "stop":
-		return computerStop(rest)
-	case "rm":
-		return computerRm(rest)
-	case "-h", "--help", "help":
-		computerUsage()
-		return nil
-	default:
-		computerUsage()
-		return fmt.Errorf("unknown computer subcommand %q", sub)
-	}
-}
-
-func computerUsage() {
-	fmt.Fprint(os.Stderr, `usage: eph computer <subcommand> [flags]
-
-  create <name>   make a persistent computer and start it
-  ls              list computers and whether they are running
-  start <name>    boot a stopped computer from its disk (state intact)
-  stop <name>     stop a computer, keeping its disk
-  rm <name>       delete a computer and its disk for good
-
-Then 'eph shell <name>' to use it.
-`)
-}
-
-func computerCreate(argv []string) error {
-	fs := flag.NewFlagSet("computer create", flag.ExitOnError)
+func cmdNew(argv []string) error {
+	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	addr := daemonAddr(fs)
+	net := fs.Bool("net", false, "give a throwaway box a network (named boxes get one when the daemon can)")
+	cpus := fs.Int("cpus", 0, "vCPUs for a throwaway box (0 = daemon default)")
+	mem := fs.Int("mem", 0, "memory in MiB for a throwaway box (0 = daemon default)")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: ephemera new [name] [flags]\n\n"+
+			"Spins up a box. Give it a name to keep it (a persistent computer you can\n"+
+			"stop and start with its state intact); omit the name for a throwaway.\n\nflags:\n")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(argv); err != nil {
 		return err
-	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: eph computer create <name>")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	cl := client.New(*addr)
 
-	c, err := client.New(*addr).CreateComputer(ctx, fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "eph: computer %q created and running — 'eph shell %s' to use it\n", c.Name, c.Name)
-	fmt.Println(c.Name)
-	return nil
-}
-
-func computerList(argv []string) error {
-	fs := flag.NewFlagSet("computer ls", flag.ExitOnError)
-	addr := daemonAddr(fs)
-	if err := fs.Parse(argv); err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	computers, err := client.New(*addr).ListComputers(ctx)
-	if err != nil {
-		return err
-	}
-	if len(computers) == 0 {
-		fmt.Fprintln(os.Stderr, "no computers — 'eph computer create <name>' to make one")
-		return nil
-	}
-
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tSTATE\tADDRESS\tAGE")
-	for _, c := range computers {
-		state := "stopped"
-		addr := "-"
-		if c.Running {
-			state = "running"
-			if c.GuestIP != "" {
-				addr = c.GuestIP
-			}
+	if fs.NArg() >= 1 {
+		name := fs.Arg(0)
+		c, err := cl.CreateComputer(ctx, name)
+		if err != nil {
+			return err
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", c.Name, state, addr, time.Since(c.CreatedAt).Round(time.Second))
-	}
-	return tw.Flush()
-}
-
-func computerStart(argv []string) error {
-	fs := flag.NewFlagSet("computer start", flag.ExitOnError)
-	addr := daemonAddr(fs)
-	if err := fs.Parse(argv); err != nil {
-		return err
-	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: eph computer start <name>")
+		fmt.Fprintf(os.Stderr, "ephemera: box %q is up — 'ephemera ssh %s' to use it\n", c.Name, c.Name)
+		fmt.Println(c.Name)
+		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	c, err := client.New(*addr).StartComputer(ctx, fs.Arg(0))
+	m, err := cl.Create(ctx, api.CreateRequest{VCPUs: *cpus, MemMiB: *mem, Network: *net})
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "eph: computer %q running\n", c.Name)
+	fmt.Fprintf(os.Stderr, "ephemera: throwaway box %s is up — 'ephemera ssh %s' to use it\n", m.ID, m.ID)
+	fmt.Println(m.ID)
 	return nil
 }
 
-func computerStop(argv []string) error {
-	fs := flag.NewFlagSet("computer stop", flag.ExitOnError)
+func cmdStop(argv []string) error {
+	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: eph computer stop <name>")
+		return fmt.Errorf("usage: ephemera stop <box>")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -149,26 +72,31 @@ func computerStop(argv []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "eph: computer %q stopped (its disk is kept)\n", c.Name)
+	fmt.Fprintf(os.Stderr, "ephemera: box %q stopped — its disk is kept, 'ephemera start %s' to resume\n", c.Name, c.Name)
 	return nil
 }
 
-func computerRm(argv []string) error {
-	fs := flag.NewFlagSet("computer rm", flag.ExitOnError)
+func cmdStart(argv []string) error {
+	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: eph computer rm <name>")
+		return fmt.Errorf("usage: ephemera start <box>")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if err := client.New(*addr).DeleteComputer(ctx, fs.Arg(0)); err != nil {
+	c, err := client.New(*addr).StartComputer(ctx, fs.Arg(0))
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "eph: computer %q deleted\n", fs.Arg(0))
+	fmt.Fprintf(os.Stderr, "ephemera: box %q is up — 'ephemera ssh %s'\n", c.Name, c.Name)
 	return nil
+}
+
+func cmdDesktop(_ []string) error {
+	return fmt.Errorf("the graphical desktop is coming in a later phase; for now, 'ephemera ssh <box>' gives you a terminal")
 }
