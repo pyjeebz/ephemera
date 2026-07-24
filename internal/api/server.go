@@ -115,6 +115,11 @@ type MachineResponse struct {
 	UptimeSec float64   `json:"uptime_sec"`
 	GuestIP   string    `json:"guest_ip,omitempty"`
 	Tap       string    `json:"tap,omitempty"`
+
+	// VsockPath is the host socket that reaches the guest agent. A local client
+	// (same host as the daemon) connects to it directly for an interactive shell,
+	// which needs a full-duplex byte stream the HTTP API does not carry.
+	VsockPath string `json:"vsock_path,omitempty"`
 }
 
 func toResponse(r store.Record) MachineResponse {
@@ -127,6 +132,7 @@ func toResponse(r store.Record) MachineResponse {
 		UptimeSec: time.Since(r.StartedAt).Seconds(),
 		GuestIP:   r.GuestIP,
 		Tap:       r.Tap,
+		VsockPath: r.VsockPath,
 	}
 }
 

@@ -217,6 +217,13 @@ func (m *Machine) Exec(ctx context.Context, cmd []string, stdout, stderr io.Writ
 	return agent.Exec(ctx, m.vsockPath, agent.ExecRequest{Cmd: cmd}, stdout, stderr)
 }
 
+// Shell opens an interactive terminal session in the guest, relaying between the
+// given local input/output and a shell on a pseudo-terminal inside the machine.
+// req carries the terminal's initial size and type.
+func (m *Machine) Shell(ctx context.Context, req agent.ExecRequest, in io.Reader, out io.Writer) error {
+	return agent.Shell(ctx, m.vsockPath, req, in, out)
+}
+
 // Boot starts a machine and returns once the VMM has accepted the boot action.
 // The guest kernel is still starting at that point; callers that need the guest
 // itself to be up should watch the console or, from Phase 3, the guest agent.
