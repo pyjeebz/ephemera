@@ -37,6 +37,17 @@ const (
 	// uses; the other inits are for a human at a console or for tests.
 	AgentInit = "/sbin/eph-agent-init"
 
+	// DesktopInit boots a headless graphical stack (Xvfb + a VNC server) and then
+	// the agent. Used for desktop boxes; it needs the desktop rootfs, which is the
+	// only image that ships the X stack. See ADR 0009.
+	DesktopInit = "/sbin/eph-desktop-init"
+
+	// A desktop box needs more than the lean defaults: an X server, a window
+	// manager, and software VNC encoding all want CPU and RAM the terminal box
+	// never does.
+	DefaultDesktopVCPUs  = 2
+	DefaultDesktopMemMiB = 2048
+
 	// guestCID identifies the guest on its vsock bus. Host is always 2 and 0/1
 	// are reserved, so 3 is the first usable value — and since every machine
 	// gets its own VMM and its own socket, they can all share it.

@@ -41,6 +41,7 @@ func run() error {
 	addr := flag.String("addr", "unix://run/ephemerad.sock", "listen address (unix://path or tcp://host:port)")
 	kernel := flag.String("kernel", "build/kernel/vmlinux", "guest kernel (uncompressed ELF vmlinux)")
 	rootfs := flag.String("rootfs", "build/rootfs/rootfs.ext4", "guest root filesystem image")
+	desktopRootfs := flag.String("desktop-rootfs", "build/rootfs/rootfs-desktop.ext4", "guest image for desktop boxes (optional; built by build-rootfs.sh --desktop)")
 	runDir := flag.String("run-dir", "run", "directory for per-machine runtime state")
 	logLevel := flag.String("log-level", "info", "debug, info, warn, or error")
 	network := flag.Bool("network", false, "allow machines to request a network interface")
@@ -56,6 +57,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// The desktop image is optional: if it is not built, desktop boxes are refused
+	// with a clear message rather than the daemon failing to start. So resolve it
+	// leniently — present only when the file actually exists.
+	desktopRootfsPath := resolveOptional(*desktopRootfs)
 
 	resolver, err := netip.ParseAddr(*dns)
 	if err != nil {
@@ -140,15 +146,20 @@ func run() error {
 		log.Info("machine jailing enabled", "helper", jailHelper)
 	}
 
+	if desktopRootfsPath != "" {
+		log.Info("desktop boxes enabled", "desktop_rootfs", desktopRootfsPath)
+	}
+
 	srv := api.New(api.Config{
-		KernelPath: kernelPath,
-		RootfsPath: rootfsPath,
-		RunDir:     *runDir,
-		Net:        machineNet,
-		DNS:        resolver,
-		Cgroup:     caps,
-		Jail:       *jailed,
-		JailHelper: jailHelper,
+		KernelPath:    kernelPath,
+		RootfsPath:    rootfsPath,
+		DesktopRootfs: desktopRootfsPath,
+		RunDir:        *runDir,
+		Net:           machineNet,
+		DNS:           resolver,
+		Cgroup:        caps,
+		Jail:          *jailed,
+		JailHelper:    jailHelper,
 	}, st, snaps, computers, log)
 
 	ln, err := listen(*addr)
@@ -246,6 +257,23 @@ func resolveImages(kernel, rootfs string) (string, string, error) {
 		}
 	}
 	return kernelPath, rootfsPath, nil
+}
+
+// resolveOptional makes an optional image path absolute, returning "" when it is
+// unset or not present. Unlike resolveImages it never fails: a missing optional
+// image is a feature the daemon does without, not a reason not to start.
+func resolveOptional(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return ""
+	}
+	return abs
 }
 
 func newLogger(level string) *slog.Logger {

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -33,6 +34,11 @@ type Config struct {
 	RunDir     string
 	VCPUs      int
 	MemMiB     int
+
+	// DesktopRootfs is the heavier image for desktop boxes (headless X + VNC).
+	// Empty means the daemon has no desktop image, and desktop requests are
+	// refused rather than served the terminal-only rootfs, which has no X stack.
+	DesktopRootfs string
 
 	// BootTimeout bounds how long a create waits for the guest agent.
 	BootTimeout time.Duration
@@ -110,6 +116,10 @@ type CreateRequest struct {
 	// a machine that cannot reach anything is the isolation floor, and every
 	// step above it should be something a caller asked for out loud.
 	Network bool `json:"network,omitempty"`
+
+	// Desktop boots a graphical box: the heavier desktop image, a desktop init,
+	// and bigger default resources. Refused when the daemon has no desktop image.
+	Desktop bool `json:"desktop,omitempty"`
 }
 
 // MachineResponse describes a machine to a client.
@@ -170,13 +180,33 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A desktop box swaps in the heavier image, a desktop init, and bigger default
+	// resources. An explicit -cpus/-mem still wins; the desktop defaults only fill
+	// in what the request left as zero.
+	rootfs, init := s.cfg.RootfsPath, machine.AgentInit
+	vcpus, mem := cmp(req.VCPUs, s.cfg.VCPUs), cmp(req.MemMiB, s.cfg.MemMiB)
+	if req.Desktop {
+		if s.cfg.DesktopRootfs == "" {
+			writeError(w, http.StatusBadRequest, errors.New(
+				"this daemon has no desktop image: build it with 'build/build-rootfs.sh --desktop' and start ephemerad with -desktop-rootfs"))
+			return
+		}
+		if _, err := os.Stat(s.cfg.DesktopRootfs); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("desktop image not usable: %w", err))
+			return
+		}
+		rootfs, init = s.cfg.DesktopRootfs, machine.DesktopInit
+		vcpus = cmp(req.VCPUs, machine.DefaultDesktopVCPUs)
+		mem = cmp(req.MemMiB, machine.DefaultDesktopMemMiB)
+	}
+
 	cfg := machine.Config{
 		KernelPath: s.cfg.KernelPath,
-		RootfsPath: s.cfg.RootfsPath,
+		RootfsPath: rootfs,
 		RunDir:     s.cfg.RunDir,
-		VCPUs:      cmp(req.VCPUs, s.cfg.VCPUs),
-		MemMiB:     cmp(req.MemMiB, s.cfg.MemMiB),
-		Init:       machine.AgentInit,
+		VCPUs:      vcpus,
+		MemMiB:     mem,
+		Init:       init,
 		DNS:        s.cfg.DNS,
 		Cgroup:     s.cfg.Cgroup,
 		Jail:       s.cfg.Jail,
