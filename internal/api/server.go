@@ -127,6 +127,11 @@ type MachineResponse struct {
 	// (same host as the daemon) connects to it directly for an interactive shell,
 	// which needs a full-duplex byte stream the HTTP API does not carry.
 	VsockPath string `json:"vsock_path,omitempty"`
+
+	// Computer is the persistent computer this machine backs, empty for an
+	// anonymous ephemeral machine — so a listing can show computers once and
+	// ephemeral machines separately.
+	Computer string `json:"computer,omitempty"`
 }
 
 func toResponse(r store.Record) MachineResponse {
@@ -140,6 +145,7 @@ func toResponse(r store.Record) MachineResponse {
 		GuestIP:   r.GuestIP,
 		Tap:       r.Tap,
 		VsockPath: r.VsockPath,
+		Computer:  r.Computer,
 	}
 }
 
