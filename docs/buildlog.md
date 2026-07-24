@@ -731,3 +731,72 @@ software. So `box` stays the noun in the *language* — help text, docs, how you
 command name you can't legally own is a liability, not a brand — keep it as vocabulary, not as the binary.**
 
 **Next:** Phase 5 — the desktop. A box you watch, in a browser, at 60fps.
+
+---
+
+## Phase 5 — a desktop, streamed out of a box that has no screen
+
+Here is the fun part. A Firecracker microVM has **no display device.** None. Its whole hardware world is
+virtio-block, virtio-net, virtio-vsock, and a serial console — no GPU, no VGA, no framebuffer, no PCI
+graphics. This is deliberate on Firecracker's part, and it means the usual "point a VNC client at the VM's
+screen" is off the table before we start: there is no screen to point at.
+
+So the pixels have to be *manufactured inside the box.* A headless X server (**Xvfb**) paints into a
+framebuffer that lives in RAM, a window manager and a terminal draw onto it, and **x11vnc** reads that
+framebuffer and speaks RFB — the VNC protocol. The only question left is how the bytes get out.
+
+**They get out over vsock.** The same private channel the shell already uses. x11vnc binds `127.0.0.1` only;
+the agent inside the box listens on a second vsock port and splices it to that local VNC server. The result
+is that a desktop box needs **no network and exposes no port** — the desktop is exactly as isolated as
+everything else. This is also why I skipped the batteries-included stacks (KasmVNC, Guacamole): they bundle
+their own web server and want to talk straight to the browser, which throws the vsock property away. x11vnc
+is a dumb RFB server we tunnel ourselves, and *we own the transport.* `docs/decisions/0009`.
+
+### Increment 1 — pixels out (prove the pipe)
+
+A separate, heavier desktop image (the lean box keeps its ~1 s boot), the agent's vsock→VNC bridge, and
+`eph desktop --raw <box>` to re-expose the stream as a local port for any native VNC viewer. It booted, and
+x11vnc came up listening on `127.0.0.1:5900`, and I connected, and… nothing. An empty greeting, then EOF.
+
+The box's **loopback interface was down.** The kernel creates `lo` but leaves it `DOWN`, and nothing had
+raised it — this box has no network, so none of the usual network init ran. x11vnc could *bind* `127.0.0.1`
+(the address is assigned to `lo` regardless of link state) but the agent could not *connect* to it:
+"Network unreachable." One line in the shared guest mounts — `ip link set lo up` — and every box now has
+working loopback, the way any real computer does. **Lesson: "it's listening on 127.0.0.1" and "you can
+reach 127.0.0.1" are two different claims, and a box with no network quietly fails the second.**
+
+With `lo` up, the whole chain lit: a live RFB handshake out over vsock, ServerInit reporting a 1280×800
+desktop named `ephemera:0`. And the number that mattered: a full **3.91 MiB** uncompressed frame came back
+in ~0.53 s — but first-byte was ~510 ms and the bytes themselves streamed in ~20 ms. So that half-second is
+x11vnc *rendering* a cold full-screen frame, not the wire. vsock moved four megabytes in twenty
+milliseconds. **The transport is not the bottleneck; encoding is** — exactly what a real client's
+compression is built to fix. The load-bearing risk of the whole phase, retired in an afternoon.
+
+### Increment 2 — in the browser (no noVNC)
+
+"Open a tab" instead of "install a VNC viewer." The daemon lives on a Unix socket, which a browser cannot
+reach, so the CLI grows a tiny local web server: it serves one page and, at `/ws`, a **WebSocket** that
+proxies the RFB bytes to the box's desktop vsock port. `eph desktop <box>` now opens a browser by default;
+`--raw` keeps the native-viewer port.
+
+The tempting move here is to vendor **noVNC** — a capable, large JavaScript library of many ES modules. But
+this whole project has a bias: we wrote our own Firecracker client, our own jail, our own vsock handshake.
+So the WebSocket server and the RFB client are both **hand-rolled and dependency-free.** The server is ~150
+lines: the upgrade handshake (SHA-1 the client key with the magic GUID, base64 it back), and binary frames
+with the client-side masking unwound. The client is a single embedded HTML file: a canvas, and just enough
+RFB to be a desktop — the no-auth handshake, a *forced* 32-bpp pixel format so blitting to the canvas is a
+plain byte reorder rather than a format-negotiation puzzle, Raw and CopyRect updates, and pointer/keyboard
+input mapped to X keysyms. No CDN, no build step, no `node_modules`. One binary, one page.
+
+I can't see a browser from here, so I proved it the layer down: a hand-rolled WebSocket *client* that drove
+the exact browser path. The upgrade completes with a valid accept token; a full RFB handshake runs through
+the proxy in both directions (the client's masked frames get unmasked correctly, or the handshake would
+stall); and a full 3.91 MiB framebuffer pulls through in 32 KiB WebSocket frames — which is the moment the
+16-bit frame-length encoding actually gets exercised, the branch the tiny handshake never touches. **Lesson:
+a hand-rolled wire protocol has branches your happy path never reaches; find the one that only triggers on
+big payloads and make something big go through it.** The last mile — actual pixels on a canvas, live mouse
+and keys — is a real browser in front of a human.
+
+**Next:** 5c — the SvelteKit web UI that lists your boxes and embeds this desktop, so the whole thing is a
+tab. (And "60 fps" stays honest: RFB gives a responsive desktop, not smooth full-motion video; the
+video-codec path is a stretch we take only if a static desktop ever feels heavy.)

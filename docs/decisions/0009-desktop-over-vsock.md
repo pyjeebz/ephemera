@@ -103,5 +103,23 @@ up, so x11vnc could *bind* `127.0.0.1:5900` but the agent's bridge could not *co
 ("Network unreachable"). Fixed by raising `lo` in the shared guest mounts — every box now has working
 loopback, the way any real computer does.
 
-_(Still to come: Increment 2 puts this in a browser — a WebSocket proxy in the daemon and a self-hosted
-noVNC page — so "point a VNC viewer at it" becomes "open a tab.")_
+## Verified (Increment 2 — in the browser)
+
+`eph desktop <box>` now opens the desktop in a browser by default (`--raw` keeps the native-viewer VNC port).
+The RFB stream no longer stops at a local TCP port: a small local **web server hosts a self-contained page**
+and, at `/ws`, a **WebSocket** that proxies the RFB bytes to the box's desktop vsock port. The daemon stays on
+its unix socket; the CLI is the one thing that faces a browser, and it faces only localhost.
+
+Both the WebSocket server and the RFB client are **hand-rolled and dependency-free**, consistent with the rest
+of the repo (own Firecracker client, own vsock handshake) — no noVNC vendoring, no CDN, no build step. The page
+is a single embedded HTML file: a canvas, a minimal RFB client (no-auth handshake, a forced 32-bpp format so
+blitting is a byte reorder, Raw + CopyRect updates, pointer/keyboard input).
+
+Driven headlessly through the browser path: the **WebSocket upgrade** completes with a valid accept token; a
+**full RFB handshake** runs through the proxy (ServerInit `1280×800`, `ephemera:0`) — which also exercises the
+browser→box direction, since the client's masked frames are unmasked correctly; and a **full 3.91 MiB
+framebuffer** pulls through in 32 KiB WebSocket frames, exercising the 16-bit length path. The remaining
+verification — pixels on a canvas and live mouse/keyboard — is a real browser in front of a human.
+
+_(Still to come: Increment 3 — the SvelteKit web UI that lists boxes and embeds this desktop, and later the
+smoothness path if a static desktop's Raw updates ever feel heavy.)_

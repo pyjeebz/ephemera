@@ -118,7 +118,23 @@ Each phase is a vertical slice that boots to a working checkpoint.
             makes a kept computer or a throwaway; `list`/`rm` unify both; `scp` copies files in and out.
       _Checkpoint met: `eph new dev`, `eph ssh dev`, install and run your own agent, `eph stop`/`start` with
       state intact._
-- [ ] **Phase 5 — Web UI + live desktop.** VNC/RFB desktop, SvelteKit UI, live preview URLs.
+- [~] **Phase 5 — Web UI + live desktop.** A graphical desktop you watch and drive, in a browser. A
+      Firecracker guest has **no display device**, so the pixels are made inside the box (a headless X server
+      paints a RAM framebuffer) and streamed out over **vsock** — the same private channel as the shell, so a
+      desktop box needs no network and exposes no port. See [decision 0009](decisions/0009-desktop-over-vsock.md).
+      - [x] **5a — Pixels out of a box.** A separate, heavier desktop image (Xvfb + openbox + xterm + x11vnc);
+            the agent bridges a second vsock port to the VNC server; `eph new --desktop` boots one and
+            `eph desktop --raw <box>` exposes it as a local VNC port. _Verified: a live RFB session out over
+            vsock, and vsock shown not to be the bottleneck (~4 MiB frame streamed in ~20 ms)._
+      - [x] **5b — In the browser.** `eph desktop <box>` serves a self-hosted page and a WebSocket that proxies
+            the RFB stream; open a tab, no native viewer. Both the WebSocket server and the RFB client are
+            hand-rolled and dependency-free — no noVNC, no CDN, no build step. _Verified headlessly through the
+            WebSocket: upgrade, full RFB handshake both directions, and a full framebuffer through 32 KiB frames._
+      - [ ] **5c — The web UI.** A SvelteKit app: list boxes, click one for its desktop or terminal, buttons
+            for new/stop/fork — drive ephemera from a browser.
+      - [ ] **5d — Smoothness (stretch).** RFB gives a responsive desktop, not true 60 fps; if a static
+            desktop's Raw updates feel heavy, swap the guest-side server for a video codec / WebRTC path behind
+            the same vsock bridge. Only if it earns its complexity.
       _Checkpoint: a browser desktop you watch an agent use._
 
 ## Host requirements (verified on this box)
