@@ -15,6 +15,12 @@ mkdir -p /dev/pts /dev/shm
 mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts
 mount -t tmpfs  tmpfs  /dev/shm
 
+# Bring up loopback. The kernel creates lo but leaves it DOWN, so 127.0.0.1 is
+# unreachable until something raises it — even a box with no external network
+# should have working loopback, the way any real computer does. Databases, dev
+# servers, and the desktop's VNC bridge all talk to 127.0.0.1 and expect it up.
+ip link set lo up 2>/dev/null || ifconfig lo up 2>/dev/null
+
 # A networked guest already has its hostname, address and default route: the
 # kernel is built with CONFIG_IP_PNP=y and did all of it from the ip= boot
 # argument, before init existed. This line is for the machines that have no
