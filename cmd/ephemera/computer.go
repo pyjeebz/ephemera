@@ -19,6 +19,7 @@ func cmdNew(argv []string) error {
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	addr := daemonAddr(fs)
 	net := fs.Bool("net", false, "give a throwaway box a network (named boxes get one when the daemon can)")
+	desktop := fs.Bool("desktop", false, "give the box a graphical desktop (throwaway only for now; view with 'ephemera desktop')")
 	cpus := fs.Int("cpus", 0, "vCPUs for a throwaway box (0 = daemon default)")
 	mem := fs.Int("mem", 0, "memory in MiB for a throwaway box (0 = daemon default)")
 	fs.Usage = func() {
@@ -36,6 +37,11 @@ func cmdNew(argv []string) error {
 	cl := client.New(*addr)
 
 	if fs.NArg() >= 1 {
+		if *desktop {
+			// A persistent desktop computer composes with the persist disk but is
+			// not wired yet (ADR 0009); for now a desktop box is a throwaway.
+			return fmt.Errorf("desktop boxes are throwaway for now — run 'ephemera new --desktop' without a name")
+		}
 		name := fs.Arg(0)
 		c, err := cl.CreateComputer(ctx, name)
 		if err != nil {
@@ -46,11 +52,15 @@ func cmdNew(argv []string) error {
 		return nil
 	}
 
-	m, err := cl.Create(ctx, api.CreateRequest{VCPUs: *cpus, MemMiB: *mem, Network: *net})
+	m, err := cl.Create(ctx, api.CreateRequest{VCPUs: *cpus, MemMiB: *mem, Network: *net, Desktop: *desktop})
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "ephemera: throwaway box %s is up — 'ephemera ssh %s' to use it\n", m.ID, m.ID)
+	if *desktop {
+		fmt.Fprintf(os.Stderr, "ephemera: desktop box %s is up — 'ephemera desktop %s' to view it\n", m.ID, m.ID)
+	} else {
+		fmt.Fprintf(os.Stderr, "ephemera: throwaway box %s is up — 'ephemera ssh %s' to use it\n", m.ID, m.ID)
+	}
 	fmt.Println(m.ID)
 	return nil
 }
@@ -95,8 +105,4 @@ func cmdStart(argv []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "ephemera: box %q is up — 'ephemera ssh %s'\n", c.Name, c.Name)
 	return nil
-}
-
-func cmdDesktop(_ []string) error {
-	return fmt.Errorf("the graphical desktop is coming in a later phase; for now, 'ephemera ssh <box>' gives you a terminal")
 }

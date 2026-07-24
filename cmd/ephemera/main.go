@@ -100,8 +100,9 @@ usage: ephemera <verb> [args]
   rm <box>      delete a box
   snapshot <box>  freeze a box to disk
   fork <snap>   clone a box from a snapshot, in milliseconds
-  desktop <box> open the box's graphical desktop (coming soon)
+  desktop <box> bridge a box's graphical desktop to a local VNC port
 
+  new --desktop   a throwaway box with a graphical desktop
   run […] <cmd>   throwaway box: boot, run one command, destroy
   boot            boot a box and stream its console (dev)
 
@@ -111,10 +112,10 @@ run "ephemera <verb> -h" for flags
 
 // common holds the flags every command shares.
 type common struct {
-	kernel *string
-	rootfs *string
-	vcpus  *int
-	mem    *int
+	kernel     *string
+	rootfs     *string
+	vcpus      *int
+	mem        *int
 	runDir     *string
 	net        *bool
 	pool       *string
@@ -125,11 +126,11 @@ type common struct {
 
 func addCommon(fs *flag.FlagSet) *common {
 	return &common{
-		kernel: fs.String("kernel", "build/kernel/vmlinux", "guest kernel (uncompressed ELF vmlinux)"),
-		rootfs: fs.String("rootfs", "build/rootfs/rootfs.ext4", "guest root filesystem image"),
-		vcpus:  fs.Int("cpus", machine.DefaultVCPUs, "vCPU count"),
-		mem:    fs.Int("mem", machine.DefaultMemMiB, "memory in MiB"),
-		runDir: fs.String("run-dir", "run", "directory for per-machine runtime state"),
+		kernel:     fs.String("kernel", "build/kernel/vmlinux", "guest kernel (uncompressed ELF vmlinux)"),
+		rootfs:     fs.String("rootfs", "build/rootfs/rootfs.ext4", "guest root filesystem image"),
+		vcpus:      fs.Int("cpus", machine.DefaultVCPUs, "vCPU count"),
+		mem:        fs.Int("mem", machine.DefaultMemMiB, "memory in MiB"),
+		runDir:     fs.String("run-dir", "run", "directory for per-machine runtime state"),
 		net:        fs.Bool("net", false, "give the machine a network interface (needs CAP_NET_ADMIN)"),
 		pool:       fs.String("pool", vmnet.DefaultPool, "address range the machine's link is carved from"),
 		dns:        fs.String("dns", machine.DefaultDNS.String(), "resolver handed to a networked guest"),
