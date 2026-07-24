@@ -12,13 +12,32 @@
 # is gone before mke2fs reads it.
 set -euo pipefail
 
-IMAGE_TAG="${IMAGE_TAG:-ephemera-guest:latest}"
-ROOTFS_SIZE="${ROOTFS_SIZE:-1G}"
+# --desktop builds the heavier desktop image (headless X + VNC, ADR 0009) into a
+# separate output, so the default box stays lean. Same build path, one build arg.
+DESKTOP=0
+for arg in "$@"; do
+  case "$arg" in
+    --desktop) DESKTOP=1 ;;
+    *) echo "!! unknown argument: $arg (only --desktop)" >&2; exit 2 ;;
+  esac
+done
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dest="$root/build/rootfs"
-img="$dest/rootfs.ext4"
 mkdir -p "$dest"
+
+if [[ "$DESKTOP" == "1" ]]; then
+  IMAGE_TAG="${IMAGE_TAG:-ephemera-desktop:latest}"
+  # A desktop needs room for the X stack; the extra is sparse until written.
+  ROOTFS_SIZE="${ROOTFS_SIZE:-3G}"
+  img="$dest/rootfs-desktop.ext4"
+  build_args=(--build-arg DESKTOP=1)
+else
+  IMAGE_TAG="${IMAGE_TAG:-ephemera-guest:latest}"
+  ROOTFS_SIZE="${ROOTFS_SIZE:-1G}"
+  img="$dest/rootfs.ext4"
+  build_args=()
+fi
 
 if ! docker ps >/dev/null 2>&1; then
   echo "!! docker daemon not reachable — start it first:" >&2
@@ -33,7 +52,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -trimpath -ldflags='-s -w' -o "$root/build/guest/eph-agent" "$root/cmd/eph-agent"
 
 echo ">> building guest image ($IMAGE_TAG)"
-docker build -q -t "$IMAGE_TAG" "$root/build/guest" >/dev/null
+docker build -q "${build_args[@]}" -t "$IMAGE_TAG" "$root/build/guest" >/dev/null
 
 echo ">> exporting container filesystem"
 cid="$(docker create "$IMAGE_TAG" /bin/true)"

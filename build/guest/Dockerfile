@@ -38,9 +38,19 @@ COPY mounts.sh       /sbin/eph-mounts
 COPY init.sh         /sbin/eph-init
 COPY selftest.sh     /sbin/eph-selftest
 COPY agent-init.sh   /sbin/eph-agent-init
-RUN chmod +x /sbin/eph-overlay-init /sbin/eph-mounts /sbin/eph-init /sbin/eph-selftest /sbin/eph-agent-init
+COPY desktop-init.sh /sbin/eph-desktop-init
+RUN chmod +x /sbin/eph-overlay-init /sbin/eph-mounts /sbin/eph-init /sbin/eph-selftest /sbin/eph-agent-init /sbin/eph-desktop-init
 
 # Built on the host by build-rootfs.sh: a static CGO-free binary, so it needs no
 # loader or libc inside the guest.
 COPY eph-agent /usr/bin/eph-agent
 RUN chmod +x /usr/bin/eph-agent
+
+# A desktop box adds a headless graphical stack: a RAM framebuffer (Xvfb, since a
+# Firecracker guest has no display device), a minimal window manager and terminal,
+# and a VNC server to stream the pixels out. Only built when DESKTOP=1, so the
+# default box stays lean and boots fast — you opt into pixels. See ADR 0009.
+ARG DESKTOP=0
+RUN if [ "$DESKTOP" = "1" ]; then \
+      apk add --no-cache xvfb x11vnc openbox xterm font-misc-misc ttf-dejavu; \
+    fi
