@@ -66,106 +66,134 @@
 
 <svelte:head><title>ephemera</title></svelte:head>
 
-<main>
-  <header>
-    <h1>ephemera</h1>
-    <span class="tagline">boxes — fast, isolated Linux machines you use like a laptop</span>
+<div class="page">
+  <header class="topbar">
+    <div class="brand">
+      <span class="wordmark">ephemera</span>
+      <span class="sep">/</span>
+      <span class="crumb">boxes</span>
+    </div>
+    <span class="hint mono">fast, isolated Linux machines you use like a laptop</span>
   </header>
 
-  {#if error}<div class="error">{error}</div>{/if}
+  <main>
+    {#if error}<div class="alert">{error}</div>{/if}
 
-  <section class="new">
-    <input class="mono" placeholder="name a box to keep it…" bind:value={name}
-           onkeydown={(e) => e.key === 'Enter' && create()} />
-    <label class="toggle" class:disabled={name.trim()}>
-      <input type="checkbox" bind:checked={wantDesktop} disabled={!!name.trim()} /> desktop
-    </label>
-    <button class="primary" onclick={create} disabled={busy}>
-      {name.trim() ? 'Keep box' : 'New box'}
-    </button>
-  </section>
+    <div class="card compose">
+      <input class="input mono" placeholder="name a box to keep it, or leave blank for a throwaway…"
+             bind:value={name} onkeydown={(e) => e.key === 'Enter' && create()} />
+      <label class="check" class:off={name.trim()}>
+        <input type="checkbox" bind:checked={wantDesktop} disabled={!!name.trim()} />
+        desktop
+      </label>
+      <button class="btn btn-default" onclick={create} disabled={busy}>
+        {name.trim() ? 'Keep box' : 'New box'}
+      </button>
+    </div>
 
-  <table>
-    <thead>
-      <tr><th>box</th><th>kind</th><th>state</th><th>address</th><th class="actions">actions</th></tr>
-    </thead>
-    <tbody>
-      {#each boxes as b (b.key)}
-        <tr>
-          <td class="mono id">{b.id}</td>
-          <td><span class="tag {b.kind}">{b.kind}</span></td>
-          <td>
-            <span class="dot" class:up={b.running}></span>{b.running ? 'running' : 'stopped'}
-          </td>
-          <td class="mono muted">{b.addr}</td>
-          <td class="actions">
-            {#if b.running}
-              <a class="btn" href="/box/{b.machineId}" target="_blank" rel="noopener">desktop</a>
-              <button onclick={() => snapshot(b)} disabled={busy}>snapshot</button>
-            {/if}
-            {#if b.computer && b.running}
-              <button onclick={() => stop(b)} disabled={busy}>stop</button>
-            {:else if b.computer}
-              <button onclick={() => start(b)} disabled={busy}>start</button>
-            {/if}
-            <button class="danger" onclick={() => remove(b)} disabled={busy}>rm</button>
-          </td>
-        </tr>
-      {:else}
-        <tr><td colspan="5" class="empty">
-          {loaded ? 'no boxes yet — name one above to keep it, or leave it blank for a throwaway' : 'loading…'}
-        </td></tr>
-      {/each}
-    </tbody>
-  </table>
+    <div class="card">
+      <div class="card-head">
+        <h2>Boxes</h2>
+        <span class="count mono">{boxes.length}</span>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Box</th><th>Kind</th><th>State</th><th>Address</th><th class="right">Actions</th></tr>
+        </thead>
+        <tbody>
+          {#each boxes as b (b.key)}
+            <tr>
+              <td class="mono strong">{b.id}</td>
+              <td><span class="badge badge-outline {b.kind}">{b.kind}</span></td>
+              <td><span class="state"><span class="dot" class:up={b.running}></span>{b.running ? 'running' : 'stopped'}</span></td>
+              <td class="mono muted">{b.addr}</td>
+              <td class="right actions">
+                {#if b.running}
+                  <a class="btn btn-outline btn-sm" href="/box/{b.machineId}" target="_blank" rel="noopener">Desktop</a>
+                  <button class="btn btn-ghost btn-sm" onclick={() => snapshot(b)} disabled={busy}>Snapshot</button>
+                {/if}
+                {#if b.computer && b.running}
+                  <button class="btn btn-secondary btn-sm" onclick={() => stop(b)} disabled={busy}>Stop</button>
+                {:else if b.computer}
+                  <button class="btn btn-secondary btn-sm" onclick={() => start(b)} disabled={busy}>Start</button>
+                {/if}
+                <button class="btn btn-destructive btn-sm" onclick={() => remove(b)} disabled={busy}>Remove</button>
+              </td>
+            </tr>
+          {:else}
+            <tr><td colspan="5" class="empty">
+              {loaded ? 'No boxes yet. Name one above to keep it, or leave it blank for a throwaway.' : 'Loading…'}
+            </td></tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
 
-  {#if snapshots.length}
-    <h2>snapshots</h2>
-    <table>
-      <thead><tr><th>id</th><th>source</th><th>size</th><th class="actions">actions</th></tr></thead>
-      <tbody>
-        {#each snapshots as s (s.id)}
-          <tr>
-            <td class="mono id">{s.id}</td>
-            <td class="mono muted">{s.source_id}</td>
-            <td class="muted">{s.vcpus} vCPU · {s.mem_mib} MiB</td>
-            <td class="actions"><button onclick={() => fork(s)} disabled={busy}>fork</button></td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-</main>
+    {#if snapshots.length}
+      <div class="card">
+        <div class="card-head"><h2>Snapshots</h2><span class="count mono">{snapshots.length}</span></div>
+        <table>
+          <thead><tr><th>ID</th><th>Source</th><th>Shape</th><th class="right">Actions</th></tr></thead>
+          <tbody>
+            {#each snapshots as s (s.id)}
+              <tr>
+                <td class="mono strong">{s.id}</td>
+                <td class="mono muted">{s.source_id}</td>
+                <td class="muted">{s.vcpus} vCPU · {s.mem_mib} MiB</td>
+                <td class="right actions"><button class="btn btn-outline btn-sm" onclick={() => fork(s)} disabled={busy}>Fork</button></td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </main>
+</div>
 
 <style>
-  main { max-width: 900px; margin: 0 auto; padding: 32px 20px 64px; }
-  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 24px; flex-wrap: wrap; }
-  h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
-  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 32px 0 8px; }
-  .tagline { color: var(--muted); font-size: 13px; }
-  .error { background: #3a1714; border: 1px solid var(--vermilion); color: #ffd9d2; padding: 8px 12px; border-radius: 6px; margin-bottom: 16px; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    height: 56px; padding: 0 24px;
+    border-bottom: 1px solid hsl(var(--border));
+    position: sticky; top: 0; background: hsl(var(--background) / .8); backdrop-filter: blur(8px); z-index: 10;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .wordmark { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+  .sep { color: hsl(var(--border)); }
+  .crumb { color: hsl(var(--muted-foreground)); font-size: 14px; }
+  .hint { color: hsl(var(--muted-foreground)); font-size: 12px; }
 
-  .new { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
-  .new input.mono { flex: 1; min-width: 0; }
-  .toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); user-select: none; white-space: nowrap; }
-  .toggle.disabled { opacity: 0.4; }
+  main { max-width: 960px; margin: 0 auto; padding: 28px 24px 64px; display: flex; flex-direction: column; gap: 20px; }
+
+  .alert {
+    background: hsl(var(--destructive) / .1); border: 1px solid hsl(var(--destructive) / .4);
+    color: hsl(var(--destructive)); padding: 10px 14px; border-radius: var(--radius); font-size: 13px;
+  }
+
+  .compose { display: flex; align-items: center; gap: 12px; padding: 12px; }
+  .compose .input { flex: 1; min-width: 0; }
+  .check { display: inline-flex; align-items: center; gap: 6px; color: hsl(var(--muted-foreground)); font-size: 13px; white-space: nowrap; user-select: none; }
+  .check.off { opacity: .4; }
+
+  .card-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid hsl(var(--border)); }
+  h2 { margin: 0; font-size: 13px; font-weight: 600; }
+  .count { color: hsl(var(--muted-foreground)); font-size: 12px; }
 
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  .id { font-size: 13px; }
-  .muted { color: var(--muted); }
-  .empty { color: var(--muted); text-align: center; padding: 28px; }
+  th { text-align: left; font-weight: 500; color: hsl(var(--muted-foreground)); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 16px; }
+  td { padding: 11px 16px; border-top: 1px solid hsl(var(--border)); vertical-align: middle; font-size: 13px; }
+  tbody tr:hover td { background: hsl(var(--muted) / .4); }
+  .strong { font-weight: 500; }
+  .muted { color: hsl(var(--muted-foreground)); }
+  .right { text-align: right; }
+  .empty { color: hsl(var(--muted-foreground)); text-align: center; padding: 40px; }
 
-  .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); }
-  .tag.kept { color: var(--vermilion); border-color: var(--vermilion); }
-  .tag.temp { color: var(--muted); }
+  .badge.kept { color: hsl(var(--foreground)); border-color: hsl(var(--foreground) / .3); }
+  .state { display: inline-flex; align-items: center; gap: 8px; }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; }
 
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #6b625a; margin-right: 7px; vertical-align: 0px; }
-  .dot.up { background: var(--green); }
-
-  td.actions, th.actions { text-align: right; white-space: nowrap; }
-  td.actions { display: flex; gap: 6px; justify-content: flex-end; }
-  .btn { display: inline-block; text-decoration: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
-  .btn:hover { border-color: #4a4038; }
+  @media (max-width: 640px) {
+    .hint { display: none; }
+    .actions { flex-wrap: wrap; }
+  }
 </style>

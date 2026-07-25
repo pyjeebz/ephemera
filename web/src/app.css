@@ -1,13 +1,57 @@
+/* The shadcn/ui design system (default "zinc" theme), hand-applied — the tokens,
+ * radius, and component styling that make Vercel-family developer tools feel the
+ * way they do — with Geist as the typeface. Tokens are raw HSL triplets wrapped
+ * with hsl(), exactly as shadcn stores them, so the palette reads the same. Light
+ * by default; dark follows the OS via prefers-color-scheme. */
+
 :root {
-  color-scheme: dark;
-  --night: #14110f;
-  --panel: #1d1916;
-  --line: #2c2622;
-  --cream: #e8e2da;
-  --muted: #9b9086;
-  --vermilion: #e5533d;
-  --green: #46a758;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 240 4.8% 95.9%;
+  --accent-foreground: 240 5.9% 10%;
+  --primary: 240 5.9% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 98%;
+  --success: 142 71% 45%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 240 10% 3.9%;
+  --radius: 0.5rem;
+
+  color-scheme: light;
+  font-family: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 142 69% 58%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+    color-scheme: dark;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -15,39 +59,90 @@
 html, body {
   margin: 0;
   min-height: 100%;
-  background: var(--night);
-  color: var(--cream);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
   font-size: 14px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-a { color: inherit; }
+a { color: inherit; text-decoration: none; }
 
 .mono {
-  font-family: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-feature-settings: normal;
 }
 
-button {
-  font: inherit;
-  color: var(--cream);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 5px 10px;
+/* --- buttons: shadcn variants ------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  height: 32px;
+  padding: 0 12px;
   cursor: pointer;
+  transition: background-color .15s, border-color .15s, color .15s, opacity .15s;
+  user-select: none;
 }
-button:hover:not(:disabled) { border-color: #4a4038; }
-button:disabled { opacity: 0.5; cursor: default; }
+.btn:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.btn:disabled { opacity: .5; pointer-events: none; }
+.btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
 
-button.primary { background: var(--vermilion); border-color: var(--vermilion); color: #17110f; font-weight: 600; }
-button.danger:hover:not(:disabled) { border-color: var(--vermilion); color: var(--vermilion); }
+.btn-default { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.btn-default:hover { background: hsl(var(--primary) / .9); }
 
-input {
+.btn-secondary { background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); }
+.btn-secondary:hover { background: hsl(var(--secondary) / .8); }
+
+.btn-outline { border-color: hsl(var(--border)); background: hsl(var(--background)); color: hsl(var(--foreground)); }
+.btn-outline:hover { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+
+.btn-ghost { background: transparent; color: hsl(var(--foreground)); }
+.btn-ghost:hover { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+
+.btn-destructive { background: transparent; color: hsl(var(--destructive)); }
+.btn-destructive:hover { background: hsl(var(--destructive) / .1); }
+
+/* --- inputs ------------------------------------------------------------- */
+.input {
+  height: 36px;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid hsl(var(--input));
+  background: transparent;
+  color: hsl(var(--foreground));
+  padding: 0 12px;
   font: inherit;
-  color: var(--cream);
-  background: var(--night);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 5px 10px;
 }
-input:focus { outline: none; border-color: var(--vermilion); }
+.input::placeholder { color: hsl(var(--muted-foreground)); }
+.input:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; border-color: transparent; }
+
+/* --- cards -------------------------------------------------------------- */
+.card {
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+}
+
+/* --- badges ------------------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.badge-outline { border-color: hsl(var(--border)); color: hsl(var(--muted-foreground)); }
+.badge-secondary { background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); }
+
+.dot { width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--muted-foreground)); flex: none; }
+.dot.up { background: hsl(var(--success)); box-shadow: 0 0 0 3px hsl(var(--success) / .18); }

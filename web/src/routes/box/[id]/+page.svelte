@@ -22,11 +22,13 @@
 
 <svelte:head><title>{name} — ephemera</title></svelte:head>
 
-<header>
-  <a class="back" href="/">← boxes</a>
-  <span class="dot {statusCls}"></span>
-  <span class="name mono">{name}</span>
-  <span class="status">{status}</span>
+<header class="topbar">
+  <div class="brand">
+    <a class="back" href="/">← boxes</a>
+    <span class="sep">/</span>
+    <span class="name mono">{name}</span>
+  </div>
+  <span class="state"><span class="dot" class:up={statusCls === 'up'} class:err={statusCls === 'err'}></span>{status}</span>
 </header>
 
 <div class="stage">
@@ -34,14 +36,22 @@
 </div>
 
 <style>
-  header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
-  .back { text-decoration: none; color: var(--muted); }
-  .back:hover { color: var(--cream); }
-  .name { font-weight: 600; }
-  .status { color: var(--muted); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b625a; }
-  .dot.up { background: var(--green); }
-  .dot.err { background: var(--vermilion); }
-  .stage { display: grid; place-items: center; padding: 14px; height: calc(100vh - 100px); }
-  canvas { background: #000; image-rendering: pixelated; max-width: 100%; max-height: 100%; box-shadow: 0 8px 40px rgba(0,0,0,.5); outline: none; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    height: 52px; padding: 0 20px; border-bottom: 1px solid hsl(var(--border));
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .back { color: hsl(var(--muted-foreground)); font-size: 13px; }
+  .back:hover { color: hsl(var(--foreground)); }
+  .sep { color: hsl(var(--border)); }
+  .name { font-weight: 600; font-size: 14px; }
+  .state { display: inline-flex; align-items: center; gap: 8px; color: hsl(var(--muted-foreground)); font-size: 13px; }
+  .dot.err { background: hsl(var(--destructive)); box-shadow: none; }
+
+  .stage { display: grid; place-items: center; padding: 16px; height: calc(100vh - 52px); }
+  canvas {
+    background: #000; image-rendering: pixelated; max-width: 100%; max-height: 100%;
+    border: 1px solid hsl(var(--border)); border-radius: var(--radius); outline: none;
+    box-shadow: 0 10px 40px rgba(0,0,0,.35);
+  }
 </style>
