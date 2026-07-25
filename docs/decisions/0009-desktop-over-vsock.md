@@ -141,5 +141,9 @@ choice. The trade is CPU (software H.264, no GPU) and a little latency; the togg
 which they want rather than have it decided for them.
 
 _Verified: the stream is a valid H.264 fragmented MP4 (`ftyp`+`moov`+`moof`+`mdat`) through the daemon, and
-the input-only RFB path handshakes and accepts pointer events without pulling a framebuffer. The felt
-smoothness and MSE latency tuning are, like all of this, a browser in front of a human._
+the input-only RFB path handshakes and accepts pointer events without pulling a framebuffer._
+
+**Update:** with a human in front of the browser, Smooth won — so it is now the **default** desktop mode where
+the browser can play H.264, falling back to Crisp (RFB) only where it cannot. The toggle stays, because Crisp
+is still the better answer for latency-sensitive, typing-heavy work; the default just reflects that for
+watching and general use, the video path feels better.

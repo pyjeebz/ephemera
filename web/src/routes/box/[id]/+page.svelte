@@ -9,10 +9,16 @@
   const id = $page.params.id;
   const wantView = $page.url.searchParams.get('view'); // 'desktop' | 'terminal' | null
 
+  // Smoother by default. H.264 video (Smooth) is the preferred desktop; fall back
+  // to the RFB framebuffer (Crisp) only where the browser cannot play the stream,
+  // so the default never lands on an unsupported codec.
+  const H264 = 'video/mp4; codecs="avc1.42C01F"';
+  const canVideo = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(H264);
+
   let hasDesktop = $state(false);
   let ready = $state(false);
   let tab = $state('terminal'); // safe default until we learn what the box has
-  let mode = $state('rfb'); // desktop pixels: 'rfb' (crisp) or 'video' (smooth)
+  let mode = $state(canVideo ? 'video' : 'rfb'); // 'video' (smooth) or 'rfb' (crisp)
 
   onMount(async () => {
     // Only a box booted with the desktop image has a graphical desktop; without
