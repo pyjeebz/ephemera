@@ -25,6 +25,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/machine"
 	"github.com/pyjeebz/ephemera/internal/store"
 	"github.com/pyjeebz/ephemera/internal/vmnet"
+	"github.com/pyjeebz/ephemera/internal/webui"
 )
 
 // Config holds what the daemon needs to build machines.
@@ -105,6 +106,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/computers/{name}/start", s.startComputer)
 	mux.HandleFunc("POST /v1/computers/{name}/stop", s.stopComputer)
 	mux.HandleFunc("DELETE /v1/computers/{name}", s.deleteComputer)
+
+	// The web UI is the catch-all: every path the API routes above did not claim
+	// falls to the SPA, which serves its index and routes on the client. It is
+	// only reachable to a browser on the opt-in -http surface. Nil when the UI was
+	// not built into this binary, in which case unknown paths just 404.
+	if ui := webui.Handler(); ui != nil {
+		mux.Handle("GET /", ui)
+	}
 	return s.logRequests(mux)
 }
 
