@@ -62,7 +62,10 @@ same handler — the JSON API, the desktop WebSocket, and an embedded single-pag
 
 With `ephemerad -http 127.0.0.1:8080`: the SPA is served (`GET /` → the app; `_app` assets load; a client
 route like `/box/{id}` falls back to index so the router takes it); the JSON API answers on the same origin
-(so the dashboard's list/new/stop/fork calls work); and the desktop WebSocket handshakes through the daemon
-(`RFB 003.008`). The dashboard and the in-UI desktop viewer (the RFB client ported to a Svelte component)
-build and serve; their live rendering and interactivity are a real browser in front of a human. The
-in-browser **terminal** is the remaining piece of the UI.
+(so the dashboard's list/new/stop/fork calls work); the desktop WebSocket handshakes through the daemon
+(`RFB 003.008`); and the **shell WebSocket** round-trips — a resize is accepted, a typed command is echoed by
+the guest pty, and its output (`result-42` from `echo $((6*7))`) comes back, so the browser terminal drives a
+real shell over the same vsock session as `eph ssh`. The dashboard, the in-UI desktop viewer, and the
+terminal (desktop and terminal are tabs on the box page) build and serve; their live rendering and
+interactivity are a real browser in front of a human. **5c is complete**; the remaining Phase 5 item is the
+optional 5d smoothness path.

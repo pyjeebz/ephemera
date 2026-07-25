@@ -844,3 +844,38 @@ live canvas are a browser in front of a human.
 
 **Next:** the last piece of the UI — a terminal in the browser (an in-page terminal over a shell WebSocket),
 so a box offers both its desktop and its shell from the same tab.
+
+---
+
+## Phase 5c, finished — a terminal in the tab
+
+The box already showed its desktop in the browser; the last piece is its *shell*. And this one was mostly
+plumbing already in place, which is the nice kind of feature to build.
+
+`eph ssh` runs an interactive pty in the guest over vsock, using a tiny framing that lets one connection
+carry both the terminal's bytes and window-resize events (`agent.Shell`). The browser terminal needs exactly
+that session — it just reaches it through a WebSocket instead of a raw socket. So the daemon's shell route
+(`…/shell/ws`) is thin: it upgrades the WebSocket, then hands `agent.Shell` an `io.Pipe` for keystrokes, an
+adapter that writes the shell's output back as binary WebSocket messages, and a channel for resizes. The web
+terminal and the CLI terminal are now the *same session code* behind two different front doors.
+
+The one wrinkle is telling keystrokes from resizes on the browser's socket. WebSocket messages are already
+framed, so no length prefixes are needed — just a one-byte tag on what the browser sends: `0x00` + bytes for
+keystrokes, `0x01` + rows + cols for a resize. Output back to the browser is all terminal bytes, so it needs
+no tag at all. xterm.js on the page turns keystrokes into data messages and window resizes into resize
+messages; the daemon demuxes them into the pipe and the resize channel. **Lesson: when a transport already
+frames messages for you, don't re-implement framing inside it — a single tag byte is enough.**
+
+xterm.js is the one real dependency the terminal adds, and like everything else the UI ships it is bundled by
+Vite and served from the box — no CDN. Desktop and terminal became tabs on the box page; the RFB desktop
+turned into its own component along the way, so the page is just a tab bar over two views.
+
+Verified the way a terminal can be without a screen: drive the shell WebSocket headlessly, send a resize,
+type `echo $((6*7))`, and watch both the echoed command *and* `42` come back — proof the keystrokes reached
+the guest pty and the shell actually ran. The rendered xterm and live typing are, as ever, a browser in front
+of a human.
+
+**That completes 5c** — the whole of ephemera is now a tab: list your boxes, spin one up, and open its
+desktop or its shell, all from the browser. What's left in Phase 5 is only the optional **5d** smoothness
+path, and it stays optional: RFB gives a responsive desktop, and a video codec is a cost we pay only if a
+static desktop ever feels heavy.

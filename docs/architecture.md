@@ -130,14 +130,15 @@ Each phase is a vertical slice that boots to a working checkpoint.
             the RFB stream; open a tab, no native viewer. Both the WebSocket server and the RFB client are
             hand-rolled and dependency-free — no noVNC, no CDN, no build step. _Verified headlessly through the
             WebSocket: upgrade, full RFB handshake both directions, and a full framebuffer through 32 KiB frames._
-      - [~] **5c — The web UI.** A SvelteKit SPA the daemon embeds (`go:embed`) and serves on an opt-in
-            loopback TCP surface (`ephemerad -http`), same origin as the API and the desktop WebSocket. See
+      - [x] **5c — The web UI.** A SvelteKit SPA the daemon embeds (`go:embed`) and serves on an opt-in
+            loopback TCP surface (`ephemerad -http`), same origin as the API and the WebSockets. See
             [decision 0010](decisions/0010-web-ui-and-http-surface.md). Styled with the shadcn/ui token system
             and Geist (the Vercel dev-tool look), self-hosted, no CDN.
             - [x] **Dashboard** — list boxes, new (throwaway/kept/desktop), stop/start/rm, snapshot, fork.
             - [x] **Desktop in the UI** — a `/box/{id}` route rendering the RFB client (shared as a module) to
                   a canvas over the daemon's desktop WebSocket.
-            - [ ] **Terminal in the UI** — an in-browser terminal over a shell WebSocket (the remaining piece).
+            - [x] **Terminal in the UI** — an xterm.js terminal over a shell WebSocket, resizing with the
+                  window; the same guest pty session as `eph ssh`. Desktop and terminal are tabs on the box.
       - [ ] **5d — Smoothness (stretch).** RFB gives a responsive desktop, not true 60 fps; if a static
             desktop's Raw updates feel heavy, swap the guest-side server for a video codec / WebRTC path behind
             the same vsock bridge. Only if it earns its complexity.
