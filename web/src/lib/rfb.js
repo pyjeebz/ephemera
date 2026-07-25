@@ -14,8 +14,15 @@ const SPECIAL = {
   F7: 0xffc4, F8: 0xffc5, F9: 0xffc6, F10: 0xffc7, F11: 0xffc8, F12: 0xffc9
 };
 
-export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = () => {} } = {}) {
-  const ctx = canvas.getContext('2d', { alpha: false });
+export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = () => {}, inputOnly = false, inputTarget = null } = {}) {
+  // In input-only mode there is no canvas: the pixels arrive as a separate video
+  // stream, and this connection exists purely to inject pointer/keyboard events
+  // through the VNC server. Input listeners then attach to inputTarget (the video
+  // element) and coordinates scale against the framebuffer size from ServerInit.
+  const ctx = canvas ? canvas.getContext('2d', { alpha: false }) : null;
+  const target = inputTarget || canvas;
+  let fbW = canvas ? canvas.width : 0;
+  let fbH = canvas ? canvas.height : 0;
   const ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
 
@@ -42,7 +49,7 @@ export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = ()
   function requestUpdate(incremental) {
     const m = new Uint8Array(10), dv = new DataView(m.buffer);
     m[0] = 3; m[1] = incremental ? 1 : 0;
-    dv.setUint16(6, canvas.width); dv.setUint16(8, canvas.height);
+    dv.setUint16(6, fbW); dv.setUint16(8, fbH);
     send(m);
   }
 
@@ -62,9 +69,13 @@ export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = ()
     const w = u16(si.subarray(0, 2)), h = u16(si.subarray(2, 4));
     const nameLen = u32(si.subarray(20, 24));
     const name = new TextDecoder().decode(await readExactly(nameLen));
-    canvas.width = w; canvas.height = h;
-    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+    fbW = w; fbH = h;
+    if (canvas) { canvas.width = w; canvas.height = h; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h); }
     onName(name); onStatus(w + '×' + h, 'up');
+
+    // Input-only: the framebuffer size is all we needed. Don't ask for pixels —
+    // a separate video stream carries those — just leave input wired and stop.
+    if (inputOnly) { if (target && target.focus) target.focus(); return; }
 
     send(new Uint8Array([
       0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0
@@ -75,7 +86,7 @@ export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = ()
     send(enc);
 
     requestUpdate(false);
-    canvas.focus();
+    if (target && target.focus) target.focus();
 
     while (true) {
       const type = (await readExactly(1))[0];
@@ -115,9 +126,15 @@ export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = ()
   // --- input ---
   let buttons = 0;
   function pointer(e) {
-    const r = canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(canvas.width - 1, Math.round((e.clientX - r.left) * canvas.width / r.width)));
-    const y = Math.max(0, Math.min(canvas.height - 1, Math.round((e.clientY - r.top) * canvas.height / r.height)));
+    if (!fbW || !fbH) return;
+    const r = target.getBoundingClientRect();
+    // The video/canvas is letterboxed (object-fit: contain), so map from the
+    // displayed content box, not the element box, or the cursor drifts.
+    const scale = Math.min(r.width / fbW, r.height / fbH);
+    const dw = fbW * scale, dh = fbH * scale;
+    const ox = r.left + (r.width - dw) / 2, oy = r.top + (r.height - dh) / 2;
+    const x = Math.max(0, Math.min(fbW - 1, Math.round((e.clientX - ox) / scale)));
+    const y = Math.max(0, Math.min(fbH - 1, Math.round((e.clientY - oy) / scale)));
     const m = new Uint8Array(6), dv = new DataView(m.buffer);
     m[0] = 5; m[1] = buttons; dv.setUint16(2, x); dv.setUint16(4, y);
     send(m);
@@ -135,7 +152,7 @@ export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = ()
     send(m); e.preventDefault();
   }
 
-  const onMouseDown = (e) => { canvas.focus(); buttons |= 1 << e.button; pointer(e); e.preventDefault(); };
+  const onMouseDown = (e) => { if (target.focus) target.focus(); buttons |= 1 << e.button; pointer(e); e.preventDefault(); };
   const onMouseUp = (e) => { buttons &= ~(1 << e.button); pointer(e); e.preventDefault(); };
   const onMouseMove = (e) => pointer(e);
   const onContext = (e) => e.preventDefault();
@@ -146,13 +163,13 @@ export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = ()
   const onKeyDown = (e) => key(e, true);
   const onKeyUp = (e) => key(e, false);
 
-  canvas.addEventListener('mousedown', onMouseDown);
-  canvas.addEventListener('mouseup', onMouseUp);
-  canvas.addEventListener('mousemove', onMouseMove);
-  canvas.addEventListener('contextmenu', onContext);
-  canvas.addEventListener('wheel', onWheel, { passive: false });
-  canvas.addEventListener('keydown', onKeyDown);
-  canvas.addEventListener('keyup', onKeyUp);
+  target.addEventListener('mousedown', onMouseDown);
+  target.addEventListener('mouseup', onMouseUp);
+  target.addEventListener('mousemove', onMouseMove);
+  target.addEventListener('contextmenu', onContext);
+  target.addEventListener('wheel', onWheel, { passive: false });
+  target.addEventListener('keydown', onKeyDown);
+  target.addEventListener('keyup', onKeyUp);
 
   ws.onmessage = (ev) => feed(new Uint8Array(ev.data));
   ws.onopen = () => { onStatus('connecting…'); run().catch((err) => { onStatus(String(err.message || err), 'err'); ws.close(); }); };
@@ -162,13 +179,13 @@ export function connectDesktop(canvas, wsUrl, { onStatus = () => {}, onName = ()
   return {
     close() {
       try { ws.close(); } catch { /* already closed */ }
-      canvas.removeEventListener('mousedown', onMouseDown);
-      canvas.removeEventListener('mouseup', onMouseUp);
-      canvas.removeEventListener('mousemove', onMouseMove);
-      canvas.removeEventListener('contextmenu', onContext);
-      canvas.removeEventListener('wheel', onWheel);
-      canvas.removeEventListener('keydown', onKeyDown);
-      canvas.removeEventListener('keyup', onKeyUp);
+      target.removeEventListener('mousedown', onMouseDown);
+      target.removeEventListener('mouseup', onMouseUp);
+      target.removeEventListener('mousemove', onMouseMove);
+      target.removeEventListener('contextmenu', onContext);
+      target.removeEventListener('wheel', onWheel);
+      target.removeEventListener('keydown', onKeyDown);
+      target.removeEventListener('keyup', onKeyUp);
     }
   };
 }
