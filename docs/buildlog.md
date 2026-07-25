@@ -879,3 +879,46 @@ of a human.
 desktop or its shell, all from the browser. What's left in Phase 5 is only the optional **5d** smoothness
 path, and it stays optional: RFB gives a responsive desktop, and a video codec is a cost we pay only if a
 static desktop ever feels heavy.
+
+---
+
+## Phase 5d — the video path, and a toggle to feel the difference
+
+The RFB desktop sends pixels: changed rectangles, uncompressed. Great for a mostly-still screen, wasteful the
+moment something *moves* — scrolling, a video, an agent dragging windows. The smoothness path is to stop
+sending pixels and start sending **video**.
+
+Back in decision 0009 the claim was that owning the transport keeps the *encoder* swappable — that to get
+smoother we could change what the box produces without touching anything above the vsock bridge. Time to cash
+that in. The box's agent grew a third vsock port that, on connect, starts an **ffmpeg** capturing the X
+display and encodes **H.264** — a per-connection encoder, so a box spends nothing on it until someone opens
+the video view, and the encoder dies the instant they close the tab. The daemon proxies that port to a
+WebSocket exactly like the RFB one (they share a five-line helper now), and the browser plays it through
+**Media Source Extensions** — feed fragmented-MP4 chunks to a `<video>` and it plays.
+
+**It is deliberately not WebRTC.** WebRTC is wonderful and it is also ICE candidates and SDP offers and a
+signaling dance — all of which exist to cross NATs between two machines on the internet. This is localhost
+talking to itself. So the same H.264 win arrives over the WebSocket we already have, with none of that
+machinery. **Lesson: WebRTC's complexity is mostly NAT traversal; when there's no NAT, you don't owe the
+tax.**
+
+One wrinkle worth the telling: a video stream is output only — it carries no way to click. RFB carried input
+*and* output together, and we still want input. So in video mode the pixels come from ffmpeg while **input
+keeps going through the VNC server**: the RFB client gained an *input-only* mode that does the handshake,
+learns the screen size, and then only ever *sends* pointer and keyboard events — it never asks for a
+framebuffer, so x11vnc sends nothing back. Two connections, one desktop: ffmpeg draws it, VNC drives it.
+**Lesson: you can split a protocol's duties across two transports as long as something still owns each half.**
+
+The numbers make the case on their own: an idle desktop over H.264 is about **9 KiB/s**, against RFB's
+multi-megabyte raw frames. The encoder was always the cost, never the pipe — and now it's a *choice*, a
+**Crisp / Smooth** toggle sitting on the desktop. Crisp is RFB: exact pixels, lowest latency, best for
+typing. Smooth is video: fluid motion, a little latency, best for watching. The point of the toggle is that
+you don't have to take my word for which is better — you flip it and feel it.
+
+Verified the plumbing headlessly: the stream through the daemon is a real H.264 fragmented MP4
+(`ftyp`+`moov`+`moof`+`mdat`, codec `avc1.42C01F`), and the input-only path handshakes and accepts a pointer
+event without pulling a single frame. Whether Smooth actually *feels* smoother, and how much latency MSE
+adds — that's the one thing a headless check can't tell you, and the whole reason there's a toggle.
+
+**That's Phase 5.** A box boots in a second, forks in milliseconds, keeps its state if you name it, and now
+hands you a terminal *and* a desktop — crisp or smooth — in a browser tab. ephemera is a computer.

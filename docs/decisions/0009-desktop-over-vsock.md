@@ -121,5 +121,25 @@ browser→box direction, since the client's masked frames are unmasked correctly
 framebuffer** pulls through in 32 KiB WebSocket frames, exercising the 16-bit length path. The remaining
 verification — pixels on a canvas and live mouse/keyboard — is a real browser in front of a human.
 
-_(Still to come: Increment 3 — the SvelteKit web UI that lists boxes and embeds this desktop, and later the
-smoothness path if a static desktop's Raw updates ever feel heavy.)_
+## The video path (5d), and why the swappable encoder paid off
+
+The claim in Decision reason 2 was that owning the transport keeps the encoder swappable — that to chase
+smoothness we could replace the guest-side server behind the *same* vsock bridge and nothing above it would
+move. That is exactly what happened. A **Crisp / Smooth** toggle now sits on the desktop:
+
+- **Crisp** is the RFB framebuffer above — low latency, exact pixels.
+- **Smooth** is **H.264**: the agent runs a per-connection `ffmpeg` capturing the X display, streamed as
+  fragmented MP4 over a third vsock port and decoded in the browser with **Media Source** (`avc1.42C01F`,
+  baseline). Input still flows through the VNC server — the RFB client gained an *input-only* mode that
+  injects pointer/keyboard without ever requesting a framebuffer — so the video desktop stays clickable.
+
+**It is not WebRTC.** WebRTC's machinery (ICE, signaling, SDP) exists to cross NATs, and this is localhost —
+so the same codec win comes from MSE-over-WebSocket with a fraction of the parts. The transport, the daemon
+route pattern, and the input path are all reused; only the guest-side producer changed. Measured ~9 KiB/s
+idle versus RFB's multi-MiB raw frames — the encoder, not the pipe, was always the cost, and now it is a
+choice. The trade is CPU (software H.264, no GPU) and a little latency; the toggle exists so a user can feel
+which they want rather than have it decided for them.
+
+_Verified: the stream is a valid H.264 fragmented MP4 (`ftyp`+`moov`+`moof`+`mdat`) through the daemon, and
+the input-only RFB path handshakes and accepts pointer events without pulling a framebuffer. The felt
+smoothness and MSE latency tuning are, like all of this, a browser in front of a human._

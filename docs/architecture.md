@@ -139,10 +139,15 @@ Each phase is a vertical slice that boots to a working checkpoint.
                   a canvas over the daemon's desktop WebSocket.
             - [x] **Terminal in the UI** — an xterm.js terminal over a shell WebSocket, resizing with the
                   window; the same guest pty session as `eph ssh`. Desktop and terminal are tabs on the box.
-      - [ ] **5d — Smoothness (stretch).** RFB gives a responsive desktop, not true 60 fps; if a static
-            desktop's Raw updates feel heavy, swap the guest-side server for a video codec / WebRTC path behind
-            the same vsock bridge. Only if it earns its complexity.
-      _Checkpoint: a browser desktop you watch an agent use._
+      - [x] **5d — Smoothness (the video path).** A **Crisp / Smooth** toggle on the desktop: Crisp is the
+            RFB framebuffer (low latency); Smooth is **H.264** — the box's agent runs a per-connection `ffmpeg`
+            capture of the X display, streamed as fragmented MP4 over a third vsock port and played in the
+            browser via **Media Source** (`avc1.42C01F`). Far lighter on the wire for motion (~9 KiB/s idle vs
+            RFB's multi-MiB raw frames). Not WebRTC — localhost needs no ICE, so it is MSE-over-WebSocket behind
+            the same vsock bridge. Input in video mode still goes through the VNC server (an input-only RFB
+            client), so the desktop stays clickable. Software encode costs CPU; the toggle lets you judge the
+            trade for yourself.
+      _Checkpoint met: a browser desktop you watch (or drive) an agent use — crisp or smooth, your call._
 
 ## Host requirements (verified on this box)
 
