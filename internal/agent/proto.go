@@ -17,6 +17,13 @@ const Port = 1024
 // nothing listening behind it, and the bridge simply drops the connection.
 const DesktopPort = 1025
 
+// VideoPort is a third guest vsock port that streams the desktop as encoded
+// H.264 (fragmented MP4) instead of raw framebuffer updates: on connect the agent
+// starts an ffmpeg capture of the X display and pipes it out. It is the smoother,
+// lighter-on-the-wire alternative to the RFB desktop, at the cost of CPU to encode
+// and a little latency — a per-connection encoder, so it costs nothing until used.
+const VideoPort = 1026
+
 // ExecRequest asks the guest to run one command. It is sent as a single JSON
 // object, after which the host half-closes nothing and simply reads frames.
 //

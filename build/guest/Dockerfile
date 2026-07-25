@@ -52,5 +52,5 @@ RUN chmod +x /usr/bin/eph-agent
 # default box stays lean and boots fast — you opt into pixels. See ADR 0009.
 ARG DESKTOP=0
 RUN if [ "$DESKTOP" = "1" ]; then \
-      apk add --no-cache xvfb x11vnc openbox xterm font-misc-misc ttf-dejavu; \
+      apk add --no-cache xvfb x11vnc openbox xterm font-misc-misc ttf-dejavu ffmpeg; \
     fi

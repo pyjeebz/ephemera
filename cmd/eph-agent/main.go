@@ -48,6 +48,15 @@ func main() {
 		fmt.Printf("eph-agent: desktop bridge unavailable: %v\n", err)
 	}
 
+	// A third port streams the desktop as encoded H.264 for smoother motion. Like
+	// the desktop bridge it is harmless where nothing backs it (a box without
+	// ffmpeg or an X display just drops the connection).
+	if vfd, err := listen(agent.VideoPort); err == nil {
+		go bridgeVideo(vfd)
+	} else {
+		fmt.Printf("eph-agent: video bridge unavailable: %v\n", err)
+	}
+
 	for {
 		// SOCK_CLOEXEC keeps the connection out of the commands we exec, so a
 		// long-lived child cannot hold the stream open after we close it.
