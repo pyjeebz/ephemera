@@ -17,13 +17,14 @@
       ]);
       const rows = [];
       for (const c of computers) {
+        // Named computers are never desktop boxes, so they offer only a terminal.
         rows.push({ key: 'c:' + c.name, id: c.name, kind: 'kept', running: c.running,
-          addr: c.guest_ip || '—', machineId: c.machine_id || '', computer: true });
+          addr: c.guest_ip || '—', machineId: c.machine_id || '', computer: true, desktop: false });
       }
       for (const m of machines) {
         if (m.computer) continue;
         rows.push({ key: 'm:' + m.id, id: m.id, kind: 'temp', running: true,
-          addr: m.guest_ip || '—', machineId: m.id, computer: false });
+          addr: m.guest_ip || '—', machineId: m.id, computer: false, desktop: !!m.desktop });
       }
       boxes = rows;
       snapshots = snaps;
@@ -109,7 +110,10 @@
               <td class="mono muted">{b.addr}</td>
               <td class="right actions">
                 {#if b.running}
-                  <a class="btn btn-outline btn-sm" href="/box/{b.machineId}" target="_blank" rel="noopener">Desktop</a>
+                  {#if b.desktop}
+                    <a class="btn btn-outline btn-sm" href="/box/{b.machineId}?view=desktop" target="_blank" rel="noopener">Desktop</a>
+                  {/if}
+                  <a class="btn btn-outline btn-sm" href="/box/{b.machineId}?view=terminal" target="_blank" rel="noopener">Terminal</a>
                   <button class="btn btn-ghost btn-sm" onclick={() => snapshot(b)} disabled={busy}>Snapshot</button>
                 {/if}
                 {#if b.computer && b.running}

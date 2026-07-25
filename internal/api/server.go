@@ -154,6 +154,10 @@ type MachineResponse struct {
 	// anonymous ephemeral machine — so a listing can show computers once and
 	// ephemeral machines separately.
 	Computer string `json:"computer,omitempty"`
+
+	// Desktop is true for a box booted with the graphical desktop image, so the UI
+	// only offers "Desktop" where there is one to view.
+	Desktop bool `json:"desktop,omitempty"`
 }
 
 func toResponse(r store.Record) MachineResponse {
@@ -168,6 +172,7 @@ func toResponse(r store.Record) MachineResponse {
 		Tap:       r.Tap,
 		VsockPath: r.VsockPath,
 		Computer:  r.Computer,
+		Desktop:   r.Desktop,
 	}
 }
 
@@ -266,6 +271,9 @@ func (s *Server) bootAndTrack(ctx context.Context, cfg machine.Config, computer 
 		MemMiB:    cfg.MemMiB,
 		StartedAt: m.StartedAt,
 		Computer:  computer,
+		// A desktop box is the one booted through the desktop init; only it has an
+		// X server and VNC to view.
+		Desktop: cfg.Init == machine.DesktopInit,
 	}
 	if lease, ok := m.Lease(); ok {
 		rec.Tap, rec.GuestIP = lease.Tap, lease.Guest.String()

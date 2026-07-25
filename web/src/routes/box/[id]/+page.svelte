@@ -1,12 +1,30 @@
 <script>
+  import { onMount } from 'svelte';
   import { page } from '$app/stores';
+  import { api } from '$lib/api.js';
   import Desktop from '$lib/Desktop.svelte';
   import Video from '$lib/Video.svelte';
   import Terminal from '$lib/Terminal.svelte';
 
   const id = $page.params.id;
-  let tab = $state('desktop');
+  const wantView = $page.url.searchParams.get('view'); // 'desktop' | 'terminal' | null
+
+  let hasDesktop = $state(false);
+  let ready = $state(false);
+  let tab = $state('terminal'); // safe default until we learn what the box has
   let mode = $state('rfb'); // desktop pixels: 'rfb' (crisp) or 'video' (smooth)
+
+  onMount(async () => {
+    // Only a box booted with the desktop image has a graphical desktop; without
+    // this, opening the desktop on a plain box just hangs on a connection to
+    // nothing. So ask the daemon, and offer the desktop only when it exists.
+    try {
+      const m = await api.machine(id);
+      hasDesktop = !!m.desktop;
+    } catch { /* fall back to terminal-only */ }
+    tab = wantView === 'terminal' ? 'terminal' : hasDesktop ? 'desktop' : 'terminal';
+    ready = true;
+  });
 </script>
 
 <svelte:head><title>{id} — ephemera</title></svelte:head>
@@ -20,28 +38,32 @@
     </div>
 
     <div class="controls">
-      {#if tab === 'desktop'}
+      {#if ready && tab === 'desktop'}
         <div class="seg" role="group" aria-label="desktop mode">
           <button class="seg-btn" class:on={mode === 'rfb'} onclick={() => (mode = 'rfb')} title="Raw framebuffer — crisp and low-latency">Crisp</button>
           <button class="seg-btn" class:on={mode === 'video'} onclick={() => (mode = 'video')} title="H.264 video — smoother motion, a little latency">Smooth</button>
         </div>
       {/if}
       <div class="tabs" role="tablist">
-        <button class="tab" class:active={tab === 'desktop'} onclick={() => (tab = 'desktop')}>Desktop</button>
+        {#if hasDesktop}
+          <button class="tab" class:active={tab === 'desktop'} onclick={() => (tab = 'desktop')}>Desktop</button>
+        {/if}
         <button class="tab" class:active={tab === 'terminal'} onclick={() => (tab = 'terminal')}>Terminal</button>
       </div>
     </div>
   </header>
 
   <div class="view">
-    {#if tab === 'desktop'}
-      {#if mode === 'rfb'}
-        {#key 'rfb'}<Desktop {id} />{/key}
+    {#if ready}
+      {#if tab === 'desktop' && hasDesktop}
+        {#if mode === 'rfb'}
+          {#key 'rfb'}<Desktop {id} />{/key}
+        {:else}
+          {#key 'video'}<Video {id} />{/key}
+        {/if}
       {:else}
-        {#key 'video'}<Video {id} />{/key}
+        <Terminal {id} />
       {/if}
-    {:else}
-      <Terminal {id} />
     {/if}
   </div>
 </div>

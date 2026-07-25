@@ -56,6 +56,11 @@ type Record struct {
 	// instance of, empty for an anonymous machine. It links the two so a computer
 	// can be found by its running machine and vice versa.
 	Computer string `json:"computer,omitempty"`
+
+	// Desktop marks a box booted with the graphical desktop image (headless X +
+	// VNC). Only such a box has a desktop to view; the UI uses this so it does not
+	// offer "Desktop" on a box that has nothing behind it.
+	Desktop bool `json:"desktop,omitempty"`
 }
 
 // Store is the daemon's machine registry.

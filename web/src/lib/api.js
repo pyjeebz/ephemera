@@ -22,6 +22,7 @@ async function req(method, path, body) {
 
 export const api = {
   machines: () => req('GET', '/v1/machines').then((r) => r.machines ?? []),
+  machine: (id) => req('GET', '/v1/machines/' + id),
   computers: () => req('GET', '/v1/computers').then((r) => r.computers ?? []),
   snapshots: () => req('GET', '/v1/snapshots').then((r) => r.snapshots ?? []),
 
