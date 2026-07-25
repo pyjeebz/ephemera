@@ -14,7 +14,7 @@ the computer, and you run your own agent (Claude Code, aider, your own) *inside*
 | `eph-jail`     | Helper spawned per VMM: enters the namespaces, pivots, execs Firecracker. |
 | `eph-netadmin` | The one privileged binary — carries `CAP_NET_ADMIN`, creates/destroys TAPs. |
 | Guest agent    | Tiny in-box process (over vsock) for exec / file / tty.                 |
-| Web UI         | SvelteKit desktop-in-browser (VNC) — last phase.                       |
+| Web UI         | SvelteKit SPA (shadcn/Geist), embedded in the daemon, served on `-http`. |
 
 ## Control API
 
@@ -130,8 +130,14 @@ Each phase is a vertical slice that boots to a working checkpoint.
             the RFB stream; open a tab, no native viewer. Both the WebSocket server and the RFB client are
             hand-rolled and dependency-free — no noVNC, no CDN, no build step. _Verified headlessly through the
             WebSocket: upgrade, full RFB handshake both directions, and a full framebuffer through 32 KiB frames._
-      - [ ] **5c — The web UI.** A SvelteKit app: list boxes, click one for its desktop or terminal, buttons
-            for new/stop/fork — drive ephemera from a browser.
+      - [~] **5c — The web UI.** A SvelteKit SPA the daemon embeds (`go:embed`) and serves on an opt-in
+            loopback TCP surface (`ephemerad -http`), same origin as the API and the desktop WebSocket. See
+            [decision 0010](decisions/0010-web-ui-and-http-surface.md). Styled with the shadcn/ui token system
+            and Geist (the Vercel dev-tool look), self-hosted, no CDN.
+            - [x] **Dashboard** — list boxes, new (throwaway/kept/desktop), stop/start/rm, snapshot, fork.
+            - [x] **Desktop in the UI** — a `/box/{id}` route rendering the RFB client (shared as a module) to
+                  a canvas over the daemon's desktop WebSocket.
+            - [ ] **Terminal in the UI** — an in-browser terminal over a shell WebSocket (the remaining piece).
       - [ ] **5d — Smoothness (stretch).** RFB gives a responsive desktop, not true 60 fps; if a static
             desktop's Raw updates feel heavy, swap the guest-side server for a video codec / WebRTC path behind
             the same vsock bridge. Only if it earns its complexity.

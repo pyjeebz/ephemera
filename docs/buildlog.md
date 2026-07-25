@@ -800,3 +800,47 @@ and keys — is a real browser in front of a human.
 **Next:** 5c — the SvelteKit web UI that lists your boxes and embeds this desktop, so the whole thing is a
 tab. (And "60 fps" stays honest: RFB gives a responsive desktop, not smooth full-motion video; the
 video-codec path is a stretch we take only if a static desktop ever feels heavy.)
+
+---
+
+## Phase 5, Increment 3 — the whole thing, in a tab
+
+The desktop worked in a browser, but you still drove everything from the CLI. Increment 3 is the web UI: a
+dashboard that lists your boxes, spins them up, stops and forks them, and opens their desktops — a real
+control panel. Two problems stood between "the daemon" and "a web app," and they are worth naming because
+they shaped the design ([decision 0010](decisions/0010-web-ui-and-http-surface.md)).
+
+**The daemon lives on a Unix socket, and a browser can't dial one.** ephemerad listens on
+`run/ephemerad.sock`, mode 0600 — file permissions instead of an open port, on purpose. So the web surface
+is a deliberate, *opt-in* addition: `ephemerad -http 127.0.0.1:8080` starts a second listener on TCP that
+serves the **same handler** — the whole API, the desktop WebSocket, and the UI — from one origin. Off by
+default, meant for loopback, and it warns if you bind it anywhere routable, because it is the full control
+plane guarded by nothing but the address it sits on. The safe default stays safe; you turn on the browser
+door when you want it.
+
+**A web app is files that have to come from somewhere.** The rest of ephemera is one self-contained binary —
+no CDN, everything embedded. The UI plays by the same rule: `web/` is a SvelteKit SPA, its build lands in
+`internal/webui/dist`, and `go:embed` bakes it into the daemon. One binary ships the UI. The built output is
+committed, so `go build` and the Go tests never need Node; `build.sh` rebuilds it when Node is around. This
+is the one place ephemera stopped hand-rolling from scratch — a Node toolchain enters the repo — and that
+cost is real and bounded to `web/`.
+
+The RFB client I'd written for the standalone page became a **framework-agnostic module** (`lib/rfb.js`):
+hand it a canvas and a WebSocket URL and it renders a desktop and forwards input. The dashboard's "Desktop"
+button opens a `/box/{id}` route that points that module at the daemon's `…/desktop/ws`. Same client, two
+front doors.
+
+**On the look:** the design language is [shadcn/ui](https://ui.shadcn.com)'s token system with
+[Geist](https://vercel.com/font), Vercel's typeface — the palette, radius, and componentry that make
+developer tools feel right, applied by hand rather than pulling in Tailwind. Geist is self-hosted via
+Fontsource so it ships embedded, no CDN, consistent with everything else. **Lesson: a "design system" is
+mostly a set of tokens and a font; you can wear the look without wearing the toolchain.**
+
+Verified headlessly, which for a UI means: the SPA is served (index, hashed assets, and a client route like
+`/box/abc` falling back to the app so the router takes it), the JSON API answers same-origin so the
+dashboard's calls work, a Geist woff2 serves as `font/woff2`, and the desktop WebSocket handshakes through
+the daemon (`RFB 003.008`). What a headless check can't do is *look* at it — the rendered dashboard and the
+live canvas are a browser in front of a human.
+
+**Next:** the last piece of the UI — a terminal in the browser (an in-page terminal over a shell WebSocket),
+so a box offers both its desktop and its shell from the same tab.
