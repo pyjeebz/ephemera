@@ -10,16 +10,26 @@ import (
 	"github.com/pyjeebz/ephemera/internal/wsutil"
 )
 
-// desktopWS bridges a browser to a box's graphical desktop: it upgrades to a
-// WebSocket and proxies the RFB stream to the machine's desktop vsock port. It is
-// the daemon's own version of what `eph desktop` does locally, so the web UI can
-// embed a desktop without a separate bridge process.
+// desktopWS bridges a browser to a box's graphical desktop over RFB: it upgrades
+// to a WebSocket and proxies the raw framebuffer stream to the box's desktop vsock
+// port. It is the daemon's own version of what `eph desktop` does locally, so the
+// web UI can embed a desktop without a separate bridge process.
 //
-// This is reachable on whichever listeners the daemon serves; a browser reaches
-// it only when the daemon was started with -http (a localhost TCP surface, off by
-// default). The pixels still travel out of the box over vsock — a private
-// channel — and are only ever re-exposed to localhost.
+// videoWS is the same, one port over: the box's H.264 stream instead of RFB, for
+// smoother motion. Both are reachable to a browser only on the opt-in -http
+// surface, and both travel out of the box over vsock — a private channel — before
+// being re-exposed to localhost.
 func (s *Server) desktopWS(w http.ResponseWriter, r *http.Request) {
+	s.proxyPort(w, r, agent.DesktopPort)
+}
+
+func (s *Server) videoWS(w http.ResponseWriter, r *http.Request) {
+	s.proxyPort(w, r, agent.VideoPort)
+}
+
+// proxyPort upgrades to a WebSocket and pumps bytes both ways between it and a
+// guest vsock port.
+func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request, port uint32) {
 	m, _, err := s.store.Get(r.PathValue("id"))
 	if err != nil {
 		writeError(w, statusFor(err), err)
@@ -32,8 +42,8 @@ func (s *Server) desktopWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The timeout bounds only the vsock CONNECT handshake; Dial clears the
-	// deadline once attached, so the long-lived RFB stream is not cut off.
-	guest, err := vsock.Dial(vsockPath, agent.DesktopPort, 10*time.Second)
+	// deadline once attached, so the long-lived stream is not cut off.
+	guest, err := vsock.Dial(vsockPath, port, 10*time.Second)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
