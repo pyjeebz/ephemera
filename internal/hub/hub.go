@@ -41,6 +41,12 @@ type DaemonConn struct {
 	conn   Conn
 	reader *bufio.Reader
 
+	// readMu serializes IssueRead calls: the protocol has no
+	// request ids in v0, so replies are matched to asks FIFO.
+	// Without the lock, two concurrent receiver streams could
+	// cross-consume each other's data.
+	readMu sync.Mutex
+
 	writeCh chan []byte   // frames to encode and send
 	replyCh chan []byte   // data payload per IssueRead, FIFO
 	errCh   chan error    // first terminal error wins
@@ -83,11 +89,12 @@ func Accept(reg *share.Registry, conn Conn) (*DaemonConn, error) {
 
 	expires := time.Now().Add(time.Duration(info.TTLSec) * time.Second)
 	reg.Register(share.Info{
-		ID:      info.ShareID,
-		Name:    info.Name,
-		Size:    info.Size,
-		MIME:    info.MIME,
-		Expires: expires,
+		ID:        info.ShareID,
+		Name:      info.Name,
+		Size:      info.Size,
+		MIME:      info.MIME,
+		Expires:   expires,
+		Cacheable: info.Cache,
 	}, d)
 
 	// thesis receipts: every announcement counts
@@ -177,8 +184,12 @@ func (d *DaemonConn) readLoop() {
 }
 
 // IssueRead asks the daemon for bytes. Blocking; one reply per call.
-// Callers serialize requests per receiver stream.
+// Serialized per connection: the reply queue is FIFO, so concurrent
+// callers would cross-consume each other's data. The relay layer
+// may parallelize across connections, never within one.
 func (d *DaemonConn) IssueRead(offset, length int64) ([]byte, error) {
+	d.readMu.Lock()
+	defer d.readMu.Unlock()
 	rd := protocol.Read{ShareID: d.shareID, Offset: offset, Length: length}
 	frame, err := encodeReadFrame(rd)
 	if err != nil {
