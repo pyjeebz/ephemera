@@ -33,6 +33,12 @@ var (
 	// byte occupancy, set by the cache on every mutation.
 	CacheBytesHeld = expvar.NewInt("cache_bytes_held")
 
+	// Layer C: away-mode prefix blobs.
+	AwayBytesStored = expvar.NewInt("away_bytes_stored") // prefix bytes received
+	AwayBytesServed = expvar.NewInt("away_bytes_served") // prefix bytes served offline
+	AwayOutlasts    = expvar.NewInt("away_outlasts")     // receivers who hit the prefix end offline
+	AwayBytesHeld   = expvar.NewInt("away_bytes_held")   // gauge: blob bytes currently held
+
 	// Requests counts receiver-facing requests (page, status, file).
 	Requests = expvar.NewInt("requests")
 
