@@ -29,6 +29,8 @@ const (
 	TRead  uint8 = 3 // relay -> daemon: ask for bytes
 	TData  uint8 = 4 // daemon -> relay: raw bytes answering a TRead
 	TErr   uint8 = 5 // either: stream aborted, with reason
+	TAway  uint8 = 6 // daemon -> relay: layer-C prefix bytes (offset-tagged)
+	TAck   uint8 = 7 // relay -> daemon: ack prefix received (resume hint)
 )
 
 // Frame payload size limits.
@@ -124,7 +126,7 @@ func ReadFrame(r *bufio.Reader) (*Frame, error) {
 	switch typ {
 	case TData:
 		f.Data = buf
-	case THello, TSend, TRead, TErr:
+	case THello, TSend, TRead, TErr, TAway, TAck:
 		f.JSON = buf
 	default:
 		return nil, ErrUnknownType
