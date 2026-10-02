@@ -11,12 +11,16 @@ type Hello struct {
 
 // Send announces one shared file. Size is advisory: the relay trusts
 // the daemon for ranges but re-checks the 5GB abuse cap on every read.
+// Cache=true opts the share into layer B: the relay may keep
+// already-served bytes in volatile RAM for replay while the sender
+// is offline. Default false: senders choose.
 type Send struct {
 	ShareID string `json:"share_id"`
 	Name    string `json:"name"`
 	Size    int64  `json:"size"`
 	MIME    string `json:"mime"`
 	TTLSec  int64  `json:"ttl_sec"`
+	Cache   bool   `json:"cache,omitempty"`
 }
 
 // Read asks the daemon for one byte range of one share. Offset+Length
