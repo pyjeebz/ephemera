@@ -79,6 +79,10 @@
 			if (st.replay) {
 				stateEl.textContent = "The sender is offline, but the parts you already watched replay from memory.";
 				renderReplayDownload(st);
+			} else if (st.prefix > 0) {
+				const mb = (st.prefix / 1048576).toFixed(0);
+				stateEl.textContent = `The sender is offline, but the first ${mb} MB is here. Start watching; the rest streams when they're back.`;
+				renderPrefixPlayer(st);
 			} else {
 				stateEl.textContent = "This link streams live from the sender's device. It'll return when the sender is back online.";
 				renderNotify();
@@ -115,6 +119,22 @@
 		a.href = `/${id}/file`;
 		a.download = (st.name || id) + " (replay)";
 		a.textContent = "Replay what's cached";
+		heroEl.replaceChildren(a);
+	}
+
+	function renderPrefixPlayer(st) {
+		if (STREAMABLE.includes(st.mime)) {
+			const v = document.createElement("video");
+			v.controls = true;
+			v.src = `/${id}/file`;
+			heroEl.replaceChildren(v);
+			return;
+		}
+		const a = document.createElement("a");
+		a.className = "btn";
+		a.href = `/${id}/file`;
+		a.download = st.name || id;
+		a.textContent = "Download the cached start";
 		heroEl.replaceChildren(a);
 	}
 
