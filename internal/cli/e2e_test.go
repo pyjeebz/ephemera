@@ -69,7 +69,7 @@ func TestBinariesEndToEnd(t *testing.T) {
 	relayWS := fmt.Sprintf("ws://127.0.0.1:%d/daemon", port)
 
 	// start relay
-	relayProc := exec.Command(relayBin, "serve", "-addr", fmt.Sprintf("127.0.0.1:%d", port))
+	relayProc := exec.Command(relayBin, "serve", "-addr", fmt.Sprintf("127.0.0.1:%d", port), "-cache-mb", "64")
 	relayLog, _ := os.CreateTemp(t.TempDir(), "relay.log")
 	relayProc.Stderr = relayLog
 	if err := relayProc.Start(); err != nil {
@@ -94,7 +94,7 @@ func TestBinariesEndToEnd(t *testing.T) {
 
 	// start daemon
 	ttl := 90
-	sendProc := exec.Command(ephemeraBin, "send", "-relay", relayWS, "-ttl", strconv.Itoa(ttl), video)
+	sendProc := exec.Command(ephemeraBin, "send", "-relay", relayWS, "-ttl", strconv.Itoa(ttl), "-cache", video)
 	sendLog, _ := os.CreateTemp(t.TempDir(), "send.log")
 	sendProc.Stderr = sendLog
 	if err := sendProc.Start(); err != nil {
@@ -218,18 +218,54 @@ func TestBinariesEndToEnd(t *testing.T) {
 		}
 	}
 
-	// file: 503 with the honest copy
-	resp, err = http.Get(relayURL + "/" + shareID + "/file")
+	// the ranges read while live were 1000-2000, -1024 and the
+	// 1MB open-end: the tail 503s (uncached)…
+	req, _ = http.NewRequest("GET", relayURL+"/"+shareID+"/file", nil)
+	req.Header.Set("Range", "bytes=2000000-")
+	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := io.ReadAll(resp.Body)
+	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("offline file status = %d", resp.StatusCode)
+		t.Fatalf("uncached offline range = %d, want 503", resp.StatusCode)
 	}
-	if !strings.Contains(string(body), "sender's device") {
-		t.Errorf("offline copy: %q", body)
+
+	// …but a previously-watched range replays from relay RAM
+	req, _ = http.NewRequest("GET", relayURL+"/"+shareID+"/file", nil)
+	req.Header.Set("Range", "bytes=1000-2000")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("replay status = %d, want 206", resp.StatusCode)
+	}
+	if len(data) != 1001 {
+		t.Fatalf("replay len = %d, want 1001", len(data))
+	}
+	for i := range data {
+		if data[i] != byte((1000+i)%251) {
+			t.Fatalf("replay byte %d wrong", 1000+i)
+		}
+	}
+
+	// status reports replay while offline
+	resp, err = http.Get(relayURL + "/" + shareID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stt struct {
+		State  string `json:"state"`
+		Replay bool   `json:"replay"`
+	}
+	json.NewDecoder(resp.Body).Decode(&stt)
+	resp.Body.Close()
+	if stt.State != "offline" || !stt.Replay {
+		t.Errorf("offline status = %+v, want offline+replay", stt)
 	}
 
 	// unknown share: 404
