@@ -85,6 +85,7 @@ func (s *Session) Announce() error {
 		Size:    s.Share.Size,
 		MIME:    s.Share.MIME,
 		TTLSec:  s.TTLSec,
+		Cache:   s.Share.Cache,
 	})
 }
 

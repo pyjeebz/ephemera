@@ -52,6 +52,11 @@ type Share struct {
 	Name string
 	Size int64
 	MIME string
+
+	// Cache: the sender opts this share into layer B — the relay
+	// may replay already-served bytes from volatile RAM while the
+	// sender is offline.
+	Cache bool
 }
 
 // ValidateShare checks path against the abuse floor and returns the
