@@ -11,14 +11,15 @@ import (
 // stateFile is the on-disk record of an active share: everything a
 // restart needs to re-share with the same link id.
 type stateFile struct {
-	ShareID   string `json:"share_id"`
-	Path      string `json:"path"`
-	Name      string `json:"name"`
-	Size      int64  `json:"size"`
-	MIME      string `json:"mime"`
-	Cache     bool   `json:"cache,omitempty"`
-	TTLSec    int64  `json:"ttl_sec"`    // original, for reference
-	ExpiresAt int64  `json:"expires_at"` // unix seconds
+	ShareID    string `json:"share_id"`
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	MIME       string `json:"mime"`
+	Cache      bool   `json:"cache,omitempty"`
+	AwayPrefix int64  `json:"away_prefix,omitempty"` // layer C bytes
+	TTLSec     int64  `json:"ttl_sec"`               // original, for reference
+	ExpiresAt  int64  `json:"expires_at"`            // unix seconds
 }
 
 // ErrNoActiveShares is returned when the state dir holds no
@@ -39,14 +40,15 @@ func NewStateDir(dir string) (*StateDir, error) {
 // Save records an active share. Atomic: temp file + rename.
 func (s *StateDir) Save(sh Share, ttlSec int64) error {
 	st := stateFile{
-		ShareID:   sh.ID,
-		Path:      sh.Path,
-		Name:      sh.Name,
-		Size:      sh.Size,
-		MIME:      sh.MIME,
-		Cache:     sh.Cache,
-		TTLSec:    ttlSec,
-		ExpiresAt: time.Now().Add(time.Duration(ttlSec) * time.Second).Unix(),
+		ShareID:    sh.ID,
+		Path:       sh.Path,
+		Name:       sh.Name,
+		Size:       sh.Size,
+		MIME:       sh.MIME,
+		Cache:      sh.Cache,
+		AwayPrefix: sh.AwayPrefixBytes,
+		TTLSec:     ttlSec,
+		ExpiresAt:  time.Now().Add(time.Duration(ttlSec) * time.Second).Unix(),
 	}
 	b, err := json.Marshal(st)
 	if err != nil {
@@ -103,6 +105,7 @@ func (s *StateDir) Active() ([]Share, []int64, error) {
 		sh.ID = st.ShareID
 		sh.MIME = st.MIME
 		sh.Cache = st.Cache
+		sh.AwayPrefixBytes = st.AwayPrefix
 		shares = append(shares, sh)
 		ttls = append(ttls, remain)
 	}
