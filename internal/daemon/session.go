@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"ephemera.run/ephemera/internal/protocol"
@@ -27,6 +28,11 @@ type Session struct {
 	writer io.Writer // frame encoder target; conn for TCP, test pipes otherwise
 	reader *bufio.Reader
 	file   *os.File
+
+	// writeMu serializes frame writes: receiver replies and the
+	// away trickle share the socket, and a TAway header must stay
+	// adjacent to its TData bytes.
+	writeMu sync.Mutex
 }
 
 // NewSession opens the relay connection and wraps it for framing.
@@ -80,12 +86,13 @@ func (s *Session) Announce() error {
 		return err
 	}
 	return protocol.EncodeJSON(s.writer, protocol.TSend, protocol.Send{
-		ShareID: s.Share.ID,
-		Name:    s.Share.Name,
-		Size:    s.Share.Size,
-		MIME:    s.Share.MIME,
-		TTLSec:  s.TTLSec,
-		Cache:   s.Share.Cache,
+		ShareID:         s.Share.ID,
+		Name:            s.Share.Name,
+		Size:            s.Share.Size,
+		MIME:            s.Share.MIME,
+		TTLSec:          s.TTLSec,
+		Cache:           s.Share.Cache,
+		AwayPrefixBytes: s.Share.AwayPrefixBytes,
 	})
 }
 
@@ -126,16 +133,26 @@ func (s *Session) serveRead(rd protocol.Read) error {
 var ErrSessionClosed = errors.New("daemon: session closed by relay")
 
 // Serve reads frames until the connection drops, an IO error occurs,
-// or ctx fires. Each TRead gets a synchronous reply.
+// or stop fires. TReads get synchronous replies; TAcks steer the
+// away trickle; the away upload runs in the background at a pace
+// that never competes with receiver reads.
 func (s *Session) Serve(stop <-chan struct{}) error {
 	type readMsg struct {
-		rd protocol.Read
-		ok bool
+		rd  protocol.Read
+		ack int64 // >0: ack for away bytes (rd zero)
+		ok  bool
 	}
 	msgs := make(chan readMsg, 8)
 	defer close(msgs)
 
-	// decoder goroutine: turns frames into parsed reads
+	// away trickle state: acks move the frontier; pace is fixed and
+	// modest. Reads preempt the trickle.
+	awayCh := make(chan int64, 1) // latest ack value
+	if s.Share.AwayPrefixBytes > 0 {
+		go s.trickleAway(stop, awayCh)
+	}
+
+	// decoder goroutine: turns frames into parsed reads / acks
 	go func() {
 		defer func() { recover() }() // writes to msgs after close
 		for {
@@ -144,13 +161,26 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 				msgs <- readMsg{ok: false}
 				return
 			}
-			if fr.Type == protocol.TRead {
+			switch fr.Type {
+			case protocol.TRead:
 				var rd protocol.Read
 				if json.Unmarshal(fr.JSON, &rd) == nil {
 					msgs <- readMsg{rd: rd, ok: true}
 				}
+			case protocol.TAck:
+				var a protocol.Ack
+				if json.Unmarshal(fr.JSON, &a) == nil && a.ShareID == s.Share.ID {
+					select {
+					case awayCh <- a.Have:
+					default: // keep the latest
+						select {
+						case <-awayCh:
+						default:
+						}
+						awayCh <- a.Have
+					}
+				}
 			}
-			// other frame types: ignored in v0
 		}
 	}()
 
@@ -162,11 +192,83 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 			if !m.ok {
 				return ErrSessionClosed
 			}
-			if err := s.serveRead(m.rd); err != nil {
+			s.writeMu.Lock()
+			err := s.serveRead(m.rd)
+			s.writeMu.Unlock()
+			if err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// awayPace is the prefix trickle's fixed rate: bytes per burst.
+// Small enough that reads always win; big enough to finish a 100MB
+// prefix in a few minutes of idleness.
+const awayBurst = int64(64 << 10) // 64 KiB per burst
+const awayPause = 250 * time.Millisecond
+
+// trickleAway uploads the away prefix in bursts. Each burst is two
+// adjacent frames under one write lock: TAway (JSON header: offset)
+// then TData (the bytes). Each burst waits for its TAck before the
+// next; no ack in time: the relay is gone or refusing — stop quietly.
+func (s *Session) trickleAway(stop <-chan struct{}, acks chan int64) {
+	prefix := min(s.Share.AwayPrefixBytes, s.fileSize())
+	if prefix <= 0 {
+		return
+	}
+
+	have := int64(0)
+	// drain any pre-announce ack the relay sent on accept (redial)
+	select {
+	case have = <-acks:
+	default:
+	}
+
+	for have < prefix {
+		select {
+		case <-stop:
+			return
+		case have = <-acks:
+			// frontier moved (ack for our own or earlier uploads)
+		default:
+		}
+
+		n := min(awayBurst, prefix-have)
+		buf := make([]byte, n)
+		if _, err := s.file.ReadAt(buf, have); err != nil {
+			return
+		}
+
+		// header + data adjacent: the hub pairs them by order
+		s.writeMu.Lock()
+		err := protocol.EncodeJSON(s.writer, protocol.TAway, protocol.Away{ShareID: s.Share.ID, Offset: have})
+		if err == nil {
+			err = protocol.EncodeData(s.writer, buf)
+		}
+		s.writeMu.Unlock()
+		if err != nil {
+			return
+		}
+
+		// wait for this burst's ack before continuing
+		select {
+		case have = <-acks:
+		case <-stop:
+			return
+		case <-time.After(10 * time.Second):
+			return // no ack: relay full or gone
+		}
+	}
+}
+
+// fileSize returns the current size of the open file.
+func (s *Session) fileSize() int64 {
+	st, err := s.file.Stat()
+	if err != nil {
+		return 0
+	}
+	return st.Size()
 }
 
 // Deadline returns the wall-clock expiry of the share, computed from
