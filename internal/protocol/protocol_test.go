@@ -69,17 +69,17 @@ func TestBadMagic(t *testing.T) {
 }
 
 func TestTooLarge(t *testing.T) {
-	huge := bytes.Repeat([]byte{0}, maxBody+1)
+	huge := bytes.Repeat([]byte{0}, MaxBody+1)
 	if err := EncodeData(&bytes.Buffer{}, huge); err == nil {
 		t.Error("EncodeData oversized: no error")
 	}
 	var buf bytes.Buffer
 	_ = writeFrame(&buf, TData, []byte{})
 	b := buf.Bytes()
-	b[5] = 0xFF // little-endian len > maxBody: 0xFFFFFFxx
+	b[5] = 0xFF // little-endian len > MaxBody: 0xFFFFFFxx
 	b[6] = 0xFF
 	b[7] = 0xFF
-	b[8] = 0x7F // keep it > maxBody but < uint32 overflow
+	b[8] = 0x7F // keep it > MaxBody but < uint32 overflow
 	if _, err := ReadFrame(bufio.NewReader(&buf)); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("err = %v, want ErrTooLarge", err)
 	}

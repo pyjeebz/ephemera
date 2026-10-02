@@ -76,7 +76,7 @@ func TestM1FiveGBRangeOverFakeBridge(t *testing.T) {
 	}
 
 	// fake daemon: one Read in, chunked Data out. Same chunking the
-	// real daemon will use — every TData <= maxBody.
+	// real daemon will use — every TData <= MaxBody.
 	serveOne := func() error {
 		fr, err := ReadFrame(daemonIn)
 		if err != nil {
@@ -99,8 +99,8 @@ func TestM1FiveGBRangeOverFakeBridge(t *testing.T) {
 		if _, err := f.ReadAt(buf, rd.Offset); err != nil {
 			return err
 		}
-		for off := 0; off < len(buf); off += maxBody {
-			end := off + maxBody
+		for off := 0; off < len(buf); off += MaxBody {
+			end := off + MaxBody
 			if end > len(buf) {
 				end = len(buf)
 			}
@@ -128,7 +128,7 @@ func TestM1FiveGBRangeOverFakeBridge(t *testing.T) {
 
 	// relay side: parse a Range header, ask the daemon for that
 	// range (bounded to askCap chunks), concatenate TData frames.
-	const askCap = int64(maxBody * 4)
+	const askCap = int64(MaxBody * 4)
 	relayOut := bufio.NewReader(relayR)
 	relayRead := func(header string) (rangepkg.Request, []byte, error) {
 		req, err := rangepkg.Parse(header, size)
