@@ -31,13 +31,23 @@ const (
 	TErr   uint8 = 5 // either: stream aborted, with reason
 )
 
-// Header sizes.
+// Frame payload size limits.
 const (
-	magic     = uint32(0x52485045) // "EPHR" little-endian
-	hdrSize   = 9                  // magic(4) + type(1) + len(4)
-	maxBody   = 1 << 20            // 1 MiB max payload: abuse floor
-	maxMsgLen = 1 << 20            // JSON frames: 1 MiB cap
+	// MaxBody is the largest payload a single frame may carry. TData
+	// chunks are sized to it; reads larger than one frame travel as
+	// multiple consecutive TData frames for the same TRead.
+	MaxBody = 1 << 20
+
+	// MaxMsgLen is the cap for JSON (non-data) frames. Same value as
+	// MaxBody today; separate so they can diverge.
+	MaxMsgLen = 1 << 20
+
+	// hdrSize is the frame header size: magic(4) + type(1) + len(4).
+	hdrSize = 9
 )
+
+// magic marks the start of every frame: "EPHR" little-endian.
+const magic = uint32(0x52485045)
 
 // Errors.
 var (
@@ -50,10 +60,9 @@ var (
 
 // Frame is one decoded message.
 type Frame struct {
-	Type    uint8
-	JSON    []byte // payload for non-data frames (JSON)
-	Data    []byte // payload for TData (raw bytes)
-	ShareID string // filled by DecodeJSON for convenience on TRead
+	Type uint8
+	JSON []byte // payload for non-data frames (JSON)
+	Data []byte // payload for TData (raw bytes)
 }
 
 // EncodeJSON marshals v and writes a framed message of the given type.
@@ -62,7 +71,7 @@ func EncodeJSON(w io.Writer, typ uint8, v any) error {
 	if err != nil {
 		return fmt.Errorf("protocol: marshal: %w", err)
 	}
-	if len(payload) > maxMsgLen {
+	if len(payload) > MaxMsgLen {
 		return ErrTooLarge
 	}
 	return writeFrame(w, typ, payload)
@@ -70,7 +79,7 @@ func EncodeJSON(w io.Writer, typ uint8, v any) error {
 
 // EncodeData writes a TData frame with raw bytes.
 func EncodeData(w io.Writer, data []byte) error {
-	if len(data) > maxBody {
+	if len(data) > MaxBody {
 		return ErrTooLarge
 	}
 	return writeFrame(w, TData, data)
@@ -89,8 +98,7 @@ func writeFrame(w io.Writer, typ uint8, payload []byte) error {
 }
 
 // ReadFrame reads one frame from a buffered stream. The returned
-// payload aliases the internal buffer and is valid until the next
-// ReadFrame call on the same reader.
+// payload aliases a fresh buffer per frame and is safe to hold onto.
 func ReadFrame(r *bufio.Reader) (*Frame, error) {
 	var hdr [hdrSize]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
@@ -101,7 +109,7 @@ func ReadFrame(r *bufio.Reader) (*Frame, error) {
 	}
 	typ := hdr[4]
 	n := binary.LittleEndian.Uint32(hdr[5:9])
-	if n > maxBody {
+	if n > MaxBody {
 		return nil, ErrTooLarge
 	}
 	f := &Frame{Type: typ}
