@@ -20,6 +20,13 @@ type RunConfig struct {
 
 	// Log is optional; nil means logs are discarded.
 	Log *log.Logger
+
+	// KeepAwake, if set, is held for the share's lifetime: the
+	// machine asserts no-sleep while a link is live.
+	KeepAwake *KeepAwake
+
+	// State, if set, persists the share for resume-on-restart.
+	State *StateDir
 }
 
 // Backoff schedule for reconnects: capped exponential with jitter,
@@ -40,6 +47,21 @@ func Run(sh Share, cfg RunConfig) error {
 	logf := cfg.Log
 	if logf == nil {
 		logf = log.New(discard{}, "", 0)
+	}
+
+	// layer A: hold the no-sleep assertion and the resume record
+	// for as long as the share is live
+	if cfg.KeepAwake != nil {
+		if err := cfg.KeepAwake.Start(); err != nil {
+			logf.Printf("keep-awake unavailable: %v", err)
+		}
+		defer cfg.KeepAwake.Stop()
+	}
+	if cfg.State != nil {
+		if err := cfg.State.Save(sh, cfg.TTLSec); err != nil {
+			logf.Printf("state save failed: %v", err)
+		}
+		defer cfg.State.Remove(sh.ID)
 	}
 
 	deadline := time.Now().Add(time.Duration(cfg.TTLSec) * time.Second)
