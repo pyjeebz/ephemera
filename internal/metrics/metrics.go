@@ -16,9 +16,22 @@ var (
 	// BytesServed counts body bytes written to receivers.
 	BytesServed = expvar.NewInt("bytes_served")
 
-	// BytesCachedReplay is phase 8's; declared now so the snapshot
-	// shape is stable across phases.
+	// DarkLinkHits counts file reads that found the sender offline —
+	// the layer-A failure metric.
+	DarkLinkHits = expvar.NewInt("dark_link_hits")
+
+	// CacheHits / CacheMisses count layer-B replay reads. The
+	// hit-rate is the cache's whole reason to exist.
+	CacheHits   = expvar.NewInt("cache_hits")
+	CacheMisses = expvar.NewInt("cache_misses")
+
+	// BytesCachedReplay counts bytes served from the cache while
+	// the sender was offline — the "replay while away" receipt.
 	BytesCachedReplay = expvar.NewInt("bytes_cached_replay")
+
+	// CacheBytesHeld is a gauge, not a counter: the LRU's current
+	// byte occupancy, set by the cache on every mutation.
+	CacheBytesHeld = expvar.NewInt("cache_bytes_held")
 
 	// Requests counts receiver-facing requests (page, status, file).
 	Requests = expvar.NewInt("requests")
@@ -32,10 +45,6 @@ var (
 
 	// RateLimited429 counts requests refused by the limiter.
 	RateLimited429 = expvar.NewInt("rate_limited_429")
-
-	// DarkLinkHits counts file reads that found the sender offline —
-	// the layer-A failure metric.
-	DarkLinkHits = expvar.NewInt("dark_link_hits")
 
 	// BytesRatioSnapshot is a derived value, computed on read.
 	BytesRatioSnapshot = expvar.NewFloat("bytes_ratio")
