@@ -20,13 +20,24 @@ the frame format; it is filled in as phase 3 (protocol) lands.
 
 ## Send frame fields (v0, live)
 
-	share_id  string  unguessable 128-bit base64url id
-	name      string  file name as the receiver sees it
-	size      int64   advisory; relay re-checks the 5GB cap per read
-	mime      string  content type for inline play
-	ttl_sec   int64   link lifetime; relay sweeps at expiry
-	cache     bool    layer B opt-in: relay may replay already-served
-	                bytes from volatile RAM while the sender is offline
+	share_id           string  unguessable 128-bit base64url id
+	name               string  file name as the receiver sees it
+	size               int64   advisory; relay re-checks the 5GB cap per read
+	mime               string  content type for inline play
+	ttl_sec            int64   link lifetime; relay sweeps at expiry
+	cache              bool    layer B opt-in: relay may replay already-served
+	                         bytes from volatile RAM while the sender is offline
+	away_prefix_bytes  int64   layer C opt-in: the daemon trickles this many
+	                         prefix bytes to the relay post-announce (paced,
+	                         ack-driven); the relay serves them offline
+
+## Away trickle (layer C, live)
+
+	Each burst is two adjacent frames: TAway (JSON: share_id,
+	offset) then TData (the bytes). The relay acks every burst with
+	TAck {share_id, have}; a reconnecting daemon resumes from the
+	ack it receives at accept. No ack in time: the trickle stops
+	quietly (relay full, budgeted out, or layer C disabled).
 
 Everything above is subject to change until the fake-bridge test (M1)
 is green.
