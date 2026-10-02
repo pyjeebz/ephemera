@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Ephemera</title>
+<style>
+	:root { color-scheme: light dark; }
+	body {
+		font: 16px/1.5 system-ui, sans-serif;
+		margin: 0; display: grid; place-items: center;
+		min-height: 100vh;
+	}
+	main { max-width: 640px; padding: 2rem; text-align: center; }
+	video { width: 100%; border-radius: 8px; margin-top: 1rem; }
+	a.btn {
+		display: inline-block; margin-top: 1rem; padding: .6rem 1.2rem;
+		border-radius: 8px; background: #2563eb; color: #fff;
+		text-decoration: none; font-weight: 600;
+	}
+	p.state { color: gray; font-style: italic; }
+	h1 { font-size: 1.4rem; }
+</style>
+</head>
+<body>
+<main>
+	<h1 id="name">Ephemera</h1>
+	<p class="state" id="state">connecting…</p>
+	<div id="hero"></div>
+</main>
+<script>
+(() => {
+	const id = location.pathname.split("/").filter(Boolean)[0] || "";
+	const $ = (s) => document.querySelector(s);
+	const nameEl = $("#name"), stateEl = $("#state"), heroEl = $("#hero");
+
+	const STREAMABLE = ["video/mp4", "video/webm", "video/quicktime", "audio/mpeg", "audio/mp4", "audio/wav"];
+
+	let hero = ""; // "video" | "download" | ""
+
+	function render(st) {
+		if (st.name) nameEl.textContent = st.name;
+
+		switch (st.state) {
+		case "live":
+			stateEl.textContent = st.expires
+				? `streams live from the sender's device · expires ${new Date(st.expires * 1000).toLocaleString()}`
+				: "streams live from the sender's device";
+			if (!hero && STREAMABLE.includes(st.mime)) {
+				hero = "video";
+				const v = document.createElement("video");
+				v.controls = true;
+				v.src = `/${id}/file`;
+				v.onerror = () => { hero = "download"; render(st); };
+				heroEl.replaceChildren(v);
+			} else if (!hero) {
+				hero = "download";
+				renderDownload(st);
+			}
+			break;
+		case "offline":
+			hero = "";
+			heroEl.replaceChildren();
+			stateEl.textContent = "This link streams live from the sender's device. It'll return when the sender is back online.";
+			break;
+		case "expired":
+			hero = "";
+			heroEl.replaceChildren();
+			stateEl.textContent = "This link has expired. Ephemera links leave no trace.";
+			return; // stop polling
+		default:
+			hero = "";
+			stateEl.textContent = "This link doesn't exist (or you typo'd it).";
+			return; // 404: stop polling
+		}
+	}
+
+	function renderDownload(st) {
+		const a = document.createElement("a");
+		a.className = "btn";
+		a.href = `/${id}/file`;
+		a.download = st.name || id;
+		a.textContent = "Download";
+		heroEl.replaceChildren(a);
+	}
+
+	async function poll() {
+		try {
+			const resp = await fetch(`/${id}/status`);
+			if (resp.status === 410) { render({state: "expired"}); return false; }
+			if (resp.status === 404) { render({state: "gone"}); return false; }
+			render(await resp.json());
+			return true;
+		} catch {
+			return true; // network blip: keep polling
+		}
+	}
+
+	(async () => {
+		while (await poll()) {
+			await new Promise(r => setTimeout(r, 5000));
+		}
+	})();
+})();
+</script>
+</body>
+</html>
