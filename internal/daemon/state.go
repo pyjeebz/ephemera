@@ -16,6 +16,7 @@ type stateFile struct {
 	Name      string `json:"name"`
 	Size      int64  `json:"size"`
 	MIME      string `json:"mime"`
+	Cache     bool   `json:"cache,omitempty"`
 	TTLSec    int64  `json:"ttl_sec"`    // original, for reference
 	ExpiresAt int64  `json:"expires_at"` // unix seconds
 }
@@ -43,6 +44,7 @@ func (s *StateDir) Save(sh Share, ttlSec int64) error {
 		Name:      sh.Name,
 		Size:      sh.Size,
 		MIME:      sh.MIME,
+		Cache:     sh.Cache,
 		TTLSec:    ttlSec,
 		ExpiresAt: time.Now().Add(time.Duration(ttlSec) * time.Second).Unix(),
 	}
@@ -100,6 +102,7 @@ func (s *StateDir) Active() ([]Share, []int64, error) {
 		// keep the original share id and mime so the link is stable
 		sh.ID = st.ShareID
 		sh.MIME = st.MIME
+		sh.Cache = st.Cache
 		shares = append(shares, sh)
 		ttls = append(ttls, remain)
 	}
