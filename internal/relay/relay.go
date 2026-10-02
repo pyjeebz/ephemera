@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ephemera.run/ephemera/internal/away"
 	"ephemera.run/ephemera/internal/cache"
 	"ephemera.run/ephemera/internal/metrics"
 	httprange "ephemera.run/ephemera/internal/range" // dir range; pkg httprange
@@ -54,6 +55,11 @@ type ServerConfig struct {
 	// sender opted in (Info.Cacheable) use it. Nil disables the
 	// feature server-wide.
 	Cache *cache.Store
+
+	// Away is layer C: the relay's store of away-mode prefix
+	// blobs, uploaded by opt-in daemons. Nil disables away mode
+	// server-wide.
+	Away *away.Store
 }
 
 // Server is the relay HTTP handler.
@@ -213,6 +219,7 @@ type statusBody struct {
 	MIME    string `json:"mime,omitempty"`
 	Expires int64  `json:"expires,omitempty"` // unix seconds
 	Replay  bool   `json:"replay,omitempty"`  // offline but cached bytes replayable
+	Prefix  int64  `json:"prefix,omitempty"`  // offline: away-mode prefix bytes watchable
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +245,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		MIME:    st.info.MIME,
 		Expires: st.info.Expires.Unix(),
 		Replay:  st.state == "offline" && st.info.Cacheable && s.cfg.Cache != nil && s.cacheCoverage(id, 0, st.info.Size) > 0,
+		Prefix:  s.offlinePrefix(st, id),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
@@ -260,41 +268,46 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "This link has expired.")
 		return
 	case "offline":
-		// layer B: replay from volatile cache when the sender opted
-		// in and every requested byte is already cached
-		if s.cfg.Cache != nil && st.info.Cacheable {
-			var start, length int64
-			switch rng, err := httprange.Parse(r.Header.Get("Range"), st.info.Size); {
-			case errors.Is(err, httprange.ErrUnsatisfiable):
-				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", st.info.Size))
-				http.Error(w, "range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
-				return
-			case errors.Is(err, httprange.ErrNoRange), errors.Is(err, httprange.ErrMalformed):
-				start, length = 0, st.info.Size
-			case err != nil:
-				http.Error(w, "bad request", http.StatusBadRequest)
-				return
-			default:
-				start, length = rng.Start, rng.Length()
-			}
-			if s.cacheCoverage(id, start, length) == 1 {
-				// every byte asked for is in RAM: serve the replay
-				metrics.DarkLinkHits.Add(1)
-				w.Header().Set("Accept-Ranges", "bytes")
-				w.Header().Set("Content-Type", contentTypeOf(st.info))
-				w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
-				if start > 0 || length < st.info.Size {
-					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, st.info.Size))
-					w.WriteHeader(http.StatusPartialContent)
-				} else {
-					w.WriteHeader(http.StatusOK)
-				}
-				s.replayBody(w, id, start, length)
-				return
-			}
-			// fall through to the honest offline page
-		}
 		metrics.DarkLinkHits.Add(1)
+		// layers B and C: what can we serve while the sender is gone?
+		var start, length int64
+		switch rng, err := httprange.Parse(r.Header.Get("Range"), st.info.Size); {
+		case errors.Is(err, httprange.ErrUnsatisfiable):
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", st.info.Size))
+			http.Error(w, "range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
+			return
+		case errors.Is(err, httprange.ErrNoRange), errors.Is(err, httprange.ErrMalformed):
+			start, length = 0, st.info.Size
+		case err != nil:
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		default:
+			start, length = rng.Start, rng.Length()
+		}
+
+		// layer B first: exact cached ranges replay from RAM
+		if s.cfg.Cache != nil && st.info.Cacheable && s.cacheCoverage(id, start, length) == 1 {
+			s.serveOfflineRange(w, st.info, start, length)
+			s.replayBody(w, id, start, length)
+			return
+		}
+
+		// layer C: away prefix. The stored prefix covers the head
+		// of the file; serve the covered part of the request.
+		if s.cfg.Away != nil && st.info.AwayPrefix > 0 {
+			if covered := min(length, max(0, s.cfg.Away.Have(id)-start)); covered > 0 {
+				s.serveOfflineRange(w, st.info, start, covered)
+				s.awayBody(w, id, start, covered)
+				if covered < length {
+					// the receiver asked past the prefix end:
+					// count it, end the body short
+					metrics.AwayOutlasts.Add(1)
+				}
+				return
+			}
+		}
+
+		// nothing to serve: the honest offline page
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprintln(w, "This link streams live from the sender's device. It'll return when the sender is back online.")
@@ -340,6 +353,55 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(req.Length(), 10))
 	w.WriteHeader(http.StatusPartialContent)
 	s.streamBody(w, h, info, req.Start, req.Length())
+}
+
+// offlinePrefix reports the away-prefix bytes the relay holds —
+// reported in both live (upload progress) and offline states.
+func (s *Server) offlinePrefix(st stateFor, id string) int64 {
+	if st.info.AwayPrefix <= 0 || s.cfg.Away == nil {
+		return 0
+	}
+	switch st.state {
+	case "live", "offline":
+		return s.cfg.Away.Have(id)
+	default:
+		return 0
+	}
+}
+
+// serveOfflineRange writes the status and headers for an offline
+// (replay or prefix) body, honoring range semantics.
+func (s *Server) serveOfflineRange(w http.ResponseWriter, info share.Info, start, length int64) {
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Type", contentTypeOf(info))
+	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+	if start > 0 || length < info.Size {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, info.Size))
+		w.WriteHeader(http.StatusPartialContent)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// awayBody writes prefix bytes from the away store to the response.
+// Precondition: the store covers [start, start+length).
+func (s *Server) awayBody(w io.Writer, id string, start, length int64) {
+	remaining := length
+	offset := start
+	for remaining > 0 {
+		n := min(s.cfg.ChunkSize, remaining)
+		data := s.cfg.Away.Read(id, offset, n)
+		if data == nil {
+			return // store shrank: end the body short
+		}
+		if _, err := w.Write(data); err != nil {
+			return
+		}
+		metrics.BytesServed.Add(n)
+		metrics.AwayBytesServed.Add(n)
+		offset += n
+		remaining -= n
+	}
 }
 
 // streamBody relays bytes from the daemon to the HTTP response in
