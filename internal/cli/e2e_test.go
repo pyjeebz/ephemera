@@ -69,7 +69,7 @@ func TestBinariesEndToEnd(t *testing.T) {
 	relayWS := fmt.Sprintf("ws://127.0.0.1:%d/daemon", port)
 
 	// start relay
-	relayProc := exec.Command(relayBin, "serve", "-addr", fmt.Sprintf("127.0.0.1:%d", port), "-cache-mb", "64")
+	relayProc := exec.Command(relayBin, "serve", "-addr", fmt.Sprintf("127.0.0.1:%d", port), "-cache-mb", "64", "-away-mb", "64")
 	relayLog, _ := os.CreateTemp(t.TempDir(), "relay.log")
 	relayProc.Stderr = relayLog
 	if err := relayProc.Start(); err != nil {
@@ -94,7 +94,7 @@ func TestBinariesEndToEnd(t *testing.T) {
 
 	// start daemon
 	ttl := 90
-	sendProc := exec.Command(ephemeraBin, "send", "-relay", relayWS, "-ttl", strconv.Itoa(ttl), "-cache", video)
+	sendProc := exec.Command(ephemeraBin, "send", "-relay", relayWS, "-ttl", strconv.Itoa(ttl), "-cache", "-away", "1", video)
 	sendLog, _ := os.CreateTemp(t.TempDir(), "send.log")
 	sendProc.Stderr = sendLog
 	if err := sendProc.Start(); err != nil {
@@ -190,6 +190,25 @@ func TestBinariesEndToEnd(t *testing.T) {
 		t.Fatalf("open-end first byte = %d", data[0])
 	}
 
+	// wait for the away trickle: 1MiB prefix, 64KiB bursts with
+	// pauses — status.prefix reports what the relay holds
+	prefixReady := time.Now().Add(20 * time.Second)
+	for time.Now().Before(prefixReady) {
+		resp, err = http.Get(relayURL + "/" + shareID + "/status")
+		if err == nil {
+			var s struct {
+				Prefix int64 `json:"prefix"`
+				State  string
+			}
+			json.NewDecoder(resp.Body).Decode(&s)
+			resp.Body.Close()
+			if s.Prefix >= 1<<20 {
+				break
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	// kill the daemon -> status flips to offline, file reads 503
 	sendProc.Process.Kill()
 	sendProc.Wait()
@@ -261,11 +280,45 @@ func TestBinariesEndToEnd(t *testing.T) {
 	var stt struct {
 		State  string `json:"state"`
 		Replay bool   `json:"replay"`
+		Prefix int64  `json:"prefix"`
 	}
 	json.NewDecoder(resp.Body).Decode(&stt)
 	resp.Body.Close()
 	if stt.State != "offline" || !stt.Replay {
 		t.Errorf("offline status = %+v, want offline+replay", stt)
+	}
+
+	// layer C: the away prefix (1MiB) was trickled before the kill.
+	// A range inside it serves from the blob; a range past it 503s.
+	if stt.Prefix == 0 {
+		t.Fatal("away prefix never arrived at the relay")
+	}
+	req, _ = http.NewRequest("GET", relayURL+"/"+shareID+"/file", nil)
+	req.Header.Set("Range", "bytes=0-4095")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent || len(data) != 4096 {
+		t.Fatalf("away prefix read = %d len %d", resp.StatusCode, len(data))
+	}
+	for i := range data {
+		if data[i] != byte(i%251) {
+			t.Fatalf("away prefix byte %d wrong", i)
+		}
+	}
+	req, _ = http.NewRequest("GET", relayURL+"/"+shareID+"/file", nil)
+	req.Header.Set("Range", "bytes=1500000-")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("past-prefix read = %d, want 503", resp.StatusCode)
 	}
 
 	// unknown share: 404
