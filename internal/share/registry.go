@@ -111,6 +111,21 @@ func (r *Registry) Detach(id string, h Handle) {
 	}
 }
 
+// Kill force-expires a share immediately: removed from the table,
+// handle detached. Returns false when the id was never registered.
+func (r *Registry) Kill(id string) bool {
+	r.mu.Lock()
+	e, ok := r.shares[id]
+	if ok {
+		delete(r.shares, id)
+	}
+	r.mu.Unlock()
+	if ok && e.handle != nil {
+		e.handle.Close()
+	}
+	return ok
+}
+
 // Sweep removes expired shares once. Exported for tests.
 func (r *Registry) Sweep() {
 	r.mu.Lock()
