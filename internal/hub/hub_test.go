@@ -116,7 +116,7 @@ func TestAcceptRegistersAndServes(t *testing.T) {
 
 	_, relayR, relayW, ann := startFakeDaemon(t, size, 3600)
 
-	d, err := Accept(reg, &pipeConn{r: relayR, w: relayW})
+	d, err := (&Bridge{Registry: reg}).Accept(&pipeConn{r: relayR, w: relayW})
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestIssueReadAfterDaemonHangsUp(t *testing.T) {
 
 	fd, relayR, relayW, ann := startFakeDaemon(t, size, 3600)
 
-	d, err := Accept(reg, &pipeConn{r: relayR, w: relayW})
+	d, err := (&Bridge{Registry: reg}).Accept(&pipeConn{r: relayR, w: relayW})
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestSequentialReadsFIFO(t *testing.T) {
 	reg := share.NewRegistry(time.Hour)
 	_, relayR, relayW, _ := startFakeDaemon(t, size, 3600)
 
-	d, err := Accept(reg, &pipeConn{r: relayR, w: relayW})
+	d, err := (&Bridge{Registry: reg}).Accept(&pipeConn{r: relayR, w: relayW})
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestBadHandshake(t *testing.T) {
 	if err := protocol.EncodeJSON(w, protocol.TSend, protocol.Send{ShareID: "x", Size: 1, TTLSec: 10}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Accept(reg, &pipeConn{r: r, w: w}); err == nil {
+	if _, err := (&Bridge{Registry: reg}).Accept(&pipeConn{r: r, w: w}); err == nil {
 		t.Fatal("expected handshake error")
 	}
 
@@ -259,7 +259,7 @@ func TestBadHandshake(t *testing.T) {
 	defer w2.Close()
 	protocol.EncodeJSON(w2, protocol.THello, protocol.Hello{Version: "0"})
 	w2.Write([]byte("not a frame at all"))
-	if _, err := Accept(reg, &pipeConn{r: r2, w: w2}); err == nil {
+	if _, err := (&Bridge{Registry: reg}).Accept(&pipeConn{r: r2, w: w2}); err == nil {
 		t.Fatal("expected send-frame error")
 	}
 

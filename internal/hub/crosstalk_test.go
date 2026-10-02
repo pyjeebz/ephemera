@@ -19,7 +19,7 @@ func TestConcurrentReadsNoCrossTalk(t *testing.T) {
 	reg := share.NewRegistry(time.Hour)
 	_, relayR, relayW, ann := startFakeDaemon(t, size, 3600)
 
-	d, err := Accept(reg, &pipeConn{r: relayR, w: relayW})
+	d, err := (&Bridge{Registry: reg}).Accept(&pipeConn{r: relayR, w: relayW})
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
