@@ -12,6 +12,7 @@ package hub
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"ephemera.run/ephemera/internal/away"
 	"ephemera.run/ephemera/internal/metrics"
 	"ephemera.run/ephemera/internal/protocol"
 	"ephemera.run/ephemera/internal/share"
@@ -33,7 +35,7 @@ type Conn interface {
 
 // DaemonConn is one live daemon socket carrying one share.
 type DaemonConn struct {
-	registry *share.Registry
+	bridge *Bridge
 
 	shareID string
 	ttlSec  int64
@@ -60,18 +62,27 @@ type DaemonConn struct {
 // offline state, not a 410.
 var ErrDaemonGone = errors.New("hub: daemon connection gone")
 
+// Bridge configures what Accept connects the daemon to. Zero value
+// works: no away store means away frames are refused (the daemon
+// stops trickling) and the rest runs as before.
+type Bridge struct {
+	Registry *share.Registry
+	Away     *away.Store // nil: layer C disabled
+}
+
 // Accept takes ownership of a freshly connected daemon socket:
-// it reads hello + send, registers the share, and starts the
-// pump goroutines. Callers hand the socket straight from Accept/Dial.
-func Accept(reg *share.Registry, conn Conn) (*DaemonConn, error) {
+// it reads hello + send, registers the share, acks any away prefix
+// the relay already holds (resume hint), and starts the pump
+// goroutines. Callers hand the socket straight from Accept/Dial.
+func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 	d := &DaemonConn{
-		registry: reg,
-		conn:     conn,
-		reader:   bufio.NewReader(conn),
-		writeCh:  make(chan []byte, 16),
-		replyCh:  make(chan []byte, 4),
-		errCh:    make(chan error, 1),
-		done:     make(chan struct{}),
+		bridge:  b,
+		conn:    conn,
+		reader:  bufio.NewReader(conn),
+		writeCh: make(chan []byte, 16),
+		replyCh: make(chan []byte, 4),
+		errCh:   make(chan error, 1),
+		done:    make(chan struct{}),
 	}
 
 	// hello + send arrive before anything else
@@ -88,14 +99,24 @@ func Accept(reg *share.Registry, conn Conn) (*DaemonConn, error) {
 	d.ttlSec = info.TTLSec
 
 	expires := time.Now().Add(time.Duration(info.TTLSec) * time.Second)
+	reg := b.Registry
 	reg.Register(share.Info{
-		ID:        info.ShareID,
-		Name:      info.Name,
-		Size:      info.Size,
-		MIME:      info.MIME,
-		Expires:   expires,
-		Cacheable: info.Cache,
+		ID:         info.ShareID,
+		Name:       info.Name,
+		Size:       info.Size,
+		MIME:       info.MIME,
+		Expires:    expires,
+		Cacheable:  info.Cache,
+		AwayPrefix: min(info.AwayPrefixBytes, info.Size),
 	}, d)
+
+	// resume hint: if the relay already holds prefix bytes for this
+	// share (daemon redial), tell the daemon where to continue
+	if b.Away != nil && info.AwayPrefixBytes > 0 {
+		if have := b.Away.Have(info.ShareID); have > 0 {
+			d.sendJSON(protocol.TAck, protocol.Ack{ShareID: info.ShareID, Have: have})
+		}
+	}
 
 	// thesis receipts: every announcement counts
 	metrics.SharesStarted.Add(1)
@@ -155,7 +176,8 @@ func (d *DaemonConn) writeLoop() {
 }
 
 // readLoop decodes frames: TData goes to the FIFO reply queue,
-// TErr fails the waiting reader, anything else is skipped.
+// TAway extends the away blob (acking progress), TErr fails the
+// waiting reader, anything else is skipped.
 func (d *DaemonConn) readLoop() {
 	for {
 		fr, err := protocol.ReadFrame(d.reader)
@@ -170,6 +192,23 @@ func (d *DaemonConn) readLoop() {
 			case <-d.done:
 				return
 			}
+		case protocol.TAway:
+			// layer C: TAway header is immediately followed by its
+			// TData bytes (the daemon writes them adjacent under
+			// one lock). Consume the pair atomically.
+			var a protocol.Away
+			if json.Unmarshal(fr.JSON, &a) != nil || a.ShareID != d.shareID {
+				continue
+			}
+			dataFr, err := protocol.ReadFrame(d.reader)
+			if err != nil {
+				d.fail(err)
+				return
+			}
+			if dataFr.Type != protocol.TData {
+				continue // protocol violation: drop, trickle stalls on no-ack
+			}
+			d.handleAway(a, dataFr.Data)
 		case protocol.TErr:
 			var e protocol.Err
 			if json.Unmarshal(fr.JSON, &e) != nil {
@@ -180,6 +219,31 @@ func (d *DaemonConn) readLoop() {
 		default:
 			// v0: no other frame types matter
 		}
+	}
+}
+
+// handleAway appends prefix bytes to the away blob and acks the
+// new length, so a redialing daemon resumes from the ack.
+func (d *DaemonConn) handleAway(a protocol.Away, data []byte) {
+	st := d.bridge.Away
+	if st == nil {
+		return // layer C disabled: never ack; daemon stops quietly
+	}
+	have := st.Put(a.ShareID, a.Offset, data)
+	d.sendJSON(protocol.TAck, protocol.Ack{ShareID: a.ShareID, Have: have})
+}
+
+// sendJSON queues a framed JSON message on the writer pump.
+func (d *DaemonConn) sendJSON(typ uint8, v any) {
+	buf := &bytes.Buffer{}
+	if err := protocol.EncodeJSON(buf, typ, v); err != nil {
+		return
+	}
+	select {
+	case d.writeCh <- buf.Bytes():
+	case <-d.done:
+	default:
+		// pump backlog full: the ack is advisory, drop it
 	}
 }
 
@@ -257,8 +321,8 @@ func (d *DaemonConn) fail(cause error) {
 		default:
 		}
 		d.conn.Close()
-		if d.registry != nil && d.shareID != "" {
-			d.registry.Detach(d.shareID, d)
+		if d.bridge != nil && d.bridge.Registry != nil && d.shareID != "" {
+			d.bridge.Registry.Detach(d.shareID, d)
 		}
 	})
 	_ = cause
