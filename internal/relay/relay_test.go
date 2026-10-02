@@ -308,7 +308,7 @@ func TestEndToEndThroughHub(t *testing.T) {
 		serveReads(dConn, body)
 	}()
 
-	if _, err := hub.Accept(reg, rConn); err != nil {
+	if _, err := (&hub.Bridge{Registry: reg}).Accept(rConn); err != nil {
 		t.Fatalf("hub accept: %v", err)
 	}
 
