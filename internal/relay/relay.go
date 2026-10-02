@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ephemera.run/ephemera/internal/cache"
 	"ephemera.run/ephemera/internal/metrics"
 	httprange "ephemera.run/ephemera/internal/range" // dir range; pkg httprange
 	"ephemera.run/ephemera/internal/ratelimit"
@@ -47,6 +48,12 @@ type ServerConfig struct {
 
 	// AdminToken gates /admin/* routes. Empty disables them.
 	AdminToken string
+
+	// Cache is layer B: volatile storage of already-served bytes,
+	// serving replay while senders are offline. Only shares the
+	// sender opted in (Info.Cacheable) use it. Nil disables the
+	// feature server-wide.
+	Cache *cache.Store
 }
 
 // Server is the relay HTTP handler.
@@ -205,6 +212,7 @@ type statusBody struct {
 	Size    int64  `json:"size,omitempty"`
 	MIME    string `json:"mime,omitempty"`
 	Expires int64  `json:"expires,omitempty"` // unix seconds
+	Replay  bool   `json:"replay,omitempty"`  // offline but cached bytes replayable
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +237,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Size:    st.info.Size,
 		MIME:    st.info.MIME,
 		Expires: st.info.Expires.Unix(),
+		Replay:  st.state == "offline" && st.info.Cacheable && s.cfg.Cache != nil && s.cacheCoverage(id, 0, st.info.Size) > 0,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
@@ -251,6 +260,40 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "This link has expired.")
 		return
 	case "offline":
+		// layer B: replay from volatile cache when the sender opted
+		// in and every requested byte is already cached
+		if s.cfg.Cache != nil && st.info.Cacheable {
+			var start, length int64
+			switch rng, err := httprange.Parse(r.Header.Get("Range"), st.info.Size); {
+			case errors.Is(err, httprange.ErrUnsatisfiable):
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", st.info.Size))
+				http.Error(w, "range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
+				return
+			case errors.Is(err, httprange.ErrNoRange), errors.Is(err, httprange.ErrMalformed):
+				start, length = 0, st.info.Size
+			case err != nil:
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			default:
+				start, length = rng.Start, rng.Length()
+			}
+			if s.cacheCoverage(id, start, length) == 1 {
+				// every byte asked for is in RAM: serve the replay
+				metrics.DarkLinkHits.Add(1)
+				w.Header().Set("Accept-Ranges", "bytes")
+				w.Header().Set("Content-Type", contentTypeOf(st.info))
+				w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+				if start > 0 || length < st.info.Size {
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, st.info.Size))
+					w.WriteHeader(http.StatusPartialContent)
+				} else {
+					w.WriteHeader(http.StatusOK)
+				}
+				s.replayBody(w, id, start, length)
+				return
+			}
+			// fall through to the honest offline page
+		}
 		metrics.DarkLinkHits.Add(1)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -285,7 +328,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		// 200 full body
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		w.WriteHeader(http.StatusOK)
-		s.streamBody(w, h, 0, size)
+		s.streamBody(w, h, info, 0, size)
 		return
 	case err != nil:
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -296,15 +339,15 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Range", req.ContentRange(size))
 	w.Header().Set("Content-Length", strconv.FormatInt(req.Length(), 10))
 	w.WriteHeader(http.StatusPartialContent)
-	s.streamBody(w, h, req.Start, req.Length())
+	s.streamBody(w, h, info, req.Start, req.Length())
 }
 
 // streamBody relays bytes from the daemon to the HTTP response in
-// cfg.ChunkSize bounded reads. A daemon drop mid-stream just ends
-// the body: browsers treat it like a network hiccup and the page
-// recovers via /status polling. Served bytes are counted — the
-// thesis receipt.
-func (s *Server) streamBody(w io.Writer, h share.Handle, start, length int64) {
+// chunk-bounded reads, writing through to the layer-B cache when
+// the share opted in. A daemon drop mid-stream just ends the body:
+// browsers treat it like a network hiccup and the page recovers via
+// /status polling. Served bytes are counted — the thesis receipt.
+func (s *Server) streamBody(w io.Writer, h share.Handle, sh share.Info, start, length int64) {
 	remaining := length
 	offset := start
 	for remaining > 0 {
@@ -322,6 +365,65 @@ func (s *Server) streamBody(w io.Writer, h share.Handle, start, length int64) {
 			return // receiver hung up; stop reading from the daemon
 		}
 		metrics.BytesServed.Add(n)
+		s.cacheWriteThrough(sh, offset, data)
+		offset += n
+		remaining -= n
+	}
+}
+
+// cacheWriteThrough stores served bytes for replay, grid-aligned.
+// Unaligned chunks (range tails) are stored as-is with their own
+// offsets: Get matches exactly, coverage walks the grid.
+func (s *Server) cacheWriteThrough(sh share.Info, offset int64, data []byte) {
+	if s.cfg.Cache == nil || !sh.Cacheable {
+		return
+	}
+	metrics.CacheMisses.Add(0) // no-op: keep metric registered even when unused
+	s.cfg.Cache.Put(sh.ID, offset, data)
+}
+
+// cacheCoverage answers: what fraction of [start, start+length) is
+// currently in the cache? It walks the same chunking streamBody
+// used when the bytes were served live, so the probes match the
+// stored entries exactly.
+func (s *Server) cacheCoverage(id string, start, length int64) float64 {
+	if s.cfg.Cache == nil {
+		return 0
+	}
+	cached := int64(0)
+	remaining := length
+	offset := start
+	for remaining > 0 {
+		n := min(s.cfg.ChunkSize, remaining)
+		if s.cfg.Cache.Get(id, offset, n) != nil {
+			cached += n
+		}
+		offset += n
+		remaining -= n
+	}
+	if length == 0 {
+		return 0
+	}
+	return float64(cached) / float64(length)
+}
+
+// replayBody writes cached bytes to the response. Precondition:
+// coverage == 1 (the caller checked).
+func (s *Server) replayBody(w io.Writer, id string, start, length int64) {
+	remaining := length
+	offset := start
+	for remaining > 0 {
+		n := min(s.cfg.ChunkSize, remaining)
+		data := s.cfg.Cache.Get(id, offset, n)
+		if data == nil {
+			// coverage said this was cached; treat a miss as end
+			return
+		}
+		if _, err := w.Write(data); err != nil {
+			return
+		}
+		metrics.BytesServed.Add(n)
+		metrics.BytesCachedReplay.Add(n)
 		offset += n
 		remaining -= n
 	}
