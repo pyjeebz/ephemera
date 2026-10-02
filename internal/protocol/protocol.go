@@ -85,15 +85,16 @@ func EncodeData(w io.Writer, data []byte) error {
 	return writeFrame(w, TData, data)
 }
 
+// writeFrame emits one frame in a single Write call. This is a
+// protocol invariant: transports map one Write to one message
+// (WebSocket), so a frame must never be split across writes.
 func writeFrame(w io.Writer, typ uint8, payload []byte) error {
-	var hdr [hdrSize]byte
-	binary.LittleEndian.PutUint32(hdr[0:4], magic)
-	hdr[4] = typ
-	binary.LittleEndian.PutUint32(hdr[5:9], uint32(len(payload)))
-	if _, err := w.Write(hdr[:]); err != nil {
-		return err
-	}
-	_, err := w.Write(payload)
+	buf := make([]byte, hdrSize+len(payload))
+	binary.LittleEndian.PutUint32(buf[0:4], magic)
+	buf[4] = typ
+	binary.LittleEndian.PutUint32(buf[5:9], uint32(len(payload)))
+	copy(buf[hdrSize:], payload)
+	_, err := w.Write(buf)
 	return err
 }
 
