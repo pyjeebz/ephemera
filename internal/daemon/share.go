@@ -57,6 +57,11 @@ type Share struct {
 	// may replay already-served bytes from volatile RAM while the
 	// sender is offline.
 	Cache bool
+
+	// AwayPrefixBytes: layer C opt-in. The daemon trickles this
+	// many prefix bytes to the relay post-announce; the relay
+	// serves them while the sender is offline. 0 = off.
+	AwayPrefixBytes int64
 }
 
 // ValidateShare checks path against the abuse floor and returns the
