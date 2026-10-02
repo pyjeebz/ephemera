@@ -1,0 +1,8 @@
+# build-in-public drafts stay out of git until posted
+posts/
+
+# build artifacts
+/bin/
+*.test
+*.out
+dist/
