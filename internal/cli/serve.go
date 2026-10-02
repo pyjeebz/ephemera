@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 
 	"ephemera.run/ephemera/internal/hub"
+	"ephemera.run/ephemera/internal/ratelimit"
 	"ephemera.run/ephemera/internal/relay"
 	"ephemera.run/ephemera/internal/share"
 	"ephemera.run/ephemera/internal/wsconn"
@@ -18,8 +19,9 @@ import (
 
 // serveFlags holds the flags of the relay serve subcommand.
 type serveFlags struct {
-	addr string
-	tcp  string // optional raw TCP bridge listener (host:port)
+	addr       string
+	tcp        string // optional raw TCP bridge listener (host:port)
+	adminToken string
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -30,6 +32,7 @@ func runServe(args []string) error {
 	var f serveFlags
 	fs.StringVar(&f.addr, "addr", ":7100", "HTTP listen address")
 	fs.StringVar(&f.tcp, "tcp", "", "also accept raw framed TCP daemon connections on host:port (dev/test)")
+	fs.StringVar(&f.adminToken, "admin-token", os.Getenv("EPHEMERA_ADMIN_TOKEN"), "admin API token (or EPHEMERA_ADMIN_TOKEN); empty disables admin routes")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -45,7 +48,11 @@ func runServe(args []string) error {
 		hub.Accept(reg, wsconn.Wrap(c))
 	})
 
-	surface := relay.New(relay.ServerConfig{Registry: reg})
+	surface := relay.New(relay.ServerConfig{
+		Registry:   reg,
+		Limiter:    ratelimit.New(20, 40), // 20 r/s sustained, burst 40 per IP
+		AdminToken: f.adminToken,
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/daemon", daemonBridge)
