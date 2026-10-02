@@ -14,6 +14,7 @@
 	}
 	main { max-width: 640px; padding: 2rem; text-align: center; }
 	video { width: 100%; border-radius: 8px; margin-top: 1rem; }
+	button.btn { cursor: pointer; border: none; font: inherit; }
 	a.btn {
 		display: inline-block; margin-top: 1rem; padding: .6rem 1.2rem;
 		border-radius: 8px; background: #2563eb; color: #fff;
@@ -38,15 +39,28 @@
 	const STREAMABLE = ["video/mp4", "video/webm", "video/quicktime", "audio/mpeg", "audio/mp4", "audio/wav"];
 
 	let hero = ""; // "video" | "download" | ""
+	let countdownTimer = null;
 
 	function render(st) {
 		if (st.name) nameEl.textContent = st.name;
 
+		// clear any countdown from the previous render
+		if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+
 		switch (st.state) {
 		case "live":
-			stateEl.textContent = st.expires
-				? `streams live from the sender's device · expires ${new Date(st.expires * 1000).toLocaleString()}`
-				: "streams live from the sender's device";
+			if (st.expires) {
+				const tick = () => {
+					const left = st.expires - Date.now()/1000;
+					if (left <= 0) { pollNow(); return; }
+					const h = Math.floor(left/3600), m = Math.floor(left%3600/60), s = Math.floor(left%60);
+					stateEl.textContent = `streams live from the sender's device · link expires in ${h}h ${m}m ${s}s`;
+				};
+				tick();
+				countdownTimer = setInterval(tick, 1000);
+			} else {
+				stateEl.textContent = "streams live from the sender's device";
+			}
 			if (!hero && STREAMABLE.includes(st.mime)) {
 				hero = "video";
 				const v = document.createElement("video");
@@ -63,6 +77,7 @@
 			hero = "";
 			heroEl.replaceChildren();
 			stateEl.textContent = "This link streams live from the sender's device. It'll return when the sender is back online.";
+			renderNotify();
 			break;
 		case "expired":
 			hero = "";
@@ -76,6 +91,19 @@
 		}
 	}
 
+	function renderNotify() {
+		const btn = document.createElement("button");
+		btn.textContent = "Ping me when it's back";
+		btn.className = "btn";
+		btn.style.background = "#9ca3af";
+		btn.onclick = () => {
+			btn.textContent = "Will do — leave this tab open";
+			btn.disabled = true;
+			pollFast = true; // poll every 1s until back
+		};
+		heroEl.replaceChildren(btn);
+	}
+
 	function renderDownload(st) {
 		const a = document.createElement("a");
 		a.className = "btn";
@@ -85,21 +113,31 @@
 		heroEl.replaceChildren(a);
 	}
 
+	let pollFast = false;
+
 	async function poll() {
 		try {
 			const resp = await fetch(`/${id}/status`);
 			if (resp.status === 410) { render({state: "expired"}); return false; }
 			if (resp.status === 404) { render({state: "gone"}); return false; }
-			render(await resp.json());
-			return true;
+			const wasOffline = lastState === "offline";
+			const st = await resp.json();
+			lastState = st.state;
+			render(st);
+			if (wasOffline && st.state === "live") pollFast = false; // back: normal cadence
+			return st.state !== "expired" && st.state !== "gone";
 		} catch {
 			return true; // network blip: keep polling
 		}
 	}
 
+	async function pollNow() { await poll(); }
+
+	let lastState = "";
+
 	(async () => {
 		while (await poll()) {
-			await new Promise(r => setTimeout(r, 5000));
+			await new Promise(r => setTimeout(r, pollFast ? 1000 : 5000));
 		}
 	})();
 })();
