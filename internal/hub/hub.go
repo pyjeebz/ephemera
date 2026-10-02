@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"ephemera.run/ephemera/internal/metrics"
 	"ephemera.run/ephemera/internal/protocol"
 	"ephemera.run/ephemera/internal/share"
 )
@@ -88,6 +89,11 @@ func Accept(reg *share.Registry, conn Conn) (*DaemonConn, error) {
 		MIME:    info.MIME,
 		Expires: expires,
 	}, d)
+
+	// thesis receipts: every announcement counts
+	metrics.SharesStarted.Add(1)
+	metrics.BytesAnnounced.Add(info.Size)
+	metrics.UpdateRatio()
 
 	// pump goroutines
 	go d.writeLoop()
