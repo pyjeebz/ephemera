@@ -44,6 +44,7 @@ func dialFunc(relay string) func() (net.Conn, error) {
 type sendFlags struct {
 	relay string
 	ttl   int64
+	cache bool
 }
 
 // runSend validates the file, connects to the relay, and runs the
@@ -55,6 +56,7 @@ func runSend(args []string) error {
 	var f sendFlags
 	fs.StringVar(&f.relay, "relay", "ws://localhost:7100/daemon", "relay endpoint (ws:// host:port/daemon or tcp://host:port)")
 	fs.Int64Var(&f.ttl, "ttl", 3600, "link lifetime in seconds")
+	fs.BoolVar(&f.cache, "cache", false, "let the relay replay already-watched bytes from RAM while you're offline")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -67,6 +69,7 @@ func runSend(args []string) error {
 	if err != nil {
 		return err
 	}
+	sh.Cache = f.cache
 
 	fmt.Fprintf(os.Stderr, "sharing %s (%d bytes, %s) for %ds\n", sh.Name, sh.Size, sh.MIME, f.ttl)
 	fmt.Fprintf(os.Stderr, "link: https://ephemera.run/%s\n", sh.ID)
