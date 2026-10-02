@@ -45,6 +45,7 @@ type sendFlags struct {
 	relay string
 	ttl   int64
 	cache bool
+	away  int64 // MiB of prefix to upload for away mode; 0 = off
 }
 
 // runSend validates the file, connects to the relay, and runs the
@@ -57,6 +58,7 @@ func runSend(args []string) error {
 	fs.StringVar(&f.relay, "relay", "ws://localhost:7100/daemon", "relay endpoint (ws:// host:port/daemon or tcp://host:port)")
 	fs.Int64Var(&f.ttl, "ttl", 3600, "link lifetime in seconds")
 	fs.BoolVar(&f.cache, "cache", false, "let the relay replay already-watched bytes from RAM while you're offline")
+	fs.Int64Var(&f.away, "away", 0, "upload this many MiB of the file's start so people can begin watching while you're offline")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -70,6 +72,9 @@ func runSend(args []string) error {
 		return err
 	}
 	sh.Cache = f.cache
+	if f.away > 0 {
+		sh.AwayPrefixBytes = f.away << 20
+	}
 
 	fmt.Fprintf(os.Stderr, "sharing %s (%d bytes, %s) for %ds\n", sh.Name, sh.Size, sh.MIME, f.ttl)
 	fmt.Fprintf(os.Stderr, "link: https://ephemera.run/%s\n", sh.ID)
