@@ -22,13 +22,13 @@ func runSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var f sendFlags
-	fs.StringVar(&f.relay, "relay", "ephemera.run:7100", "relay address (host:port)")
+	fs.StringVar(&f.relay, "relay", "ws://localhost:7100/daemon", "relay endpoint (ws:// host:port/daemon or tcp://host:port)")
 	fs.Int64Var(&f.ttl, "ttl", 3600, "link lifetime in seconds")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: ephemera send [-relay host:port] [-ttl seconds] <file>")
+		return errors.New("usage: ephemera send [-relay endpoint] [-ttl seconds] <file>")
 	}
 	path := fs.Arg(0)
 
@@ -38,10 +38,11 @@ func runSend(args []string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "sharing %s (%d bytes, %s) for %ds\n", sh.Name, sh.Size, sh.MIME, f.ttl)
+	fmt.Fprintf(os.Stderr, "link: https://ephemera.run/%s\n", sh.ID)
 
 	err = daemon.Run(sh, daemon.RunConfig{
 		Dial: func() (net.Conn, error) {
-			return net.Dial("tcp", f.relay)
+			return daemon.DialRelay(f.relay)
 		},
 		TTLSec: f.ttl,
 	})
