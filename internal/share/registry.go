@@ -23,6 +23,10 @@ type Info struct {
 	MIME    string
 	Expires time.Time
 
+	// Cacheable: the sender opted this share into layer B — the
+	// relay may replay already-served bytes from volatile RAM.
+	Cacheable bool
+
 	// Online reports whether a daemon connection is attached. The
 	// registry does not own the connection; the hub sets this via
 	// the returned handle.
@@ -43,10 +47,9 @@ type Handle interface {
 
 // Registry is the concurrency-safe share table. Zero value usable.
 type Registry struct {
-	mu         sync.RWMutex
-	shares     map[string]*entry
-	notify     chan struct{} // closed/restarted on sweep to wake waiters
-	notifyOnce sync.Once
+	mu       sync.RWMutex
+	shares   map[string]*entry
+	onExpire []func(shareID string)
 }
 
 type entry struct {
@@ -111,6 +114,25 @@ func (r *Registry) Detach(id string, h Handle) {
 	}
 }
 
+// OnExpire registers a callback fired when Sweep removes a share
+// (or Kill force-expires one). The relay uses it to drop layer-B
+// cache bytes with the link. Call before serving traffic.
+func (r *Registry) OnExpire(fn func(shareID string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onExpire = append(r.onExpire, fn)
+}
+
+func (r *Registry) fireExpire(shareID string) {
+	r.mu.RLock()
+	fns := make([]func(string), len(r.onExpire))
+	copy(fns, r.onExpire)
+	r.mu.RUnlock()
+	for _, fn := range fns {
+		fn(shareID)
+	}
+}
+
 // Kill force-expires a share immediately: removed from the table,
 // handle detached. Returns false when the id was never registered.
 func (r *Registry) Kill(id string) bool {
@@ -123,6 +145,9 @@ func (r *Registry) Kill(id string) bool {
 	if ok && e.handle != nil {
 		e.handle.Close()
 	}
+	if ok {
+		r.fireExpire(id)
+	}
 	return ok
 }
 
@@ -130,17 +155,22 @@ func (r *Registry) Kill(id string) bool {
 func (r *Registry) Sweep() {
 	r.mu.Lock()
 	var detached []Handle
+	var expired []string
 	for id, e := range r.shares {
 		if time.Now().After(e.info.Expires) {
 			if e.handle != nil {
 				detached = append(detached, e.handle)
 			}
 			delete(r.shares, id)
+			expired = append(expired, id)
 		}
 	}
 	r.mu.Unlock()
 	for _, h := range detached {
 		h.Close()
+	}
+	for _, id := range expired {
+		r.fireExpire(id)
 	}
 }
 
