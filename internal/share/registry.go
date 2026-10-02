@@ -27,6 +27,12 @@ type Info struct {
 	// relay may replay already-served bytes from volatile RAM.
 	Cacheable bool
 
+	// AwayPrefix: layer C opt-in, bytes (0 = off). The daemon
+	// trickles this many prefix bytes to the relay after
+	// announcing; the relay serves them while the sender is
+	// offline.
+	AwayPrefix int64
+
 	// Online reports whether a daemon connection is attached. The
 	// registry does not own the connection; the hub sets this via
 	// the returned handle.
