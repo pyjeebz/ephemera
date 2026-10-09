@@ -6,3 +6,5 @@ posts/
 *.test
 *.out
 dist/
+# Python bytecode
+__pycache__/
