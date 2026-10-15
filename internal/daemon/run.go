@@ -86,7 +86,9 @@ func Run(sh Share, cfg RunConfig) error {
 			continue
 		}
 
-		sess, err := NewSession(conn, sh, cfg.TTLSec)
+		// announce what is left, not the original TTL: a redial must
+		// never move the link's expiry on the relay
+		sess, err := NewSession(conn, sh, remainingSec(deadline))
 		if err != nil {
 			conn.Close()
 			if wait(logf, deadline, attempt, err) {
@@ -118,6 +120,12 @@ func Run(sh Share, cfg RunConfig) error {
 		}
 		attempt = 0
 	}
+}
+
+// remainingSec is the whole seconds left until deadline, at least 1
+// so an announce in the final second is still a valid TTL.
+func remainingSec(deadline time.Time) int64 {
+	return max(int64(time.Until(deadline).Round(time.Second)/time.Second), 1)
 }
 
 // wait sleeps for the current backoff window. It returns true when

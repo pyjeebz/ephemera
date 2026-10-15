@@ -42,8 +42,10 @@ the frame format; it is filled in as phase 3 (protocol) lands.
 	refuses a mismatch, so knowing a link never lets anyone else
 	announce it. The check is stateless and survives relay restarts.
 
-	An admin kill tombstones the id until its original expiry;
-	announces for it are refused until then.
+	A redial refreshes the share but never moves its expiry later:
+	the daemon announces the remaining TTL, and the relay keeps the
+	earlier of the two. An admin kill tombstones the id until its
+	original expiry; announces for it are refused until then.
 
 ## Away trickle (layer C, live)
 

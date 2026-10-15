@@ -86,10 +86,11 @@ func NewRegistry(sweepEvery time.Duration) *Registry {
 }
 
 // Register adds a share announcement. If a share with the same id
-// already exists (daemon redial), it is refreshed: expiry extended,
-// handle replaced. The hub has already checked the announce's owner
-// key, so a redial here is the owner's. Killed ids are refused with
-// ErrKilled until their original expiry.
+// already exists (daemon redial), it is refreshed: info and handle
+// replaced, but never a later expiry — a link's lifetime is fixed by
+// its first announce. The hub has already checked the announce's
+// owner key, so a redial here is the owner's. Killed ids are refused
+// with ErrKilled until their original expiry.
 func (r *Registry) Register(info Info, h Handle) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -102,10 +103,15 @@ func (r *Registry) Register(info Info, h Handle) error {
 		}
 		delete(r.killed, info.ID)
 	}
-	if existing, ok := r.shares[info.ID]; ok && existing.handle != nil {
-		// redial: the hub will have closed the old connection, but
-		// be safe against a racing detach
-		go existing.handle.Close()
+	if existing, ok := r.shares[info.ID]; ok {
+		if existing.info.Expires.Before(info.Expires) {
+			info.Expires = existing.info.Expires
+		}
+		if existing.handle != nil {
+			// redial: the hub will have closed the old connection,
+			// but be safe against a racing detach
+			go existing.handle.Close()
+		}
 	}
 	r.shares[info.ID] = &entry{info: info, handle: h}
 	return nil

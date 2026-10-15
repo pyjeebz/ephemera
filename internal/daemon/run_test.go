@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,8 @@ func TestRunReconnectsUntilTTL(t *testing.T) {
 	}
 
 	var accepts atomic.Int32
+	var ttlMu sync.Mutex
+	var announcedTTLs []int64
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -49,8 +52,15 @@ func TestRunReconnectsUntilTTL(t *testing.T) {
 				br := bufio.NewReader(conn)
 				// hello + send
 				for i := 0; i < 2; i++ {
-					if _, err := protocol.ReadFrame(br); err != nil {
+					fr, err := protocol.ReadFrame(br)
+					if err != nil {
 						return
+					}
+					var s protocol.Send
+					if fr.Type == protocol.TSend && json.Unmarshal(fr.JSON, &s) == nil {
+						ttlMu.Lock()
+						announcedTTLs = append(announcedTTLs, s.TTLSec)
+						ttlMu.Unlock()
 					}
 				}
 				if nth <= 2 {
@@ -114,6 +124,19 @@ func TestRunReconnectsUntilTTL(t *testing.T) {
 	elapsed := time.Since(start)
 	if elapsed > 8*time.Second {
 		t.Errorf("Run outlived its TTL: %s", elapsed)
+	}
+
+	// redials announce what is left of the TTL, never the original
+	ttlMu.Lock()
+	defer ttlMu.Unlock()
+	if len(announcedTTLs) < 3 {
+		t.Fatalf("saw %d announces, want >= 3", len(announcedTTLs))
+	}
+	if announcedTTLs[0] != 6 {
+		t.Errorf("first announce ttl = %d, want 6", announcedTTLs[0])
+	}
+	if last := announcedTTLs[len(announcedTTLs)-1]; last >= 6 {
+		t.Errorf("redial announced ttl %d; want the remaining (< 6): %v", last, announcedTTLs)
 	}
 }
 
