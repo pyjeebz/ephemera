@@ -15,6 +15,8 @@ go build -o bin/relay ./cmd/relay
 ./bin/relay serve -addr 0.0.0.0:7100
 ```
 
+Senders are held to the relay's limits: `-max-ttl` (seconds, default 86400) and `-max-size-mb` (default 5120). A share over either is refused, and `ephemera send` exits with the reason.
+
 To enable the optional in-memory replay and away-prefix stores:
 
 ```bash

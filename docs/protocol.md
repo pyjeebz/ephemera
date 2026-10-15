@@ -47,6 +47,21 @@ the frame format; it is filled in as phase 3 (protocol) lands.
 	earlier of the two. An admin kill tombstones the id until its
 	original expiry; announces for it are refused until then.
 
+## Refusals (live)
+
+	The relay checks every announce against its limits (relay serve
+	-max-ttl, default 24h; -max-size-mb, default 5 GiB) and its share
+	table. A refused announce gets one TErr before the relay hangs up:
+
+	code     when
+	denied   ttl < 1, ttl or size over the relay's limits, or an
+	         owner key that does not certify the share id
+	gone     the link was killed by an admin
+
+	The message is a reason meant for the sender. A daemon that gets
+	TErr in reply to its announce stops sharing instead of redialing:
+	none of these get better by trying again.
+
 ## Away trickle (layer C, live)
 
 	Each burst is two adjacent frames: TAway (JSON: share_id,

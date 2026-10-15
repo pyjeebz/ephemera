@@ -13,6 +13,7 @@ package hub
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,12 +68,34 @@ var ErrDaemonGone = errors.New("hub: daemon connection gone")
 // take it over. The socket is closed and the live share untouched.
 var ErrNotOwner = errors.New("hub: owner key does not match share id")
 
+// ErrOverLimit is returned by Accept when an announce asks for more
+// than the relay allows: a longer TTL or a bigger file.
+var ErrOverLimit = errors.New("hub: share over relay limits")
+
+// Default relay limits, used when a Limits field is zero.
+const (
+	DefaultMaxTTLSec = int64(24 * 60 * 60) // a day
+	DefaultMaxSize   = int64(5 << 30)      // 5GB, the daemon's abuse cap
+)
+
+// Limits caps what one announce may ask of the relay. Zero fields
+// take the defaults, so a zero Bridge is capped, never unlimited.
+type Limits struct {
+	MaxTTLSec int64 // longest link lifetime, seconds
+	MaxSize   int64 // largest share, bytes
+}
+
+func (l Limits) maxTTLSec() int64 { return cmp.Or(l.MaxTTLSec, DefaultMaxTTLSec) }
+func (l Limits) maxSize() int64   { return cmp.Or(l.MaxSize, DefaultMaxSize) }
+
 // Bridge configures what Accept connects the daemon to. Zero value
 // works: no away store means away frames are refused (the daemon
-// stops trickling) and the rest runs as before.
+// stops trickling), default limits apply, and the rest runs as
+// before.
 type Bridge struct {
 	Registry *share.Registry
 	Away     *away.Store // nil: layer C disabled
+	Limits   Limits
 }
 
 // Accept takes ownership of a freshly connected daemon socket:
@@ -96,9 +119,15 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 		return nil, err
 	}
 	info, err := d.expectSend()
+	if errors.Is(err, ErrNotOwner) {
+		return nil, refuse(conn, info.ShareID, "denied", "this link belongs to another sender", err)
+	}
 	if err != nil {
 		conn.Close()
 		return nil, err
+	}
+	if err := b.Limits.check(info); err != nil {
+		return nil, refuse(conn, info.ShareID, "denied", err.(limitError).reason, err)
 	}
 	d.shareID = info.ShareID
 	d.ttlSec = info.TTLSec
@@ -114,8 +143,7 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 		Cacheable:  info.Cache,
 		AwayPrefix: min(info.AwayPrefixBytes, info.Size),
 	}, d); err != nil {
-		conn.Close()
-		return nil, err
+		return nil, refuse(conn, info.ShareID, "gone", "this link was taken down", err)
 	}
 
 	// resume hint: if the relay already holds prefix bytes for this
@@ -135,6 +163,34 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 	go d.writeLoop()
 	go d.readLoop()
 	return d, nil
+}
+
+// limitError is an ErrOverLimit with a reason the sender can act on.
+type limitError struct{ reason string }
+
+func (e limitError) Error() string        { return ErrOverLimit.Error() + ": " + e.reason }
+func (e limitError) Is(target error) bool { return target == ErrOverLimit }
+
+// check refuses an announce over the relay's limits.
+func (l Limits) check(s protocol.Send) error {
+	switch {
+	case s.TTLSec < 1:
+		return limitError{"ttl must be at least 1s"}
+	case s.TTLSec > l.maxTTLSec():
+		return limitError{fmt.Sprintf("ttl %ds is over this relay's %ds limit", s.TTLSec, l.maxTTLSec())}
+	case s.Size > l.maxSize():
+		return limitError{fmt.Sprintf("%d bytes is over this relay's %d byte limit", s.Size, l.maxSize())}
+	}
+	return nil
+}
+
+// refuse tells a daemon why its announce was turned down, so it can
+// stop instead of redialing, then closes the socket. Best-effort: the
+// reason is advisory, the refusal is not. Returns cause.
+func refuse(conn Conn, shareID, code, reason string, cause error) error {
+	_ = protocol.EncodeJSON(conn, protocol.TErr, protocol.Err{ShareID: shareID, Code: code, Message: reason})
+	conn.Close()
+	return cause
 }
 
 // expectHello reads one THello frame.

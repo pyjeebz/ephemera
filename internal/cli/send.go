@@ -137,7 +137,9 @@ func runShares(shares []daemon.Share, ttls []int64, relay string) error {
 			firstErr = err
 		}
 	}
-	fmt.Fprintln(os.Stderr, "all shares expired; nothing left on the relay")
+	if firstErr == nil {
+		fmt.Fprintln(os.Stderr, "all shares expired; nothing left on the relay")
+	}
 	return firstErr
 }
 

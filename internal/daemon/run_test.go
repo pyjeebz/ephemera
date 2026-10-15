@@ -277,3 +277,64 @@ func TestValidateShareSymlinkDir(t *testing.T) {
 		t.Errorf("err = %v, want os.ErrInvalid", err)
 	}
 }
+
+// TestRunStopsWhenRefused: a relay that answers the announce with
+// TErr (over limits, killed link) ends the share at once with a
+// *RefusedError carrying the reason, instead of redialing to TTL.
+func TestRunStopsWhenRefused(t *testing.T) {
+	dir := t.TempDir()
+	path := makeTestFile(t, dir, "clip.mp4", 4<<10)
+	sh, err := ValidateShare(path, DetectMIME)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var accepts atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			go func(conn net.Conn) {
+				defer conn.Close()
+				br := bufio.NewReader(conn)
+				for i := 0; i < 2; i++ { // hello + send
+					if _, err := protocol.ReadFrame(br); err != nil {
+						return
+					}
+				}
+				protocol.EncodeJSON(conn, protocol.TErr, protocol.Err{
+					ShareID: sh.ID, Code: "denied", Message: "ttl 60s is over this relay's 30s limit",
+				})
+			}(conn)
+		}
+	}()
+
+	start := time.Now()
+	err = Run(sh, RunConfig{
+		Dial:   func() (net.Conn, error) { return net.Dial("tcp", ln.Addr().String()) },
+		TTLSec: 60,
+		Log:    log.New(io.Discard, "", 0),
+	})
+	var refused *RefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Run returned %v, want *RefusedError", err)
+	}
+	if refused.Code != "denied" || refused.Message != "ttl 60s is over this relay's 30s limit" {
+		t.Errorf("refusal = %+v", refused)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("Run took %s to give up; want an immediate stop", elapsed)
+	}
+	if n := accepts.Load(); n != 1 {
+		t.Errorf("relay saw %d dials, want 1: a refusal must not be redialed", n)
+	}
+}

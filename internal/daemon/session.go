@@ -133,15 +133,26 @@ func (s *Session) serveRead(rd protocol.Read) error {
 // connection: the run loop treats it as a reconnect trigger.
 var ErrSessionClosed = errors.New("daemon: session closed by relay")
 
+// RefusedError is the relay turning the share down: over its limits,
+// a killed link, or an owner key it does not accept. Redialing cannot
+// fix it, so Run stops and returns it.
+type RefusedError struct {
+	Code    string // "denied" or "gone", from the relay's TErr
+	Message string
+}
+
+func (e *RefusedError) Error() string { return "relay refused the share: " + e.Message }
+
 // Serve reads frames until the connection drops, an IO error occurs,
 // or stop fires. TReads get synchronous replies; TAcks steer the
 // away trickle; the away upload runs in the background at a pace
 // that never competes with receiver reads.
 func (s *Session) Serve(stop <-chan struct{}) error {
 	type readMsg struct {
-		rd  protocol.Read
-		ack int64 // >0: ack for away bytes (rd zero)
-		ok  bool
+		rd      protocol.Read
+		ack     int64 // >0: ack for away bytes (rd zero)
+		ok      bool
+		refused *RefusedError // the relay sent TErr: stop for good
 	}
 	msgs := make(chan readMsg, 8)
 	defer close(msgs)
@@ -168,6 +179,13 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 				if json.Unmarshal(fr.JSON, &rd) == nil {
 					msgs <- readMsg{rd: rd, ok: true}
 				}
+			case protocol.TErr:
+				var e protocol.Err
+				if json.Unmarshal(fr.JSON, &e) != nil {
+					e = protocol.Err{Code: "unknown", Message: "no reason given"}
+				}
+				msgs <- readMsg{refused: &RefusedError{Code: e.Code, Message: e.Message}}
+				return
 			case protocol.TAck:
 				var a protocol.Ack
 				if json.Unmarshal(fr.JSON, &a) == nil && a.ShareID == s.Share.ID {
@@ -190,6 +208,9 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 		case <-stop:
 			return ErrSessionClosed
 		case m := <-msgs:
+			if m.refused != nil {
+				return m.refused
+			}
 			if !m.ok {
 				return ErrSessionClosed
 			}

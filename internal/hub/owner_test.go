@@ -1,6 +1,8 @@
 package hub
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -11,8 +13,9 @@ import (
 )
 
 // announceOnly writes a hello+send handshake into a fresh pipe pair
-// and returns the relay's end, for Accept calls that should refuse.
-func announceOnly(t *testing.T, ann protocol.Send) *pipeConn {
+// and returns the relay's end, for Accept calls that should refuse,
+// plus the daemon's read end to see what the relay said back.
+func announceOnly(t *testing.T, ann protocol.Send) (*pipeConn, *bufio.Reader) {
 	t.Helper()
 	relayR, daemonW, err := os.Pipe()
 	if err != nil {
@@ -34,7 +37,25 @@ func announceOnly(t *testing.T, ann protocol.Send) *pipeConn {
 	if err := protocol.EncodeJSON(daemonW, protocol.TSend, ann); err != nil {
 		t.Fatal(err)
 	}
-	return &pipeConn{r: relayR, w: relayW}
+	return &pipeConn{r: relayR, w: relayW}, bufio.NewReader(daemonR)
+}
+
+// expectRefusal reads the TErr a refused daemon must get before the
+// relay hangs up, and checks its code.
+func expectRefusal(t *testing.T, r *bufio.Reader, code string) protocol.Err {
+	t.Helper()
+	fr, err := protocol.ReadFrame(r)
+	if err != nil {
+		t.Fatalf("no refusal frame: %v", err)
+	}
+	var e protocol.Err
+	if fr.Type != protocol.TErr || json.Unmarshal(fr.JSON, &e) != nil {
+		t.Fatalf("refusal frame type %d, want TErr", fr.Type)
+	}
+	if e.Code != code || e.Message == "" {
+		t.Fatalf("refusal = %+v, want code %q with a reason", e, code)
+	}
+	return e
 }
 
 // TestAcceptRefusesHijack: someone who knows a live link announces
@@ -60,9 +81,11 @@ func TestAcceptRefusesHijack(t *testing.T) {
 		hijack := ann
 		hijack.OwnerKey = key
 		hijack.Name = "evil.exe.mp4"
-		if _, err := b.Accept(announceOnly(t, hijack)); !errors.Is(err, ErrNotOwner) {
+		conn, daemonR := announceOnly(t, hijack)
+		if _, err := b.Accept(conn); !errors.Is(err, ErrNotOwner) {
 			t.Fatalf("%s: accept err = %v, want ErrNotOwner", name, err)
 		}
+		expectRefusal(t, daemonR, "denied")
 	}
 
 	info, h, err := reg.Lookup(ann.ShareID)
@@ -94,9 +117,11 @@ func TestAcceptRefusesKilledShare(t *testing.T) {
 	if !reg.Kill(ann.ShareID) {
 		t.Fatal("kill returned false")
 	}
-	if _, err := b.Accept(announceOnly(t, ann)); !errors.Is(err, share.ErrKilled) {
+	conn, daemonR := announceOnly(t, ann)
+	if _, err := b.Accept(conn); !errors.Is(err, share.ErrKilled) {
 		t.Fatalf("redial after kill: err = %v, want share.ErrKilled", err)
 	}
+	expectRefusal(t, daemonR, "gone")
 	if _, _, err := reg.Lookup(ann.ShareID); !errors.Is(err, share.ErrNotFound) {
 		t.Fatalf("killed share lookup: %v, want ErrNotFound", err)
 	}

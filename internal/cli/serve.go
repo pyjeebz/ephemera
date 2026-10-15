@@ -26,6 +26,8 @@ type serveFlags struct {
 	adminToken string
 	cacheMB    int64
 	awayMB     int64
+	maxTTL     int64 // seconds
+	maxSizeMB  int64
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -39,12 +41,21 @@ func runServe(args []string) error {
 	fs.StringVar(&f.adminToken, "admin-token", os.Getenv("EPHEMERA_ADMIN_TOKEN"), "admin API token (or EPHEMERA_ADMIN_TOKEN); empty disables admin routes")
 	fs.Int64Var(&f.cacheMB, "cache-mb", 256, "layer-B volatile cache budget in MiB (0 disables replay)")
 	fs.Int64Var(&f.awayMB, "away-mb", 512, "layer-C away-prefix budget in MiB (0 disables away mode)")
+	fs.Int64Var(&f.maxTTL, "max-ttl", hub.DefaultMaxTTLSec, "longest link lifetime a sender may ask for, in seconds")
+	fs.Int64Var(&f.maxSizeMB, "max-size-mb", hub.DefaultMaxSize>>20, "largest file a sender may share, in MiB")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if f.maxSizeMB<<20 > hub.DefaultMaxSize {
+		// the daemon and the read path both stop at 5GB today
+		return fmt.Errorf("-max-size-mb %d is over the %d MiB shares support", f.maxSizeMB, hub.DefaultMaxSize>>20)
+	}
 
 	reg := share.NewRegistry(time.Second)
-	bridge := &hub.Bridge{Registry: reg}
+	bridge := &hub.Bridge{
+		Registry: reg,
+		Limits:   hub.Limits{MaxTTLSec: f.maxTTL, MaxSize: f.maxSizeMB << 20},
+	}
 
 	// daemon bridge: one WS connection, one share
 	daemonBridge := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -42,7 +42,8 @@ var errExpired = errors.New("daemon: share TTL expired")
 
 // Run shares one file until its TTL expires. It connects, announces,
 // serves until the connection drops, and redials with backoff until
-// the deadline. It returns nil when the TTL is up.
+// the deadline. It returns nil when the TTL is up, or a *RefusedError
+// as soon as the relay turns the share down.
 func Run(sh Share, cfg RunConfig) error {
 	logf := cfg.Log
 	if logf == nil {
@@ -108,8 +109,11 @@ func Run(sh Share, cfg RunConfig) error {
 		}
 
 		logf.Printf("share %s live: %s (%d bytes, %s)", sh.ID, sh.Name, sh.Size, sh.MIME)
-		_ = sess.Serve(stop)
+		err = sess.Serve(stop)
 		sess.Close()
+		if refused := (*RefusedError)(nil); errors.As(err, &refused) {
+			return err
+		}
 
 		if time.Now().After(deadline) {
 			return nil
