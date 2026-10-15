@@ -105,7 +105,7 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 
 	expires := time.Now().Add(time.Duration(info.TTLSec) * time.Second)
 	reg := b.Registry
-	reg.Register(share.Info{
+	if err := reg.Register(share.Info{
 		ID:         info.ShareID,
 		Name:       info.Name,
 		Size:       info.Size,
@@ -113,7 +113,10 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 		Expires:    expires,
 		Cacheable:  info.Cache,
 		AwayPrefix: min(info.AwayPrefixBytes, info.Size),
-	}, d)
+	}, d); err != nil {
+		conn.Close()
+		return nil, err
+	}
 
 	// resume hint: if the relay already holds prefix bytes for this
 	// share (daemon redial), tell the daemon where to continue

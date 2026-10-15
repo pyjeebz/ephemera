@@ -77,3 +77,27 @@ func TestAcceptRefusesHijack(t *testing.T) {
 		t.Fatalf("owner read after hijack attempts: len %d err %v", len(data), err)
 	}
 }
+
+// TestAcceptRefusesKilledShare: an admin kill sticks even against the
+// owner's own redial, which still holds a valid key.
+func TestAcceptRefusesKilledShare(t *testing.T) {
+	reg := share.NewRegistry(time.Hour)
+	b := &Bridge{Registry: reg}
+
+	_, relayR, relayW, ann := startFakeDaemon(t, 4096, 3600)
+	d, err := b.Accept(&pipeConn{r: relayR, w: relayW})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	defer d.Close()
+
+	if !reg.Kill(ann.ShareID) {
+		t.Fatal("kill returned false")
+	}
+	if _, err := b.Accept(announceOnly(t, ann)); !errors.Is(err, share.ErrKilled) {
+		t.Fatalf("redial after kill: err = %v, want share.ErrKilled", err)
+	}
+	if _, _, err := reg.Lookup(ann.ShareID); !errors.Is(err, share.ErrNotFound) {
+		t.Fatalf("killed share lookup: %v, want ErrNotFound", err)
+	}
+}

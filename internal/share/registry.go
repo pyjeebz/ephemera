@@ -15,6 +15,10 @@ var (
 	ErrGone     = errors.New("share: expired")
 )
 
+// ErrKilled is returned by Register for a share an admin killed: the
+// sender's daemon is still redialing, and the kill must stick.
+var ErrKilled = errors.New("share: killed")
+
 // Info is one registered share: the announcement a daemon made.
 type Info struct {
 	ID      string
@@ -56,6 +60,11 @@ type Registry struct {
 	mu       sync.RWMutex
 	shares   map[string]*entry
 	onExpire []func(shareID string)
+
+	// killed tombstones force-expired ids until their original
+	// expiry, so a redialing daemon cannot bring a killed link back.
+	// In-memory, like the rest of the table.
+	killed map[string]time.Time
 }
 
 type entry struct {
@@ -70,6 +79,7 @@ type entry struct {
 func NewRegistry(sweepEvery time.Duration) *Registry {
 	r := &Registry{
 		shares: make(map[string]*entry),
+		killed: make(map[string]time.Time),
 	}
 	go r.sweepLoop(sweepEvery)
 	return r
@@ -77,16 +87,28 @@ func NewRegistry(sweepEvery time.Duration) *Registry {
 
 // Register adds a share announcement. If a share with the same id
 // already exists (daemon redial), it is refreshed: expiry extended,
-// handle replaced. The hub owns calling Detach on the old handle.
-func (r *Registry) Register(info Info, h Handle) {
+// handle replaced. The hub has already checked the announce's owner
+// key, so a redial here is the owner's. Killed ids are refused with
+// ErrKilled until their original expiry.
+func (r *Registry) Register(info Info, h Handle) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.killed == nil {
+		r.killed = make(map[string]time.Time)
+	}
+	if until, ok := r.killed[info.ID]; ok {
+		if time.Now().Before(until) {
+			return ErrKilled
+		}
+		delete(r.killed, info.ID)
+	}
 	if existing, ok := r.shares[info.ID]; ok && existing.handle != nil {
 		// redial: the hub will have closed the old connection, but
 		// be safe against a racing detach
 		go existing.handle.Close()
 	}
 	r.shares[info.ID] = &entry{info: info, handle: h}
+	return nil
 }
 
 // Lookup returns the info for a share id. Expired shares return
@@ -140,12 +162,18 @@ func (r *Registry) fireExpire(shareID string) {
 }
 
 // Kill force-expires a share immediately: removed from the table,
-// handle detached. Returns false when the id was never registered.
+// handle detached, and tombstoned until its original expiry so the
+// sender cannot re-announce it. Returns false when the id was never
+// registered.
 func (r *Registry) Kill(id string) bool {
 	r.mu.Lock()
 	e, ok := r.shares[id]
 	if ok {
 		delete(r.shares, id)
+		if r.killed == nil {
+			r.killed = make(map[string]time.Time)
+		}
+		r.killed[id] = e.info.Expires
 	}
 	r.mu.Unlock()
 	if ok && e.handle != nil {
@@ -169,6 +197,11 @@ func (r *Registry) Sweep() {
 			}
 			delete(r.shares, id)
 			expired = append(expired, id)
+		}
+	}
+	for id, until := range r.killed {
+		if time.Now().After(until) {
+			delete(r.killed, id)
 		}
 	}
 	r.mu.Unlock()

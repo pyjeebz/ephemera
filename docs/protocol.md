@@ -42,6 +42,9 @@ the frame format; it is filled in as phase 3 (protocol) lands.
 	refuses a mismatch, so knowing a link never lets anyone else
 	announce it. The check is stateless and survives relay restarts.
 
+	An admin kill tombstones the id until its original expiry;
+	announces for it are refused until then.
+
 ## Away trickle (layer C, live)
 
 	Each burst is two adjacent frames: TAway (JSON: share_id,
