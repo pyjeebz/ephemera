@@ -34,15 +34,16 @@ func TestAwayAckRoundTrip(t *testing.T) {
 	})
 
 	b := &Bridge{Registry: reg, Away: ast}
+	key, aw1 := protocol.NewOwnerKey()
 
 	// daemon side: announce then one away burst
 	go func() {
 		protocol.EncodeJSON(daemonW, protocol.THello, protocol.Hello{Version: "0"})
 		protocol.EncodeJSON(daemonW, protocol.TSend, protocol.Send{
-			ShareID: "aw1", Name: "v.mp4", Size: 10, MIME: "video/mp4",
+			ShareID: aw1, OwnerKey: key, Name: "v.mp4", Size: 10, MIME: "video/mp4",
 			TTLSec: 60, AwayPrefixBytes: 10,
 		})
-		protocol.EncodeJSON(daemonW, protocol.TAway, protocol.Away{ShareID: "aw1", Offset: 0})
+		protocol.EncodeJSON(daemonW, protocol.TAway, protocol.Away{ShareID: aw1, Offset: 0})
 		protocol.EncodeData(daemonW, []byte("0123456789"))
 	}()
 
@@ -85,12 +86,12 @@ func TestAwayAckRoundTrip(t *testing.T) {
 	}
 
 	// the blob holds the bytes
-	if got := ast.Have("aw1"); got != 10 {
+	if got := ast.Have(aw1); got != 10 {
 		t.Errorf("blob have = %d, want 10", got)
 	}
 
 	// second burst after the ack: offset 10
-	if err := protocol.EncodeJSON(daemonW, protocol.TAway, protocol.Away{ShareID: "aw1", Offset: 10}); err != nil {
+	if err := protocol.EncodeJSON(daemonW, protocol.TAway, protocol.Away{ShareID: aw1, Offset: 10}); err != nil {
 		t.Fatal(err)
 	}
 	if err := protocol.EncodeData(daemonW, []byte("abcdefghij")); err != nil {
@@ -122,7 +123,7 @@ func TestAwayAckRoundTrip(t *testing.T) {
 	}()
 	select {
 	case <-ackCh:
-		if got := ast.Have("aw1"); got != 20 {
+		if got := ast.Have(aw1); got != 20 {
 			t.Errorf("blob after second burst = %d, want 20", got)
 		}
 	case <-time.After(3 * time.Second):

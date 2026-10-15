@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"ephemera.run/ephemera/internal/protocol"
 )
 
 // stateFile is the on-disk record of an active share: everything a
 // restart needs to re-share with the same link id.
 type stateFile struct {
 	ShareID    string `json:"share_id"`
+	OwnerKey   string `json:"owner_key"` // secret: proves the id on redial
 	Path       string `json:"path"`
 	Name       string `json:"name"`
 	Size       int64  `json:"size"`
@@ -41,6 +44,7 @@ func NewStateDir(dir string) (*StateDir, error) {
 func (s *StateDir) Save(sh Share, ttlSec int64) error {
 	st := stateFile{
 		ShareID:    sh.ID,
+		OwnerKey:   sh.OwnerKey,
 		Path:       sh.Path,
 		Name:       sh.Name,
 		Size:       sh.Size,
@@ -94,6 +98,12 @@ func (s *StateDir) Active() ([]Share, []int64, error) {
 			os.Remove(filepath.Join(s.dir, e.Name()))
 			continue
 		}
+		if !protocol.OwnsShare(st.ShareID, st.OwnerKey) {
+			// no key (pre-ownership record) or a tampered one: the
+			// relay would refuse the announce, so the link is dead
+			os.Remove(filepath.Join(s.dir, e.Name()))
+			continue
+		}
 		remain := st.ExpiresAt - now
 		sh, err := ValidateShare(st.Path, DetectMIME)
 		if err != nil {
@@ -103,6 +113,7 @@ func (s *StateDir) Active() ([]Share, []int64, error) {
 		}
 		// keep the original share id and mime so the link is stable
 		sh.ID = st.ShareID
+		sh.OwnerKey = st.OwnerKey
 		sh.MIME = st.MIME
 		sh.Cache = st.Cache
 		sh.AwayPrefixBytes = st.AwayPrefix

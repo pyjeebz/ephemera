@@ -87,6 +87,7 @@ func (s *Session) Announce() error {
 	}
 	return protocol.EncodeJSON(s.writer, protocol.TSend, protocol.Send{
 		ShareID:         s.Share.ID,
+		OwnerKey:        s.Share.OwnerKey,
 		Name:            s.Share.Name,
 		Size:            s.Share.Size,
 		MIME:            s.Share.MIME,

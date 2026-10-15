@@ -286,7 +286,7 @@ func TestFileOfflineAndExpired(t *testing.T) {
 // the two-real-binaries E2E in phase 8.
 func TestEndToEndThroughHub(t *testing.T) {
 	const size = int64(512 * 1024)
-	const shareID = "share_e2e"
+	ownerKey, shareID := protocol.NewOwnerKey()
 	var body []byte
 	for i := int64(0); i < size; i++ {
 		body = append(body, byteAt(i))
@@ -303,7 +303,7 @@ func TestEndToEndThroughHub(t *testing.T) {
 	go func() {
 		protocol.EncodeJSON(dConn, protocol.THello, protocol.Hello{Version: "0.1"})
 		protocol.EncodeJSON(dConn, protocol.TSend, protocol.Send{
-			ShareID: shareID, Name: "e2e.mp4", Size: size, MIME: "video/mp4", TTLSec: 3600,
+			ShareID: shareID, OwnerKey: ownerKey, Name: "e2e.mp4", Size: size, MIME: "video/mp4", TTLSec: 3600,
 		})
 		serveReads(dConn, body)
 	}()

@@ -62,6 +62,11 @@ type DaemonConn struct {
 // offline state, not a 410.
 var ErrDaemonGone = errors.New("hub: daemon connection gone")
 
+// ErrNotOwner is returned by Accept when the announce's owner key
+// does not certify its share id: someone who knows a link trying to
+// take it over. The socket is closed and the live share untouched.
+var ErrNotOwner = errors.New("hub: owner key does not match share id")
+
 // Bridge configures what Accept connects the daemon to. Zero value
 // works: no away store means away frames are refused (the daemon
 // stops trickling) and the rest runs as before.
@@ -156,6 +161,9 @@ func (d *DaemonConn) expectSend() (protocol.Send, error) {
 	}
 	if s.ShareID == "" || s.Size < 1 {
 		return s, fmt.Errorf("hub: malformed send payload")
+	}
+	if !protocol.OwnsShare(s.ShareID, s.OwnerKey) {
+		return s, ErrNotOwner
 	}
 	return s, nil
 }

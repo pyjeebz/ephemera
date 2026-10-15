@@ -1,12 +1,12 @@
 package daemon
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"ephemera.run/ephemera/internal/protocol"
 )
 
 // Abuse floor, mirrored from the PRD: the relay re-checks these on
@@ -34,20 +34,16 @@ var blockedExts = map[string]bool{
 	".vbs": true, ".lnk": true,
 }
 
-// NewShareID returns a 22-character base64url id with ~128 bits of
-// entropy: unguessable URL path segments, no '+' or '/' to escape.
-func NewShareID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("daemon: crypto/rand unavailable: " + err.Error())
-	}
-	return base64.RawURLEncoding.EncodeToString(b[:])
-}
-
 // Share is one announced file: everything the daemon needs to serve
 // ranged reads without re-asking the caller.
 type Share struct {
-	ID   string
+	ID string
+
+	// OwnerKey is the secret the ID is derived from. It goes to the
+	// relay on every announce to prove ownership, and to the state
+	// file for resume; it never appears in the link.
+	OwnerKey string
+
 	Path string
 	Name string
 	Size int64
@@ -93,11 +89,15 @@ func ValidateShare(path string, mimeFn func(string, []byte) string) (Share, erro
 	n, _ := f.Read(head)
 	f.Close()
 
+	// the id is a 22-character base64url hash of the owner key:
+	// ~128 bits, unguessable, no '+' or '/' to escape
+	key, id := protocol.NewOwnerKey()
 	return Share{
-		ID:   NewShareID(),
-		Path: path,
-		Name: filepath.Base(path),
-		Size: st.Size(),
-		MIME: mimeFn(filepath.Base(path), head[:n]),
+		ID:       id,
+		OwnerKey: key,
+		Path:     path,
+		Name:     filepath.Base(path),
+		Size:     st.Size(),
+		MIME:     mimeFn(filepath.Base(path), head[:n]),
 	}, nil
 }

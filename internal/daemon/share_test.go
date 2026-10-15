@@ -5,22 +5,36 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"ephemera.run/ephemera/internal/protocol"
 )
 
-func TestNewShareID(t *testing.T) {
+// TestValidateShareOwnedID: every share gets a fresh owner key, and
+// its id is the url-safe 22-character id that key certifies.
+func TestValidateShareOwnedID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "video.mp4")
+	if err := os.WriteFile(path, make([]byte, 1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	seen := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		id := NewShareID()
-		if len(id) != 22 {
-			t.Fatalf("id %q: len = %d, want 22", id, len(id))
+		sh, err := ValidateShare(path, DetectMIME)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if seen[id] {
-			t.Fatalf("duplicate id %q", id)
+		if len(sh.ID) != 22 {
+			t.Fatalf("id %q: len = %d, want 22", sh.ID, len(sh.ID))
 		}
-		seen[id] = true
-		for _, c := range id {
+		if seen[sh.ID] {
+			t.Fatalf("duplicate id %q", sh.ID)
+		}
+		seen[sh.ID] = true
+		if !protocol.OwnsShare(sh.ID, sh.OwnerKey) {
+			t.Fatalf("id %q not certified by its owner key", sh.ID)
+		}
+		for _, c := range sh.ID {
 			if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
-				t.Fatalf("id %q: non-url-safe char %q", id, c)
+				t.Fatalf("id %q: non-url-safe char %q", sh.ID, c)
 			}
 		}
 	}

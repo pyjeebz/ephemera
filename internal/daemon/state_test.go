@@ -72,7 +72,7 @@ func TestStateSweepsExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := stateFile{
-		ShareID: sh.ID, Path: sh.Path, Name: sh.Name,
+		ShareID: sh.ID, OwnerKey: sh.OwnerKey, Path: sh.Path, Name: sh.Name,
 		Size: sh.Size, MIME: sh.MIME, TTLSec: 1,
 		ExpiresAt: time.Now().Add(-time.Second).Unix(),
 	}
@@ -124,4 +124,38 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// TestStateDropsUnownedRecord: a record without a valid owner key
+// (written before ownership, or tampered with) can never be
+// re-announced, so resume drops it instead of redialing forever.
+func TestStateDropsUnownedRecord(t *testing.T) {
+	dir := t.TempDir()
+	sd, _ := NewStateDir(dir)
+
+	path := filepath.Join(dir, "v.mp4")
+	os.WriteFile(path, make([]byte, 512), 0o644)
+	sh, _ := ValidateShare(path, DetectMIME)
+	other, _ := ValidateShare(path, DetectMIME)
+
+	for name, key := range map[string]string{"no key": "", "wrong key": other.OwnerKey} {
+		st := stateFile{
+			ShareID: sh.ID, OwnerKey: key, Path: sh.Path, Name: sh.Name,
+			Size: sh.Size, MIME: sh.MIME, TTLSec: 3600,
+			ExpiresAt: time.Now().Add(time.Hour).Unix(),
+		}
+		rec := filepath.Join(dir, sh.ID+".json")
+		os.WriteFile(rec, mustJSON(t, st), 0o600)
+
+		shares, _, err := sd.Active()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(shares) != 0 {
+			t.Fatalf("%s: unowned record resumed", name)
+		}
+		if _, err := os.Stat(rec); !os.IsNotExist(err) {
+			t.Errorf("%s: unowned record not dropped", name)
+		}
+	}
 }

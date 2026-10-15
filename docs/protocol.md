@@ -20,7 +20,8 @@ the frame format; it is filled in as phase 3 (protocol) lands.
 
 ## Send frame fields (v0, live)
 
-	share_id           string  unguessable 128-bit base64url id
+	share_id           string  128-bit base64url id, derived from owner_key
+	owner_key          string  base64url 32-byte secret; proves ownership
 	name               string  file name as the receiver sees it
 	size               int64   advisory; relay re-checks the 5GB cap per read
 	mime               string  content type for inline play
@@ -30,6 +31,16 @@ the frame format; it is filled in as phase 3 (protocol) lands.
 	away_prefix_bytes  int64   layer C opt-in: the daemon trickles this many
 	                         prefix bytes to the relay post-announce (paced,
 	                         ack-driven); the relay serves them offline
+
+## Share ownership (live)
+
+	share_id = base64url(sha256("ephemera share id v1\0" || key)[:16])
+
+	The daemon generates a random 32-byte owner key per share and
+	derives the id from it; the key is never part of the link. Every
+	send frame carries the key, and the relay recomputes the id and
+	refuses a mismatch, so knowing a link never lets anyone else
+	announce it. The check is stateless and survives relay restarts.
 
 ## Away trickle (layer C, live)
 

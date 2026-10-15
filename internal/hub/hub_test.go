@@ -52,12 +52,14 @@ func startFakeDaemon(t *testing.T, fileSize int64, ttl int64) (*fakeDaemon, io.R
 	fd.toRelayW = toDaemonW
 	fd.fromRelayR = fromRelayR
 
+	key, id := protocol.NewOwnerKey()
 	ann := protocol.Send{
-		ShareID: "share_hub",
-		Name:    "v.mp4",
-		Size:    fileSize,
-		MIME:    "video/mp4",
-		TTLSec:  ttl,
+		ShareID:  id,
+		OwnerKey: key,
+		Name:     "v.mp4",
+		Size:     fileSize,
+		MIME:     "video/mp4",
+		TTLSec:   ttl,
 	}
 
 	// announce: hello + send

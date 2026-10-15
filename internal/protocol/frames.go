@@ -16,8 +16,11 @@ type Hello struct {
 // is offline. AwayPrefixBytes > 0 opts into layer C: the daemon
 // will trickle that many prefix bytes to the relay after announcing,
 // for the relay to serve while the sender is offline.
+// OwnerKey proves the daemon owns ShareID (see owner.go); the relay
+// refuses an announce whose key does not certify the id.
 type Send struct {
 	ShareID         string `json:"share_id"`
+	OwnerKey        string `json:"owner_key"`
 	Name            string `json:"name"`
 	Size            int64  `json:"size"`
 	MIME            string `json:"mime"`
