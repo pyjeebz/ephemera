@@ -121,3 +121,17 @@ On the receiving device:
 - Both devices should be on the same Wi-Fi unless the relay is on a public server.
 - Allow TCP port `7100` through the local firewall.
 - For remote testing, run the relay on a public server or use a tunnel such as Tailscale, Cloudflare Tunnel, or ngrok.
+
+## 8. TLS
+
+A sender only uses plaintext (`ws://`, `http://`, `tcp://`) to a relay on its own machine. Anywhere else it needs `wss://`, because the sender token and owner key would otherwise cross the network in the clear. `-insecure` overrides this on purpose. A bare host such as `-relay relay.example.com` means `wss://relay.example.com/daemon`.
+
+Either let the relay terminate TLS itself:
+
+```bash
+./bin/relay serve -addr 0.0.0.0:443 -tokens tokens.txt -tls-cert fullchain.pem -tls-key privkey.pem
+```
+
+or keep it on plain HTTP behind a TLS proxy (Caddy, nginx, a Cloudflare or ngrok tunnel) and point senders at the proxy's `wss://` address. A relay serving plain HTTP off its own machine prints a warning, since it can't tell whether a proxy is in front.
+
+For a self-signed or private-CA certificate, a Linux sender can trust it with `SSL_CERT_FILE=/path/to/ca.pem`.

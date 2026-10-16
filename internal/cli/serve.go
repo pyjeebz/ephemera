@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"ephemera.run/ephemera/internal/auth"
 	awaystore "ephemera.run/ephemera/internal/away"
 	cachestore "ephemera.run/ephemera/internal/cache"
+	"ephemera.run/ephemera/internal/daemon"
 	"ephemera.run/ephemera/internal/hub"
 	"ephemera.run/ephemera/internal/ratelimit"
 	"ephemera.run/ephemera/internal/relay"
@@ -32,6 +34,8 @@ type serveFlags struct {
 	maxSizeMB  int64
 	tokens     string // sender tokens file
 	open       bool   // no sender auth at all
+	tlsCert    string // PEM certificate chain; with tlsKey, serve HTTPS
+	tlsKey     string
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -49,8 +53,17 @@ func runServe(args []string) error {
 	fs.Int64Var(&f.maxSizeMB, "max-size-mb", hub.DefaultMaxSize>>20, "largest file a sender may share, in MiB")
 	fs.StringVar(&f.tokens, "tokens", "", "sender tokens file (see `relay token`); senders without a listed token are refused")
 	fs.BoolVar(&f.open, "open", false, "let anyone share through this relay, no sender token needed (local testing only)")
+	fs.StringVar(&f.tlsCert, "tls-cert", "", "serve HTTPS/WSS with this PEM certificate chain (needs -tls-key)")
+	fs.StringVar(&f.tlsKey, "tls-key", "", "PEM private key for -tls-cert")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if (f.tlsCert == "") != (f.tlsKey == "") {
+		return errors.New("-tls-cert and -tls-key go together")
+	}
+	if f.tcp != "" && !localAddr(f.tcp) {
+		// raw framed TCP is plaintext: tokens and owner keys in the clear
+		return fmt.Errorf("-tcp %s: the raw TCP listener is plaintext and may only listen on this machine", f.tcp)
 	}
 	authn, err := senderAuth(f)
 	if err != nil {
@@ -106,13 +119,34 @@ func runServe(args []string) error {
 		go acceptLoop(ln, bridge)
 	}
 
-	fmt.Fprintf(os.Stderr, "relay listening on %s\n", f.addr)
 	srv := &http.Server{
 		Addr:              f.addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	if f.tlsCert != "" {
+		// load up front so a bad cert fails before "listening"
+		cert, err := tls.LoadX509KeyPair(f.tlsCert, f.tlsKey)
+		if err != nil {
+			return err
+		}
+		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+		fmt.Fprintf(os.Stderr, "relay listening on %s (https, wss)\n", f.addr)
+		return srv.ListenAndServeTLS("", "")
+	}
+	if !localAddr(f.addr) {
+		fmt.Fprintln(os.Stderr, "warning: serving plain HTTP off this machine: put a TLS proxy in front, or pass -tls-cert and -tls-key")
+	}
+	fmt.Fprintf(os.Stderr, "relay listening on %s\n", f.addr)
 	return srv.ListenAndServe()
+}
+
+// localAddr reports whether a listen address only accepts
+// connections from this machine. An empty host (":7100") listens on
+// every interface.
+func localAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	return err == nil && host != "" && daemon.IsLocalHost(host)
 }
 
 // senderAuth picks the relay's sender authentication. Secure by

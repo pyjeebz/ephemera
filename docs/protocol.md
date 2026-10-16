@@ -4,6 +4,11 @@ Daemon ↔ relay speak length-prefixed JSON frames over a single
 WebSocket connection. This file is the versioned source of truth for
 the frame format; it is filled in as phase 3 (protocol) lands.
 
+Transport: wss:// to any relay off the sender's machine. Hello and
+send carry the sender token and owner key, so the daemon refuses
+ws:// and raw tcp:// unless the relay is on localhost (or the sender
+passes -insecure on purpose).
+
 ## Frame (planned)
 
 	t uint8      frame type

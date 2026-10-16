@@ -15,6 +15,27 @@ import (
 	"time"
 )
 
+// buildBinaries builds both real binaries into a temp dir.
+func buildBinaries(t *testing.T) (ephemeraBin, relayBin string) {
+	t.Helper()
+	build := t.TempDir()
+	ephemeraBin = filepath.Join(build, "ephemera")
+	relayBin = filepath.Join(build, "relay")
+	for _, tt := range []struct{ dir, out string }{
+		{"./cmd/ephemera", ephemeraBin},
+		{"./cmd/relay", relayBin},
+	} {
+		cmd := exec.Command("go", "build", "-o", tt.out, tt.dir)
+		cmd.Dir = "../.."
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("build %s: %v", tt.dir, err)
+		}
+	}
+	return ephemeraBin, relayBin
+}
+
 // TestBinariesEndToEnd builds both real binaries and runs the full
 // slice over real sockets on localhost:
 //
@@ -41,22 +62,7 @@ func TestBinariesEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// build binaries
-	build := t.TempDir()
-	ephemeraBin := filepath.Join(build, "ephemera")
-	relayBin := filepath.Join(build, "relay")
-	for _, tt := range []struct{ dir, out string }{
-		{"./cmd/ephemera", ephemeraBin},
-		{"./cmd/relay", relayBin},
-	} {
-		cmd := exec.Command("go", "build", "-o", tt.out, tt.dir)
-		cmd.Dir = "../.."
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("build %s: %v", tt.dir, err)
-		}
-	}
+	ephemeraBin, relayBin := buildBinaries(t)
 
 	// pick relay port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

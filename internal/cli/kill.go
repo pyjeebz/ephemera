@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+
+	"ephemera.run/ephemera/internal/daemon"
 )
 
 // runKill asks the relay to force-expire a share. The daemon's own
@@ -18,8 +21,14 @@ func runKill(args []string) error {
 	fs.SetOutput(os.Stderr)
 	relay := fs.String("relay", "http://localhost:7100", "relay base URL")
 	token := fs.String("token", os.Getenv("EPHEMERA_ADMIN_TOKEN"), "admin token (or EPHEMERA_ADMIN_TOKEN)")
+	insecure := fs.Bool("insecure", false, "allow plain http to a relay off this machine (your admin token travels unencrypted)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if u, err := url.Parse(*relay); err != nil {
+		return err
+	} else if u.Scheme != "https" && !*insecure && !daemon.IsLocalHost(u.Hostname()) {
+		return fmt.Errorf("%w (%s): use https://, or pass -insecure", daemon.ErrPlaintext, u.Redacted())
 	}
 	if *token == "" {
 		return errors.New("admin token required: -token or EPHEMERA_ADMIN_TOKEN")

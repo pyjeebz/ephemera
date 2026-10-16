@@ -42,10 +42,26 @@ func dialFunc(relay string) func() (net.Conn, error) {
 
 // sendFlags holds the flags of the send subcommand.
 type sendFlags struct {
-	relay string
-	ttl   int64
-	cache bool
-	away  int64 // MiB of prefix to upload for away mode; 0 = off
+	relay    string
+	ttl      int64
+	cache    bool
+	away     int64 // MiB of prefix to upload for away mode; 0 = off
+	insecure bool
+}
+
+// insecureUsage is the -insecure flag's help, shared by commands that
+// talk to a relay.
+const insecureUsage = "allow a plaintext connection to a relay off this machine (your token travels unencrypted)"
+
+// checkRelay refuses a plaintext relay endpoint off this machine
+// before any share starts, so the mistake shows up at once instead of
+// as a token sent in the clear.
+func checkRelay(endpoint string, insecure bool) error {
+	u, err := daemon.RelayURL(endpoint)
+	if err != nil {
+		return err
+	}
+	return daemon.CheckTransport(u, insecure)
 }
 
 // runSend validates the file, connects to the relay, and runs the
@@ -55,11 +71,15 @@ func runSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var f sendFlags
-	fs.StringVar(&f.relay, "relay", "ws://localhost:7100/daemon", "relay endpoint (ws:// host:port/daemon or tcp://host:port)")
+	fs.StringVar(&f.relay, "relay", "ws://localhost:7100/daemon", "relay endpoint (wss://host/daemon; ws:// and tcp:// only to this machine)")
 	fs.Int64Var(&f.ttl, "ttl", 3600, "link lifetime in seconds")
 	fs.BoolVar(&f.cache, "cache", false, "let the relay replay already-watched bytes from RAM while you're offline")
 	fs.Int64Var(&f.away, "away", 0, "upload this many MiB of the file's start so people can begin watching while you're offline")
+	fs.BoolVar(&f.insecure, "insecure", false, insecureUsage)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := checkRelay(f.relay, f.insecure); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
@@ -88,7 +108,11 @@ func runResume(args []string) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	relay := fs.String("relay", "ws://localhost:7100/daemon", "relay endpoint")
+	insecure := fs.Bool("insecure", false, insecureUsage)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := checkRelay(*relay, *insecure); err != nil {
 		return err
 	}
 
