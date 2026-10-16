@@ -231,11 +231,10 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 	}
 }
 
-// awayPace is the prefix trickle's fixed rate: bytes per burst.
-// Small enough that reads always win; big enough to finish a 100MB
-// prefix in a few minutes of idleness.
+// awayBurst is the prefix trickle's step: bytes per burst, each
+// waiting for its ack. Small enough that reads always win; big enough
+// to finish a 100MB prefix in a few minutes of idleness.
 const awayBurst = int64(64 << 10) // 64 KiB per burst
-const awayPause = 250 * time.Millisecond
 
 // trickleAway uploads the away prefix in bursts. Each burst is two
 // adjacent frames under one write lock: TAway (JSON header: offset)

@@ -55,13 +55,6 @@ type Read struct {
 	Length  int64  `json:"length"`
 }
 
-// StreamID identifies a receiver's stream within a share. Empty means
-// the read is a one-shot probe (HEAD/status), not an open stream.
-type StreamID struct {
-	ShareID string `json:"share_id"`
-	Stream  string `json:"stream"`
-}
-
 // Err is the reason a stream or request died.
 type Err struct {
 	ShareID string `json:"share_id"`
