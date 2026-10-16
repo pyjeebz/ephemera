@@ -173,6 +173,9 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 		defer func() { recover() }() // writes to msgs after close
 		for {
 			fr, err := protocol.ReadFrame(s.reader)
+			if errors.Is(err, protocol.ErrUnknownType) {
+				continue // a newer relay's frame: skip it, stay connected
+			}
 			if err != nil {
 				msgs <- readMsg{ok: false}
 				return

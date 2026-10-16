@@ -324,3 +324,53 @@ func TestAnnounceCarriesToken(t *testing.T) {
 		t.Fatalf("hello = %+v (type %d), want token eph_sender", h, fr.Type)
 	}
 }
+
+// TestSessionSkipsUnknownFrame: a frame type the daemon does not know
+// is skipped, and the next read is still answered.
+func TestSessionSkipsUnknownFrame(t *testing.T) {
+	path := makeTestFile(t, t.TempDir(), "clip.mp4", 8192)
+	sh, err := ValidateShare(path, DetectMIME)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, daemonIn, daemonOut := newFakeRelay(t)
+	sess, err := NewSessionIO(daemonIn, daemonOut, sh, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if err := sess.Announce(); err != nil {
+		t.Fatal(err)
+	}
+	relayRd := bufio.NewReader(relay.daemonToRelayR)
+	expectAnnounce(t, relayRd, sh, 60)
+
+	stop := make(chan struct{})
+	served := make(chan error, 1)
+	go func() { served <- sess.Serve(stop) }()
+	defer func() { close(stop); <-served }()
+
+	payload := []byte(`{"from":"the future"}`)
+	frame := append([]byte{0x45, 0x50, 0x48, 0x52, 99, byte(len(payload)), 0, 0, 0}, payload...)
+	if _, err := relay.relayToDaemonW.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	type reply struct {
+		data []byte
+		terr *protocol.Err
+		err  error
+	}
+	got := make(chan reply, 1)
+	go func() {
+		data, terr, err := ask(t, relay.relayToDaemonW, relayRd, sh.ID, 100, 50)
+		got <- reply{data, terr, err}
+	}()
+	select {
+	case r := <-got:
+		if r.err != nil || r.terr != nil || len(r.data) != 50 || r.data[0] != byte(100%251) {
+			t.Fatalf("read after unknown frame: len %d terr %v err %v", len(r.data), r.terr, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("read after unknown frame never answered: the frame ended the session")
+	}
+}

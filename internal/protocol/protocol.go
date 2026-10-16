@@ -9,8 +9,10 @@
 //	payload        JSON body (for TData: raw bytes, no JSON)
 //
 // TData carries raw file bytes. Everything else carries a JSON body;
-// each type's payload struct is defined in frames.go. Unknown types
-// decode to ErrUnknownType so old relays can skip new frames forward.
+// each type's payload struct is defined in frames.go. An unknown type
+// returns ErrUnknownType with its payload already consumed, so the
+// stream stays aligned and readers skip it: an older peer ignores a
+// newer frame type instead of dropping the connection.
 package protocol
 
 import (

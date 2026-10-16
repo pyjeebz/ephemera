@@ -285,3 +285,41 @@ func (p *pipeConn) Close() error {
 
 // silence unused warnings for time import when tests shrink
 var _ = time.Second
+
+// unknownFrame is a well-formed frame of a type this build does not
+// know, as a newer peer would send.
+func unknownFrame() []byte {
+	payload := []byte(`{"from":"the future"}`)
+	b := []byte{0x45, 0x50, 0x48, 0x52, 99, byte(len(payload)), 0, 0, 0}
+	return append(b, payload...)
+}
+
+// TestUnknownFrameSkipped: a frame type the relay does not know is
+// skipped, not fatal: the connection stays up and reads still work.
+func TestUnknownFrameSkipped(t *testing.T) {
+	reg := share.NewRegistry(time.Hour)
+	fd, relayR, relayW, _ := startFakeDaemon(t, 8192, 3600)
+	d, err := (&Bridge{Registry: reg}).Accept(&pipeConn{r: relayR, w: relayW})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	defer d.Close()
+
+	if _, err := fd.toRelayW.Write(unknownFrame()); err != nil {
+		t.Fatal(err)
+	}
+	type reply struct {
+		data []byte
+		err  error
+	}
+	got := make(chan reply, 1)
+	go func() { data, err := d.IssueRead(100, 50); got <- reply{data, err} }()
+	select {
+	case r := <-got:
+		if r.err != nil || len(r.data) != 50 || r.data[0] != byte(100%251) {
+			t.Fatalf("read after unknown frame: len %d err %v", len(r.data), r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("read after unknown frame never answered: the frame broke the connection")
+	}
+}

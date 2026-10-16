@@ -267,6 +267,9 @@ func (d *DaemonConn) writeLoop() {
 func (d *DaemonConn) readLoop() {
 	for {
 		fr, err := protocol.ReadFrame(d.reader)
+		if errors.Is(err, protocol.ErrUnknownType) {
+			continue // a newer daemon's frame: skip it, stay connected
+		}
 		if err != nil {
 			d.fail(err)
 			return
