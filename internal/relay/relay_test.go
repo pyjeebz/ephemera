@@ -273,8 +273,8 @@ func TestFileOfflineAndExpired(t *testing.T) {
 
 	// page: 410 too, with noindex
 	resp, _ = http.Get(ts2.URL + "/gone")
-	if resp.StatusCode != http.StatusGone || resp.Header.Get("Robots") != "noindex" {
-		t.Errorf("expired page: %d robots=%q", resp.StatusCode, resp.Header.Get("Robots"))
+	if resp.StatusCode != http.StatusGone || resp.Header.Get("X-Robots-Tag") != "noindex" {
+		t.Errorf("expired page: %d X-Robots-Tag=%q", resp.StatusCode, resp.Header.Get("X-Robots-Tag"))
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
@@ -362,6 +362,26 @@ func serveReads(conn io.ReadWriter, body []byte) {
 			if protocol.EncodeData(conn, buf[off:end]) != nil {
 				return
 			}
+		}
+	}
+}
+
+// TestLinkPagesNotIndexed: link pages and their bytes carry
+// X-Robots-Tag: noindex in every state.
+func TestLinkPagesNotIndexed(t *testing.T) {
+	srv, reg := newTestServer(t, []byte("abc"), true)
+	reg.Register(share.Info{ID: "old", Size: 3, Expires: time.Now().Add(-time.Second)}, nil)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	for _, path := range []string{"/abc123", "/abc123/file", "/old"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get("X-Robots-Tag"); got != "noindex" {
+			t.Errorf("GET %s: X-Robots-Tag = %q, want noindex", path, got)
 		}
 	}
 }

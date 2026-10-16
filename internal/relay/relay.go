@@ -182,6 +182,8 @@ func (s *Server) lookupState(id string) stateFor {
 }
 
 func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
+	// links are private: never index a link page in any state
+	w.Header().Set("X-Robots-Tag", "noindex")
 	id := r.PathValue("id")
 	st := s.lookupState(id)
 
@@ -191,7 +193,6 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		return
 	case "expired":
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Robots", "noindex")
 		w.WriteHeader(http.StatusGone)
 		fmt.Fprintln(w, `<!doctype html><title>Expired — Ephemera</title>
 <p>This link has expired. Ephemera links leave no trace.</p>`)
@@ -205,9 +206,6 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if st.state == "offline" {
-		w.Header().Set("Robots", "noindex")
-	}
 	w.Write(page)
 }
 
@@ -255,6 +253,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // single ranges honored (206), no-range full-body streamed (200),
 // unsatisfiable 416, malformed/multi-range ignored as 200 full.
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Robots-Tag", "noindex")
 	id := r.PathValue("id")
 	st := s.lookupState(id)
 
