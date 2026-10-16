@@ -28,6 +28,7 @@ python3 scripts/make_architecture_tldraw.py
   - Receiver-facing HTTP surface
   - Layer B volatile cache
   - Layer C away-prefix store
+  - Sender authentication (tokens file, pluggable for a hosted accounts service)
   - Rate limiting, metrics, and admin API
 - **Receiver**
   - `/:id` page

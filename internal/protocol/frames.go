@@ -3,10 +3,13 @@ package protocol
 // Payload structs for the JSON frame types. Field names on the wire
 // are stable once v0 ships; docs/protocol.md is the source of truth.
 
-// Hello is the daemon's first frame after connecting.
+// Hello is the daemon's first frame after connecting. Token is the
+// sender's credential; relays that require accounts refuse an empty
+// or unknown one.
 type Hello struct {
 	Version string `json:"version"`
 	Name    string `json:"name"` // sender's display name, optional
+	Token   string `json:"token,omitempty"`
 }
 
 // Send announces one shared file. Size is advisory: the relay trusts

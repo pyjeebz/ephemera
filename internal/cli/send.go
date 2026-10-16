@@ -114,6 +114,10 @@ func runResume(args []string) error {
 func runShares(shares []daemon.Share, ttls []int64, relay string) error {
 	ka := daemon.NewKeepAwake()
 	sd := openState()
+	token, err := senderToken()
+	if err != nil {
+		return err
+	}
 
 	errCh := make(chan error, len(shares))
 	for i, sh := range shares {
@@ -123,6 +127,7 @@ func runShares(shares []daemon.Share, ttls []int64, relay string) error {
 				TTLSec:    ttl,
 				KeepAwake: ka,
 				State:     sd,
+				Token:     token,
 			}
 			if err := daemon.Run(sh, cfg); err != nil {
 				errCh <- err

@@ -94,8 +94,9 @@ func (l Limits) maxSize() int64   { return cmp.Or(l.MaxSize, DefaultMaxSize) }
 // before.
 type Bridge struct {
 	Registry *share.Registry
-	Away     *away.Store // nil: layer C disabled
-	Limits   Limits
+	Away     *away.Store   // nil: layer C disabled
+	Auth     Authenticator // nil: open relay, every sender anonymous
+	Limits   Limits        // relay-wide; an Account's limits override
 }
 
 // Accept takes ownership of a freshly connected daemon socket:
@@ -114,7 +115,20 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 	}
 
 	// hello + send arrive before anything else
-	if err := d.expectHello(); err != nil {
+	hello, err := d.expectHello()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	acct, err := b.authenticate(hello.Token)
+	switch {
+	case errors.Is(err, ErrNoToken):
+		return nil, refuse(conn, "", "denied", "this relay needs a sender token: run `ephemera login`", err)
+	case errors.Is(err, ErrBadToken):
+		return nil, refuse(conn, "", "denied", "sender token not accepted: run `ephemera login` with a valid token", err)
+	case err != nil:
+		// transient (accounts service down): no refusal, the
+		// daemon redials and tries again
 		conn.Close()
 		return nil, err
 	}
@@ -126,7 +140,7 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 		conn.Close()
 		return nil, err
 	}
-	if err := b.Limits.check(info); err != nil {
+	if err := acct.Limits.or(b.Limits).check(info); err != nil {
 		return nil, refuse(conn, info.ShareID, "denied", err.(limitError).reason, err)
 	}
 	d.shareID = info.ShareID
@@ -142,6 +156,7 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 		Expires:    expires,
 		Cacheable:  info.Cache,
 		AwayPrefix: min(info.AwayPrefixBytes, info.Size),
+		Account:    acct.Name,
 	}, d); err != nil {
 		return nil, refuse(conn, info.ShareID, "gone", "this link was taken down", err)
 	}
@@ -193,16 +208,20 @@ func refuse(conn Conn, shareID, code, reason string, cause error) error {
 	return cause
 }
 
-// expectHello reads one THello frame.
-func (d *DaemonConn) expectHello() error {
+// expectHello reads one THello frame and decodes it.
+func (d *DaemonConn) expectHello() (protocol.Hello, error) {
+	var h protocol.Hello
 	fr, err := protocol.ReadFrame(d.reader)
 	if err != nil {
-		return fmt.Errorf("hub: hello: %w", err)
+		return h, fmt.Errorf("hub: hello: %w", err)
 	}
 	if fr.Type != protocol.THello {
-		return fmt.Errorf("hub: first frame type %d, want THello", fr.Type)
+		return h, fmt.Errorf("hub: first frame type %d, want THello", fr.Type)
 	}
-	return nil
+	if err := json.Unmarshal(fr.JSON, &h); err != nil {
+		return h, fmt.Errorf("hub: hello json: %w", err)
+	}
+	return h, nil
 }
 
 // expectSend reads one TSend frame and decodes it.

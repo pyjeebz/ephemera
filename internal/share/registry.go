@@ -37,6 +37,10 @@ type Info struct {
 	// offline.
 	AwayPrefix int64
 
+	// Account is the sender's account name on relays that require
+	// tokens; empty on open relays. Never shown to receivers.
+	Account string
+
 	// Online reports whether a daemon connection is attached. The
 	// registry does not own the connection; the hub sets this via
 	// the returned handle.

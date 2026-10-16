@@ -11,21 +11,37 @@ go build -o bin/relay ./cmd/relay
 
 ## 2. Start the relay
 
+Senders need a token. Mint one into a tokens file (the file stores only its hash; the token itself is printed once):
+
 ```bash
-./bin/relay serve -addr 0.0.0.0:7100
+./bin/relay token -file tokens.txt me
 ```
+
+Then start the relay with that file:
+
+```bash
+./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt
+```
+
+A relay started with neither `-tokens` nor `-open` refuses to start. `-open` lets anyone share without a token; use it only on a machine nobody else can reach.
 
 Senders are held to the relay's limits: `-max-ttl` (seconds, default 86400) and `-max-size-mb` (default 5120). A share over either is refused, and `ephemera send` exits with the reason.
 
 To enable the optional in-memory replay and away-prefix stores:
 
 ```bash
-./bin/relay serve -addr 0.0.0.0:7100 -cache-mb 256 -away-mb 64
+./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt -cache-mb 256 -away-mb 64
 ```
 
 ## 3. Share a real video
 
-From a second terminal:
+From a second terminal, log in with the token from step 2 (paste it, or pipe it in):
+
+```bash
+./bin/ephemera login
+```
+
+`EPHEMERA_TOKEN` overrides the stored login, which is handy in scripts. Then share:
 
 ```bash
 ./bin/ephemera send \

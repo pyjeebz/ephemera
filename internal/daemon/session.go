@@ -24,6 +24,10 @@ type Session struct {
 	Share  Share
 	TTLSec int64
 
+	// Token is the sender's credential, sent in THello. Empty is
+	// fine on open relays.
+	Token string
+
 	conn   net.Conn
 	writer io.Writer // frame encoder target; conn for TCP, test pipes otherwise
 	reader *bufio.Reader
@@ -82,7 +86,7 @@ func (s *Session) Close() error {
 // Announce sends THello then TSend: the two frames a relay needs
 // before it will route reads to this session.
 func (s *Session) Announce() error {
-	if err := protocol.EncodeJSON(s.writer, protocol.THello, protocol.Hello{Version: Version}); err != nil {
+	if err := protocol.EncodeJSON(s.writer, protocol.THello, protocol.Hello{Version: Version, Token: s.Token}); err != nil {
 		return err
 	}
 	return protocol.EncodeJSON(s.writer, protocol.TSend, protocol.Send{

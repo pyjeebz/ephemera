@@ -298,3 +298,29 @@ func TestSessionDetectsRelayGone(t *testing.T) {
 	}
 	close(stop)
 }
+
+// TestAnnounceCarriesToken: the sender token rides in THello.
+func TestAnnounceCarriesToken(t *testing.T) {
+	path := makeTestFile(t, t.TempDir(), "video.mp4", 1024)
+	sh, err := ValidateShare(path, DetectMIME)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, daemonIn, daemonOut := newFakeRelay(t)
+	sess, err := NewSessionIO(daemonIn, daemonOut, sh, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	sess.Token = "eph_sender"
+	go sess.Announce()
+
+	fr, err := protocol.ReadFrame(bufio.NewReader(relay.daemonToRelayR))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h protocol.Hello
+	if fr.Type != protocol.THello || json.Unmarshal(fr.JSON, &h) != nil || h.Token != "eph_sender" {
+		t.Fatalf("hello = %+v (type %d), want token eph_sender", h, fr.Type)
+	}
+}

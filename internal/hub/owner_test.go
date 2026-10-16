@@ -17,6 +17,12 @@ import (
 // plus the daemon's read end to see what the relay said back.
 func announceOnly(t *testing.T, ann protocol.Send) (*pipeConn, *bufio.Reader) {
 	t.Helper()
+	return announceWith(t, protocol.Hello{Version: "0.1"}, ann)
+}
+
+// announceWith is announceOnly with a chosen hello (sender token).
+func announceWith(t *testing.T, hello protocol.Hello, ann protocol.Send) (*pipeConn, *bufio.Reader) {
+	t.Helper()
 	relayR, daemonW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +37,7 @@ func announceOnly(t *testing.T, ann protocol.Send) (*pipeConn, *bufio.Reader) {
 		daemonR.Close()
 		relayW.Close()
 	})
-	if err := protocol.EncodeJSON(daemonW, protocol.THello, protocol.Hello{Version: "0.1"}); err != nil {
+	if err := protocol.EncodeJSON(daemonW, protocol.THello, hello); err != nil {
 		t.Fatal(err)
 	}
 	if err := protocol.EncodeJSON(daemonW, protocol.TSend, ann); err != nil {

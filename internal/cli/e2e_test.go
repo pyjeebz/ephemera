@@ -68,8 +68,16 @@ func TestBinariesEndToEnd(t *testing.T) {
 	relayURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	relayWS := fmt.Sprintf("ws://127.0.0.1:%d/daemon", port)
 
-	// start relay
-	relayProc := exec.Command(relayBin, "serve", "-addr", fmt.Sprintf("127.0.0.1:%d", port), "-cache-mb", "64", "-away-mb", "64")
+	// mint a sender token the way an operator would
+	tokensFile := filepath.Join(t.TempDir(), "tokens")
+	tokenOut, err := exec.Command(relayBin, "token", "-file", tokensFile, "e2e").Output()
+	if err != nil {
+		t.Fatalf("relay token: %v", err)
+	}
+	token := strings.TrimSpace(string(tokenOut))
+
+	// start relay: senders need a listed token
+	relayProc := exec.Command(relayBin, "serve", "-addr", fmt.Sprintf("127.0.0.1:%d", port), "-cache-mb", "64", "-away-mb", "64", "-tokens", tokensFile)
 	relayLog, _ := os.CreateTemp(t.TempDir(), "relay.log")
 	relayProc.Stderr = relayLog
 	if err := relayProc.Start(); err != nil {
@@ -92,9 +100,30 @@ func TestBinariesEndToEnd(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// senders get their own config dir, never the real user's
+	senderEnv := func(token string) []string {
+		return append(os.Environ(), "XDG_CONFIG_HOME="+t.TempDir(), "HOME="+t.TempDir(), "EPHEMERA_TOKEN="+token)
+	}
+
+	// no token: refused with a reason, at once, no redial loop
+	anon := exec.Command(ephemeraBin, "send", "-relay", relayWS, "-ttl", "60", video)
+	anon.Env = senderEnv("")
+	anonDone := make(chan []byte, 1)
+	go func() { out, _ := anon.CombinedOutput(); anonDone <- out }()
+	select {
+	case out := <-anonDone:
+		if anon.ProcessState.Success() || !strings.Contains(string(out), "needs a sender token") {
+			t.Fatalf("tokenless send: exit %v, output:\n%s", anon.ProcessState, out)
+		}
+	case <-time.After(10 * time.Second):
+		anon.Process.Kill()
+		t.Fatal("tokenless send did not stop on the relay's refusal")
+	}
+
 	// start daemon
 	ttl := 90
 	sendProc := exec.Command(ephemeraBin, "send", "-relay", relayWS, "-ttl", strconv.Itoa(ttl), "-cache", "-away", "1", video)
+	sendProc.Env = senderEnv(token)
 	sendLog, _ := os.CreateTemp(t.TempDir(), "send.log")
 	sendProc.Stderr = sendLog
 	if err := sendProc.Start(); err != nil {

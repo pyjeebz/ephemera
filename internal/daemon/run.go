@@ -27,6 +27,9 @@ type RunConfig struct {
 
 	// State, if set, persists the share for resume-on-restart.
 	State *StateDir
+
+	// Token is the sender's credential for relays that require one.
+	Token string
 }
 
 // Backoff schedule for reconnects: capped exponential with jitter,
@@ -98,6 +101,7 @@ func Run(sh Share, cfg RunConfig) error {
 			attempt++
 			continue
 		}
+		sess.Token = cfg.Token
 
 		if err := sess.Announce(); err != nil {
 			sess.Close()

@@ -18,6 +18,18 @@ the frame format; it is filled in as phase 3 (protocol) lands.
 	data        daemon → relay: raw bytes for last read
 	close       either: end of stream, or error
 
+## Hello frame fields (v0, live)
+
+	version  string  daemon protocol version
+	name     string  sender display name, optional
+	token    string  sender token (eph_…); relays that require
+	                 accounts refuse an empty or unknown one
+
+	Relays check the token before reading the send frame. A missing
+	or rejected token is a refusal (TErr denied). If the relay cannot
+	check it at all (its accounts service is down) it hangs up with no
+	TErr, and the daemon redials as for any dropped connection.
+
 ## Send frame fields (v0, live)
 
 	share_id           string  128-bit base64url id, derived from owner_key
@@ -49,13 +61,14 @@ the frame format; it is filled in as phase 3 (protocol) lands.
 
 ## Refusals (live)
 
-	The relay checks every announce against its limits (relay serve
-	-max-ttl, default 24h; -max-size-mb, default 5 GiB) and its share
-	table. A refused announce gets one TErr before the relay hangs up:
+	The relay checks every announce against the sender's limits (its
+	account's, else relay serve -max-ttl, default 24h, and
+	-max-size-mb, default 5 GiB) and its share table. A refused announce gets one TErr before the relay hangs up:
 
 	code     when
-	denied   ttl < 1, ttl or size over the relay's limits, or an
-	         owner key that does not certify the share id
+	denied   no or unknown sender token, ttl < 1, ttl or size over
+	         the sender's limits, or an owner key that does not
+	         certify the share id
 	gone     the link was killed by an admin
 
 	The message is a reason meant for the sender. A daemon that gets

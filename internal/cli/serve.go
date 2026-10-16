@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"ephemera.run/ephemera/internal/auth"
 	awaystore "ephemera.run/ephemera/internal/away"
 	cachestore "ephemera.run/ephemera/internal/cache"
 	"ephemera.run/ephemera/internal/hub"
@@ -28,6 +30,8 @@ type serveFlags struct {
 	awayMB     int64
 	maxTTL     int64 // seconds
 	maxSizeMB  int64
+	tokens     string // sender tokens file
+	open       bool   // no sender auth at all
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -43,7 +47,13 @@ func runServe(args []string) error {
 	fs.Int64Var(&f.awayMB, "away-mb", 512, "layer-C away-prefix budget in MiB (0 disables away mode)")
 	fs.Int64Var(&f.maxTTL, "max-ttl", hub.DefaultMaxTTLSec, "longest link lifetime a sender may ask for, in seconds")
 	fs.Int64Var(&f.maxSizeMB, "max-size-mb", hub.DefaultMaxSize>>20, "largest file a sender may share, in MiB")
+	fs.StringVar(&f.tokens, "tokens", "", "sender tokens file (see `relay token`); senders without a listed token are refused")
+	fs.BoolVar(&f.open, "open", false, "let anyone share through this relay, no sender token needed (local testing only)")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	authn, err := senderAuth(f)
+	if err != nil {
 		return err
 	}
 	if f.maxSizeMB<<20 > hub.DefaultMaxSize {
@@ -54,6 +64,7 @@ func runServe(args []string) error {
 	reg := share.NewRegistry(time.Second)
 	bridge := &hub.Bridge{
 		Registry: reg,
+		Auth:     authn,
 		Limits:   hub.Limits{MaxTTLSec: f.maxTTL, MaxSize: f.maxSizeMB << 20},
 	}
 
@@ -104,6 +115,59 @@ func runServe(args []string) error {
 	return srv.ListenAndServe()
 }
 
+// senderAuth picks the relay's sender authentication. Secure by
+// default: a relay with neither a tokens file nor -open refuses to
+// start rather than quietly letting anyone share through it.
+func senderAuth(f serveFlags) (hub.Authenticator, error) {
+	switch {
+	case f.tokens != "" && f.open:
+		return nil, errors.New("-tokens and -open are mutually exclusive")
+	case f.tokens != "":
+		return auth.LoadStatic(f.tokens)
+	case f.open:
+		fmt.Fprintln(os.Stderr, "warning: -open: anyone who can reach this relay can share through it")
+		return nil, nil
+	}
+	return nil, errors.New("relay serve needs -tokens <file> (create tokens with `relay token <name>`) or -open to let anyone share")
+}
+
+// runToken mints a sender token: the token goes to the sender, the
+// hash line goes in the relay's tokens file.
+func runToken(args []string) error {
+	fs := flag.NewFlagSet("token", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	file := fs.String("file", "", "append the hash line to this tokens file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 || !auth.ValidName(fs.Arg(0)) {
+		return errors.New("usage: relay token [-file tokens] <name>  (name: no spaces or #)")
+	}
+	name := fs.Arg(0)
+	token := auth.NewToken()
+	line := name + " " + auth.Hash(token)
+
+	if *file != "" {
+		fh, err := os.OpenFile(*file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(fh, line); err != nil {
+			fh.Close()
+			return err
+		}
+		if err := fh.Close(); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "added %s to %s (restart the relay to pick it up)\n", name, *file)
+	} else {
+		fmt.Fprintf(os.Stderr, "add this line to the relay's tokens file:\n  %s\n", line)
+	}
+	fmt.Fprintf(os.Stderr, "sender token for %s (shown once; the sender runs `ephemera login`):\n", name)
+	fmt.Println(token)
+	return nil
+}
+
 // acceptLoop bridges raw framed TCP daemon connections (dev/test).
 func acceptLoop(ln net.Listener, bridge *hub.Bridge) {
 	for {
@@ -119,4 +183,5 @@ func acceptLoop(ln net.Listener, bridge *hub.Bridge) {
 
 func init() {
 	register("serve", runServe)
+	register("token", runToken)
 }
