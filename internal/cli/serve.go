@@ -8,10 +8,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/coder/websocket"
 
+	"ephemera.run/ephemera/internal/abuse"
 	"ephemera.run/ephemera/internal/auth"
 	awaystore "ephemera.run/ephemera/internal/away"
 	cachestore "ephemera.run/ephemera/internal/cache"
@@ -36,6 +38,7 @@ type serveFlags struct {
 	open       bool   // no sender auth at all
 	tlsCert    string // PEM certificate chain; with tlsKey, serve HTTPS
 	tlsKey     string
+	dataDir    string // operator state: reports, suspensions
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -55,6 +58,7 @@ func runServe(args []string) error {
 	fs.BoolVar(&f.open, "open", false, "let anyone share through this relay, no sender token needed (local testing only)")
 	fs.StringVar(&f.tlsCert, "tls-cert", "", "serve HTTPS/WSS with this PEM certificate chain (needs -tls-key)")
 	fs.StringVar(&f.tlsKey, "tls-key", "", "PEM private key for -tls-cert")
+	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports and account suspensions here across restarts (never file bytes)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -74,11 +78,17 @@ func runServe(args []string) error {
 		return fmt.Errorf("-max-size-mb %d is over the %d MiB shares support", f.maxSizeMB, hub.DefaultMaxSize>>20)
 	}
 
+	reports, suspensions, err := moderationState(f.dataDir)
+	if err != nil {
+		return err
+	}
+
 	reg := share.NewRegistry(time.Second)
 	bridge := &hub.Bridge{
-		Registry: reg,
-		Auth:     authn,
-		Limits:   hub.Limits{MaxTTLSec: f.maxTTL, MaxSize: f.maxSizeMB << 20},
+		Registry:    reg,
+		Auth:        authn,
+		Limits:      hub.Limits{MaxTTLSec: f.maxTTL, MaxSize: f.maxSizeMB << 20},
+		Suspensions: suspensions,
 	}
 
 	// daemon bridge: one WS connection, one share
@@ -105,6 +115,10 @@ func runServe(args []string) error {
 		AdminToken: f.adminToken,
 		Cache:      cachepkg,
 		Away:       awaypkg,
+
+		Reports:       reports,
+		ReportLimiter: ratelimit.New(1.0/60, 5), // 5 reports, then 1 a minute, per IP
+		Suspensions:   suspensions,
 	})
 
 	mux := http.NewServeMux()
@@ -139,6 +153,30 @@ func runServe(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "relay listening on %s\n", f.addr)
 	return srv.ListenAndServe()
+}
+
+// moderationState opens the report queue and suspension list, in
+// dataDir when set and in memory otherwise.
+func moderationState(dataDir string) (*abuse.Reports, *abuse.Suspensions, error) {
+	var reportsPath, suspendedPath string
+	if dataDir == "" {
+		fmt.Fprintln(os.Stderr, "warning: no -data-dir: link reports and account suspensions are lost when the relay restarts")
+	} else {
+		if err := os.MkdirAll(dataDir, 0o700); err != nil {
+			return nil, nil, err
+		}
+		reportsPath = filepath.Join(dataDir, "reports.jsonl")
+		suspendedPath = filepath.Join(dataDir, "suspended.txt")
+	}
+	reports, err := abuse.NewReports(reportsPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reports: %w", err)
+	}
+	suspensions, err := abuse.NewSuspensions(suspendedPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("suspensions: %w", err)
+	}
+	return reports, suspensions, nil
 }
 
 // localAddr reports whether a listen address only accepts

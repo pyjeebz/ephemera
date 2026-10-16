@@ -135,3 +135,24 @@ Either let the relay terminate TLS itself:
 or keep it on plain HTTP behind a TLS proxy (Caddy, nginx, a Cloudflare or ngrok tunnel) and point senders at the proxy's `wss://` address. A relay serving plain HTTP off its own machine prints a warning, since it can't tell whether a proxy is in front.
 
 For a self-signed or private-CA certificate, a Linux sender can trust it with `SSL_CERT_FILE=/path/to/ca.pem`.
+
+## 9. Moderation
+
+Start the relay with an admin token and a data dir, so link reports and account suspensions survive restarts:
+
+```bash
+./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt -data-dir ./relay-data -admin-token "$EPHEMERA_ADMIN_TOKEN"
+```
+
+Receivers report a link with the "Report this link" form under the player (5 reports per IP, then one a minute). The data dir holds `reports.jsonl` and `suspended.txt`; it never holds file bytes or anything about who reported.
+
+With `EPHEMERA_ADMIN_TOKEN` set:
+
+```bash
+./bin/ephemera reports                    # newest first: link, reason, account, file, note
+./bin/ephemera kill -suspend <share-id>   # take the link down, suspend its sender, kill their other links
+./bin/ephemera suspended                  # list suspended accounts
+./bin/ephemera unsuspend <account>
+```
+
+`kill -suspend` still works after the link has expired, as long as it was reported: the report remembers the account. A suspended sender's `ephemera send` stops with "this sender account is suspended".
