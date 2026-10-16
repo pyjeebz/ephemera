@@ -366,6 +366,34 @@ func serveReads(conn io.ReadWriter, body []byte) {
 	}
 }
 
+// TestRootAndUnknownPaths: / says what the server is; deeper unknown
+// paths 404 rather than falling into the catch-all.
+func TestRootAndUnknownPaths(t *testing.T) {
+	srv, _ := newTestServer(t, []byte("abc"), true)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "Ephemera relay") {
+		t.Fatalf("GET /: %d %q", resp.StatusCode, body)
+	}
+	for _, path := range []string{"/a/b", "/a/b/c", "/x/file/extra"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: %d, want 404", path, resp.StatusCode)
+		}
+	}
+}
+
 // TestLinkPagesNotIndexed: link pages and their bytes carry
 // X-Robots-Tag: noindex in every state.
 func TestLinkPagesNotIndexed(t *testing.T) {

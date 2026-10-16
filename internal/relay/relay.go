@@ -4,7 +4,7 @@
 //
 // Routes:
 //
-//	GET /            placeholder
+//	GET /            what this server is; any other unknown path 404s
 //	GET /:id         receiver page (state from /:id/status)
 //	GET /:id/file    the bytes: Range-honoring, streamed in chunks
 //	GET /:id/status  JSON: {state, name, size, mime, expires}
@@ -152,9 +152,20 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, `{"killed":true}`)
 }
 
+// handleRoot serves the relay's home page. "GET /" is also the mux's
+// catch-all, so anything else that reaches it is a 404.
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	page, err := receiverFS.ReadFile("receiver/home.html")
+	if err != nil {
+		http.Error(w, "home page missing", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintln(w, "<!doctype html><title>Ephemera</title><p>The link that doesn't upload.</p>")
+	w.Write(page)
 }
 
 // stateFor maps a registry result to the receiver page's four
