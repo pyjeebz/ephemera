@@ -11,6 +11,7 @@
 package relay
 
 import (
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -110,7 +111,8 @@ func (s *Server) limited(next http.Handler) http.Handler {
 	})
 }
 
-// guardAdmin requires the configured bearer token.
+// guardAdmin requires the configured bearer token, compared in
+// constant time.
 func (s *Server) guardAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.AdminToken == "" {
@@ -119,7 +121,7 @@ func (s *Server) guardAdmin(next http.HandlerFunc) http.HandlerFunc {
 		}
 		got := r.Header.Get("Authorization")
 		want := "Bearer " + s.cfg.AdminToken
-		if got != want {
+		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 			http.Error(w, "no", http.StatusUnauthorized)
 			return
 		}
