@@ -30,11 +30,19 @@ type Authenticator interface {
 	Authenticate(token string) (Account, error)
 }
 
-// ErrNoToken and ErrBadToken are the two final auth refusals.
+// ErrNoToken and ErrBadToken are the two final auth refusals;
+// ErrSuspended refuses an account the operator suspended.
 var (
-	ErrNoToken  = errors.New("hub: sender token required")
-	ErrBadToken = errors.New("hub: sender token not accepted")
+	ErrNoToken   = errors.New("hub: sender token required")
+	ErrBadToken  = errors.New("hub: sender token not accepted")
+	ErrSuspended = errors.New("hub: sender account suspended")
 )
+
+// Suspensions is the operator's list of suspended sender accounts,
+// checked after the Authenticator.
+type Suspensions interface {
+	Suspended(account string) bool
+}
 
 // authenticate runs the bridge's Authenticator; nil means an open
 // relay where every sender is anonymous.

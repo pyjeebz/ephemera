@@ -97,6 +97,11 @@ type Bridge struct {
 	Away     *away.Store   // nil: layer C disabled
 	Auth     Authenticator // nil: open relay, every sender anonymous
 	Limits   Limits        // relay-wide; an Account's limits override
+
+	// Suspensions, if set, refuses announces from suspended
+	// accounts. Anonymous senders (open relay) have no account to
+	// suspend.
+	Suspensions Suspensions
 }
 
 // Accept takes ownership of a freshly connected daemon socket:
@@ -131,6 +136,9 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 		// daemon redials and tries again
 		conn.Close()
 		return nil, err
+	}
+	if acct.Name != "" && b.Suspensions != nil && b.Suspensions.Suspended(acct.Name) {
+		return nil, refuse(conn, "", "denied", "this sender account is suspended", ErrSuspended)
 	}
 	info, err := d.expectSend()
 	if errors.Is(err, ErrNotOwner) {

@@ -114,3 +114,33 @@ func TestAcceptAuthAccountAndLimits(t *testing.T) {
 	}
 	expectRefusal(t, daemonR, "denied")
 }
+
+type suspendedSet map[string]bool
+
+func (s suspendedSet) Suspended(account string) bool { return s[account] }
+
+// TestAcceptRefusesSuspendedAccount: a valid token for a suspended
+// account is refused with a reason; other accounts still share.
+func TestAcceptRefusesSuspendedAccount(t *testing.T) {
+	reg := share.NewRegistry(time.Hour)
+	b := &Bridge{
+		Registry:    reg,
+		Auth:        &fakeAuth{accounts: map[string]Account{"bad": {Name: "mallory"}, "good": {Name: "alice"}}},
+		Suspensions: suspendedSet{"mallory": true},
+	}
+
+	conn, daemonR := announceWith(t, protocol.Hello{Version: "0.1", Token: "bad"}, newAnnounce(60, 1024))
+	if _, err := b.Accept(conn); !errors.Is(err, ErrSuspended) {
+		t.Fatalf("suspended account: %v, want ErrSuspended", err)
+	}
+	if e := expectRefusal(t, daemonR, "denied"); e.Message != "this sender account is suspended" {
+		t.Errorf("reason = %q", e.Message)
+	}
+
+	conn, _ = announceWith(t, protocol.Hello{Version: "0.1", Token: "good"}, newAnnounce(60, 1024))
+	d, err := b.Accept(conn)
+	if err != nil {
+		t.Fatalf("other account refused: %v", err)
+	}
+	d.Close()
+}

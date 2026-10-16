@@ -100,9 +100,9 @@ ahead of the code that reads them.
 	announce gets one err frame before the relay hangs up:
 
 	code     when
-	denied   no or unknown sender token, ttl < 1, ttl or size over
-	         the sender's limits, or an owner key that does not
-	         certify the share id
+	denied   no or unknown sender token, a suspended account, ttl < 1,
+	         ttl or size over the sender's limits, or an owner key
+	         that does not certify the share id
 	gone     the link was killed by an admin
 
 	The message is a reason meant for the sender. A daemon that gets
