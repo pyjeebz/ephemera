@@ -8,6 +8,11 @@
 //	GET /:id         receiver page (state from /:id/status)
 //	GET /:id/file    the bytes: Range-honoring, streamed in chunks
 //	GET /:id/status  JSON: {state, name, size, mime, expires}
+//	POST /:id/report a receiver reports the link: {reason, note}
+//
+// Admin (bearer token): GET /admin/metrics, GET /admin/reports,
+// GET /admin/suspended, POST /admin/kill {id, suspend},
+// POST /admin/suspend {account}, POST /admin/unsuspend {account}.
 package relay
 
 import (
@@ -24,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ephemera.run/ephemera/internal/abuse"
 	"ephemera.run/ephemera/internal/away"
 	"ephemera.run/ephemera/internal/cache"
 	"ephemera.run/ephemera/internal/metrics"
@@ -61,6 +67,17 @@ type ServerConfig struct {
 	// blobs, uploaded by opt-in daemons. Nil disables away mode
 	// server-wide.
 	Away *away.Store
+
+	// Reports is the link report queue. Nil disables reporting.
+	Reports *abuse.Reports
+
+	// ReportLimiter, if set, throttles reports per IP on top of the
+	// general Limiter: reports are cheap to send and costly to read.
+	ReportLimiter *ratelimit.Limiter
+
+	// Suspensions is the suspended-accounts list admins edit. Nil
+	// disables suspension.
+	Suspensions *abuse.Suspensions
 }
 
 // Server is the relay HTTP handler.
@@ -79,8 +96,13 @@ func New(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("GET /{id}", s.handlePage)
 	mux.HandleFunc("GET /{id}/file", s.handleFile)
 	mux.HandleFunc("GET /{id}/status", s.handleStatus)
+	mux.HandleFunc("POST /{id}/report", s.handleReport)
 	mux.HandleFunc("GET /admin/metrics", s.guardAdmin(s.handleMetrics))
 	mux.HandleFunc("POST /admin/kill", s.guardAdmin(s.handleKill))
+	mux.HandleFunc("GET /admin/reports", s.guardAdmin(s.handleReports))
+	mux.HandleFunc("GET /admin/suspended", s.guardAdmin(s.handleSuspended))
+	mux.HandleFunc("POST /admin/suspend", s.guardAdmin(s.handleSuspend))
+	mux.HandleFunc("POST /admin/unsuspend", s.guardAdmin(s.handleUnsuspend))
 	return s.limited(mux)
 }
 
@@ -93,11 +115,7 @@ func (s *Server) limited(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
-		ok, rem, resetIn := s.cfg.Limiter.Allow(ip)
+		ok, rem, resetIn := s.cfg.Limiter.Allow(clientIP(r))
 		h := w.Header()
 		h.Set("X-RateLimit-Limit", strconv.Itoa(int(s.cfg.Limiter.Burst())))
 		h.Set("X-RateLimit-Remaining", strconv.Itoa(rem))
@@ -109,6 +127,15 @@ func (s *Server) limited(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// clientIP is the request's peer address without the port.
+func clientIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
 
 // guardAdmin requires the configured bearer token, compared in
@@ -136,22 +163,165 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleKill force-expires a share: registry eviction now, daemon
-// learns on next read. Body: {"id": "..."}
+// learns on next read. Body: {"id": "...", "suspend": bool}. With
+// suspend, the sender's account is suspended too and its other live
+// links killed; the account comes from the live share, or from a
+// report if the link already expired.
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
-	var body struct{ ID string }
+	var body struct {
+		ID      string
+		Suspend bool
+	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
-		http.Error(w, `{"error":"id required"}`, http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id required"})
 		return
 	}
+	info, _, lookupErr := s.cfg.Registry.Lookup(body.ID)
 	killed := s.cfg.Registry.Kill(body.ID)
 	metrics.AdminKills.Add(1)
-	w.Header().Set("Content-Type", "application/json")
-	if !killed {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintln(w, `{"killed":false}`)
+	if !body.Suspend {
+		status := http.StatusOK
+		if !killed {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]any{"killed": killed})
 		return
 	}
-	fmt.Fprintln(w, `{"killed":true}`)
+
+	account := info.Account
+	if lookupErr != nil && s.cfg.Reports != nil {
+		account = s.cfg.Reports.AccountFor(body.ID)
+	}
+	if account == "" {
+		writeJSON(w, http.StatusConflict, map[string]any{"killed": killed, "error": "no sender account known for this link"})
+		return
+	}
+	also, err := s.suspend(account)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"killed": killed, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"killed": killed, "suspended": account, "also_killed": also})
+}
+
+// suspend records an account suspension and kills its live links.
+func (s *Server) suspend(account string) ([]string, error) {
+	if s.cfg.Suspensions == nil {
+		return nil, errors.New("suspensions are disabled on this relay")
+	}
+	if err := s.cfg.Suspensions.Suspend(account); err != nil {
+		return nil, err
+	}
+	metrics.AccountsSuspended.Add(1)
+	return s.cfg.Registry.KillAccount(account), nil
+}
+
+// handleSuspend suspends an account. Body: {"account": "..."}
+func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Account string }
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Account == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "account required"})
+		return
+	}
+	killed, err := s.suspend(body.Account)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"suspended": body.Account, "killed": killed})
+}
+
+// handleUnsuspend lifts a suspension. Body: {"account": "..."}
+func (s *Server) handleUnsuspend(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Account string }
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Account == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "account required"})
+		return
+	}
+	if s.cfg.Suspensions == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "suspensions are disabled on this relay"})
+		return
+	}
+	if err := s.cfg.Suspensions.Unsuspend(body.Account); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unsuspended": body.Account})
+}
+
+// handleSuspended lists suspended accounts.
+func (s *Server) handleSuspended(w http.ResponseWriter, r *http.Request) {
+	list := []string{}
+	if s.cfg.Suspensions != nil {
+		list = s.cfg.Suspensions.List()
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handleReports lists reports, newest first. ?limit=N caps it.
+func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
+	list := []abuse.Report{}
+	if s.cfg.Reports != nil {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		list = s.cfg.Reports.List(limit)
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// maxReportBody caps a report request: a reason and a short note.
+const maxReportBody = 8 << 10
+
+// handleReport files a receiver's report against a link that still
+// exists. Body: {"reason": one of abuse.Reasons, "note": "..."}.
+func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Reports == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "reporting is disabled on this relay"})
+		return
+	}
+	if s.cfg.ReportLimiter != nil {
+		if ok, _, resetIn := s.cfg.ReportLimiter.Allow(clientIP(r)); !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(resetIn.Seconds()))))
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many reports; try again later"})
+			return
+		}
+	}
+	id := r.PathValue("id")
+	info, _, err := s.cfg.Registry.Lookup(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such link"})
+		return
+	}
+	var body struct{ Reason, Note string }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxReportBody)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "body must be JSON: {reason, note}"})
+		return
+	}
+	_, err = s.cfg.Reports.Add(abuse.Report{
+		ShareID: id,
+		Reason:  body.Reason,
+		Note:    strings.TrimSpace(body.Note),
+		Name:    info.Name,
+		Size:    info.Size,
+		MIME:    info.MIME,
+		Account: info.Account,
+	})
+	switch {
+	case errors.Is(err, abuse.ErrBadReason), errors.Is(err, abuse.ErrNoteTooLong):
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "reasons": abuse.Reasons})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not file the report"})
+		return
+	}
+	metrics.ReportsFiled.Add(1)
+	writeJSON(w, http.StatusAccepted, map[string]any{"reported": true})
+}
+
+// writeJSON writes v as a JSON response with status.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
 }
 
 // handleRoot serves the relay's home page. "GET /" is also the mux's

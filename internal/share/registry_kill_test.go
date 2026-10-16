@@ -63,3 +63,36 @@ func TestRedialKeepsExpiry(t *testing.T) {
 		t.Fatalf("earlier expiry not taken: %s, want %s", info.Expires, earlier)
 	}
 }
+
+// TestKillAccount: every live share of one account is killed and
+// tombstoned; other accounts' shares and anonymous ones are untouched.
+func TestKillAccount(t *testing.T) {
+	r := NewRegistry(time.Hour)
+	defer r.Stop()
+	soon := time.Now().Add(time.Hour)
+	r.Register(Info{ID: "m1", Account: "mallory", Expires: soon}, &fakeHandle{})
+	r.Register(Info{ID: "m2", Account: "mallory", Expires: soon}, &fakeHandle{})
+	r.Register(Info{ID: "a1", Account: "alice", Expires: soon}, &fakeHandle{})
+	r.Register(Info{ID: "x1", Expires: soon}, &fakeHandle{})
+
+	killed := r.KillAccount("mallory")
+	if len(killed) != 2 {
+		t.Fatalf("killed %v, want m1 and m2", killed)
+	}
+	for _, id := range []string{"m1", "m2"} {
+		if _, _, err := r.Lookup(id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s still live: %v", id, err)
+		}
+		if err := r.Register(Info{ID: id, Account: "mallory", Expires: soon}, &fakeHandle{}); !errors.Is(err, ErrKilled) {
+			t.Errorf("%s re-registered after KillAccount: %v", id, err)
+		}
+	}
+	for _, id := range []string{"a1", "x1"} {
+		if _, _, err := r.Lookup(id); err != nil {
+			t.Errorf("%s killed by another account's takedown: %v", id, err)
+		}
+	}
+	if got := r.KillAccount(""); got != nil {
+		t.Errorf("KillAccount(\"\") = %v, want nothing", got)
+	}
+}

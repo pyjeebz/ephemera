@@ -22,6 +22,11 @@
 	}
 	p.state { color: gray; font-style: italic; }
 	h1 { font-size: 1.4rem; }
+	details.report { margin-top: 2.5rem; color: gray; font-size: .9rem; }
+	details.report summary { cursor: pointer; }
+	details.report form { display: grid; gap: .5rem; margin-top: .75rem; text-align: left; }
+	details.report select, details.report textarea, details.report button { font: inherit; }
+	details.report button { justify-self: start; padding: .3rem .9rem; }
 </style>
 </head>
 <body>
@@ -29,6 +34,26 @@
 	<h1 id="name">Ephemera</h1>
 	<p class="state" id="state">connecting…</p>
 	<div id="hero"></div>
+	<details class="report" id="report" hidden>
+		<summary>Report this link</summary>
+		<form id="report-form">
+			<label>What's wrong with it?
+				<select name="reason" required>
+					<option value="">Choose a reason</option>
+					<option value="illegal">Illegal content (including child sexual abuse)</option>
+					<option value="copyright">Copyright infringement</option>
+					<option value="malware">Malware or phishing</option>
+					<option value="harassment">Harassment or abuse</option>
+					<option value="other">Something else</option>
+				</select>
+			</label>
+			<label>Anything the relay operator should know? (optional)
+				<textarea name="note" rows="3" maxlength="1000"></textarea>
+			</label>
+			<button type="submit">Send report</button>
+			<p id="report-msg" role="status"></p>
+		</form>
+	</details>
 </main>
 <script>
 (() => {
@@ -152,12 +177,13 @@
 	async function poll() {
 		try {
 			const resp = await fetch(`/${id}/status`);
-			if (resp.status === 410) { render({state: "expired"}); return false; }
-			if (resp.status === 404) { render({state: "gone"}); return false; }
+			if (resp.status === 410) { reportEl.hidden = true; render({state: "expired"}); return false; }
+			if (resp.status === 404) { reportEl.hidden = true; render({state: "gone"}); return false; }
 			const wasOffline = lastState === "offline";
 			const st = await resp.json();
 			lastState = st.state;
 			render(st);
+			reportEl.hidden = false;
 			if (wasOffline && st.state === "live") pollFast = false; // back: normal cadence
 			return st.state !== "expired" && st.state !== "gone";
 		} catch {
@@ -168,6 +194,35 @@
 	async function pollNow() { await poll(); }
 
 	let lastState = "";
+
+	// reporting: offered once the link exists (live or offline)
+	const reportEl = $("#report"), reportForm = $("#report-form"), reportMsg = $("#report-msg");
+	reportForm.onsubmit = async (e) => {
+		e.preventDefault();
+		const data = new FormData(reportForm);
+		const btn = reportForm.querySelector("button");
+		btn.disabled = true;
+		try {
+			const resp = await fetch(`/${id}/report`, {
+				method: "POST",
+				headers: {"Content-Type": "application/json"},
+				body: JSON.stringify({reason: data.get("reason"), note: data.get("note")}),
+			});
+			if (resp.ok) {
+				reportForm.replaceChildren(Object.assign(document.createElement("p"), {
+					textContent: "Thanks. The relay operator will review this link.",
+				}));
+				return;
+			}
+			const body = await resp.json().catch(() => ({}));
+			reportMsg.textContent = resp.status === 429
+				? "Too many reports from here. Try again later."
+				: (body.error || "The report didn't go through.");
+		} catch {
+			reportMsg.textContent = "The report didn't go through. Check your connection.";
+		}
+		btn.disabled = false;
+	};
 
 	(async () => {
 		while (await poll()) {

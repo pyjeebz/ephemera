@@ -57,6 +57,12 @@ var (
 
 	// AdminKills counts /admin/kill invocations.
 	AdminKills = expvar.NewInt("admin_kills")
+
+	// ReportsFiled counts link reports receivers filed.
+	ReportsFiled = expvar.NewInt("reports_filed")
+
+	// AccountsSuspended counts admin suspensions.
+	AccountsSuspended = expvar.NewInt("accounts_suspended")
 )
 
 // ThesisRatio returns bytes-served divided by bytes-announced, the

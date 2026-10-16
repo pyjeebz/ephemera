@@ -195,6 +195,30 @@ func (r *Registry) Kill(id string) bool {
 	return ok
 }
 
+// KillAccount kills every live share announced by account, as Kill
+// does for one: removed, detached and tombstoned. It returns the
+// killed ids. An empty account (open relay) matches nothing.
+func (r *Registry) KillAccount(account string) []string {
+	if account == "" {
+		return nil
+	}
+	r.mu.RLock()
+	var ids []string
+	for id, e := range r.shares {
+		if e.info.Account == account {
+			ids = append(ids, id)
+		}
+	}
+	r.mu.RUnlock()
+	var killed []string
+	for _, id := range ids {
+		if r.Kill(id) {
+			killed = append(killed, id)
+		}
+	}
+	return killed
+}
+
 // Sweep removes expired shares once. Exported for tests.
 func (r *Registry) Sweep() {
 	r.mu.Lock()
