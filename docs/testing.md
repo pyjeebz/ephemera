@@ -117,6 +117,14 @@ Either let the relay terminate TLS itself:
 
 or keep it on plain HTTP behind a TLS proxy (Caddy, nginx, a Cloudflare or ngrok tunnel) and point senders at the proxy's `wss://` address. A relay serving plain HTTP off its own machine prints a warning, since it can't tell whether a proxy is in front.
 
+Behind a proxy, every request reaches the relay from the proxy's address, so all receivers would share one rate-limit bucket. Tell the relay which addresses are your proxies, and it limits each request under the client address the proxy forwarded in `X-Forwarded-For`:
+
+```bash
+./bin/relay serve -addr 127.0.0.1:7100 -tokens tokens.txt -public-url https://relay.example.com -trusted-proxies 127.0.0.1,::1
+```
+
+`-trusted-proxies` takes IPs or CIDRs, comma-separated. The header is ignored on requests from any other address, since a client can send whatever it likes. The proxy must append the client's address: Caddy does by default; nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+
 For a self-signed or private-CA certificate, a Linux sender can trust it with `SSL_CERT_FILE=/path/to/ca.pem`.
 
 ## 9. Moderation

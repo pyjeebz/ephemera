@@ -85,3 +85,27 @@ func TestLinkBase(t *testing.T) {
 		t.Error("dialable wrong")
 	}
 }
+
+func TestParseProxies(t *testing.T) {
+	got, err := parseProxies(" 127.0.0.1, 10.1.2.3/8 ,::1,, 2001:db8::/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"127.0.0.1/32", "10.0.0.0/8", "::1/128", "2001:db8::/32"}
+	if len(got) != len(want) {
+		t.Fatalf("parseProxies = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].String() != want[i] {
+			t.Errorf("proxy %d = %s, want %s", i, got[i], want[i])
+		}
+	}
+	if got, err := parseProxies(""); err != nil || len(got) != 0 {
+		t.Errorf("empty: %v, %v; want none", got, err)
+	}
+	for _, bad := range []string{"localhost", "10.0.0.0/33", "1.2.3"} {
+		if _, err := parseProxies(bad); err == nil {
+			t.Errorf("parseProxies(%q) accepted", bad)
+		}
+	}
+}

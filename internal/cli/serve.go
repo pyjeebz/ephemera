@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -43,6 +44,7 @@ type serveFlags struct {
 	tlsKey     string
 	dataDir    string // operator state: reports, suspensions
 	publicURL  string // base of the links receivers open
+	proxies    string // trusted reverse proxies, comma-separated
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -63,11 +65,16 @@ func runServe(args []string) error {
 	fs.StringVar(&f.tlsCert, "tls-cert", "", "serve HTTPS/WSS with this PEM certificate chain (needs -tls-key)")
 	fs.StringVar(&f.tlsKey, "tls-key", "", "PEM private key for -tls-cert")
 	fs.StringVar(&f.publicURL, "public-url", "", "base URL receivers open links under, e.g. https://ephemera.run (default: the address the sender dialed)")
+	fs.StringVar(&f.proxies, "trusted-proxies", "", "comma-separated IPs or CIDRs of reverse proxies in front of the relay; their X-Forwarded-For gives the client IP for rate limits")
 	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports and account suspensions here across restarts (never file bytes)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if err := checkPublicURL(f.publicURL); err != nil {
+		return err
+	}
+	proxies, err := parseProxies(f.proxies)
+	if err != nil {
 		return err
 	}
 	if (f.tlsCert == "") != (f.tlsKey == "") {
@@ -119,11 +126,12 @@ func runServe(args []string) error {
 		bridge.Away = awaypkg
 	}
 	surface := relay.New(relay.ServerConfig{
-		Registry:   reg,
-		Limiter:    ratelimit.New(20, 40), // 20 r/s sustained, burst 40 per IP
-		AdminToken: f.adminToken,
-		Cache:      cachepkg,
-		Away:       awaypkg,
+		Registry:       reg,
+		Limiter:        ratelimit.New(20, 40), // 20 r/s sustained, burst 40 per IP
+		TrustedProxies: proxies,
+		AdminToken:     f.adminToken,
+		Cache:          cachepkg,
+		Away:           awaypkg,
 
 		Reports:       reports,
 		ReportLimiter: ratelimit.New(1.0/60, 5), // 5 reports, then 1 a minute, per IP
@@ -175,6 +183,27 @@ func checkPublicURL(s string) error {
 		return fmt.Errorf("-public-url %q: want http(s)://host[:port][/path]", s)
 	}
 	return nil
+}
+
+// parseProxies reads -trusted-proxies: IPs (one address) or CIDRs.
+func parseProxies(s string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(item); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		ip, err := netip.ParseAddr(item)
+		if err != nil {
+			return nil, fmt.Errorf("-trusted-proxies: %q is not an IP or CIDR", item)
+		}
+		out = append(out, netip.PrefixFrom(ip.Unmap(), ip.Unmap().BitLen()))
+	}
+	return out, nil
 }
 
 // linkBase is the base of the links a daemon connecting through r

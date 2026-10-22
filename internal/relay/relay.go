@@ -25,6 +25,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"path"
 	"strconv"
 	"strings"
@@ -53,6 +54,13 @@ type ServerConfig struct {
 
 	// Limiter, if set, throttles receiver requests per IP.
 	Limiter *ratelimit.Limiter
+
+	// TrustedProxies are the reverse proxies in front of the relay.
+	// A request from one of them is limited under the client address
+	// it forwarded in X-Forwarded-For; from anywhere else the header
+	// is ignored, since a client can send whatever it likes. Empty:
+	// every request is limited under its peer address.
+	TrustedProxies []netip.Prefix
 
 	// AdminToken gates /admin/* routes. Empty disables them.
 	AdminToken string
@@ -115,7 +123,7 @@ func (s *Server) limited(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ok, rem, resetIn := s.cfg.Limiter.Allow(clientIP(r))
+		ok, rem, resetIn := s.cfg.Limiter.Allow(s.clientIP(r))
 		h := w.Header()
 		h.Set("X-RateLimit-Limit", strconv.Itoa(int(s.cfg.Limiter.Burst())))
 		h.Set("X-RateLimit-Remaining", strconv.Itoa(rem))
@@ -129,13 +137,46 @@ func (s *Server) limited(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP is the request's peer address without the port.
-func clientIP(r *http.Request) string {
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+// clientIP is the address a request is rate limited under: its
+// peer, or behind trusted proxies the nearest X-Forwarded-For hop
+// that isn't one of them. The walk goes right to left because each
+// proxy appends the address it saw: the right end was written by our
+// own proxy, the left end is whatever the client claimed. A hop that
+// doesn't parse stops the walk at the proxy that forwarded it.
+func (s *Server) clientIP(r *http.Request) string {
+	peer, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			return r.RemoteAddr
+		}
+		return host
 	}
-	return ip
+	ip := peer.Addr().Unmap()
+	if !s.trustedProxy(ip) {
+		return ip.String()
+	}
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			break
+		}
+		ip = hop.Unmap()
+		if !s.trustedProxy(ip) {
+			break
+		}
+	}
+	return ip.String()
+}
+
+func (s *Server) trustedProxy(ip netip.Addr) bool {
+	for _, p := range s.cfg.TrustedProxies {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // guardAdmin requires the configured bearer token, compared in
@@ -279,7 +320,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cfg.ReportLimiter != nil {
-		if ok, _, resetIn := s.cfg.ReportLimiter.Allow(clientIP(r)); !ok {
+		if ok, _, resetIn := s.cfg.ReportLimiter.Allow(s.clientIP(r)); !ok {
 			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(resetIn.Seconds()))))
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many reports; try again later"})
 			return
