@@ -17,11 +17,20 @@ Senders need a token. Mint one into a tokens file (the file stores only its hash
 ./bin/relay token -file tokens.txt me
 ```
 
-Then start the relay with that file:
+Find the computer's LAN IP, so links open from a phone:
 
 ```bash
-./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt
+hostname -I              # Linux
+ipconfig getifaddr en0   # macOS
 ```
+
+Then start the relay with that file, telling it the address receivers will use:
+
+```bash
+./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt -public-url http://192.168.1.42:7100
+```
+
+Without `-public-url`, links use the address the sender dialed, which is right for a public relay (`wss://ephemera.run` gives `https://ephemera.run/<id>`) but means `127.0.0.1` on a LAN.
 
 A relay started with neither `-tokens` nor `-open` refuses to start. `-open` lets anyone share without a token; use it only on a machine nobody else can reach.
 
@@ -30,7 +39,7 @@ Senders are held to the relay's limits: `-max-ttl` (seconds, default 86400) and 
 To enable the optional in-memory replay and away-prefix stores:
 
 ```bash
-./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt -cache-mb 256 -away-mb 64
+./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt -public-url http://192.168.1.42:7100 -cache-mb 256 -away-mb 64
 ```
 
 ## 3. Share a real video
@@ -58,43 +67,17 @@ Notes:
 - `-away 1` uploads the first 1 MiB of the file to the relay.
 - Use a standard MP4/H.264 file for the safest browser test.
 
-The sender prints a link like:
+Once the relay accepts the share, the sender prints its link:
 
 ```text
-link: https://ephemera.run/pw_kcOAr43ghggBx2MnKxQ
+link: http://192.168.1.42:7100/pw_kcOAr43ghggBx2MnKxQ
 ```
 
-For local testing, replace the placeholder domain with the relay's real address:
-
-```text
-http://127.0.0.1:7100/pw_kcOAr43ghggBx2MnKxQ
-```
+The sender connects to the relay on `127.0.0.1`: plaintext is only allowed to the same machine.
 
 ## 4. Open the link on another device
 
-Find the computer's LAN IP:
-
-```bash
-hostname -I
-```
-
-On macOS:
-
-```bash
-ipconfig getifaddr en0
-```
-
-Then open this URL on the phone or other device:
-
-```text
-http://<computer-ip>:7100/<share-id>
-```
-
-Example:
-
-```text
-http://192.168.1.42:7100/pw_kcOAr43ghggBx2MnKxQ
-```
+Open the printed link on the phone or other device, on the same Wi-Fi.
 
 ## 5. Verify the live path
 

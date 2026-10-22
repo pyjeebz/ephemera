@@ -15,6 +15,24 @@ import (
 	"time"
 )
 
+// waitForLink waits for the "link: <url>" line a sender prints once
+// the relay accepts its share, and returns the link and share id.
+func waitForLink(t *testing.T, logPath string) (link, shareID string) {
+	t.Helper()
+	waitFor(t, 10*time.Second, func() bool {
+		b, _ := os.ReadFile(logPath)
+		for _, line := range strings.Split(string(b), "\n") {
+			if rest, ok := strings.CutPrefix(line, "link: "); ok {
+				link = strings.Fields(rest)[0]
+				shareID = link[strings.LastIndexByte(link, '/')+1:]
+				return true
+			}
+		}
+		return false
+	}, logPath)
+	return link, shareID
+}
+
 // buildBinaries builds both real binaries into a temp dir.
 func buildBinaries(t *testing.T) (ephemeraBin, relayBin string) {
 	t.Helper()
@@ -141,21 +159,10 @@ func TestBinariesEndToEnd(t *testing.T) {
 		sendLog.Close()
 	}()
 
-	// scrape the share id from the daemon log: "link: /:id"
-	var shareID string
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		b, _ := os.ReadFile(sendLog.Name())
-		if i := strings.Index(string(b), "link: https://ephemera.run/"); i >= 0 {
-			line := string(b)[i:]
-			shareID = strings.TrimSpace(strings.TrimPrefix(line[:strings.IndexByte(line, '\n')+1], "link: https://ephemera.run/"))
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if shareID == "" {
-		body, _ := os.ReadFile(sendLog.Name())
-		t.Fatalf("no share id in daemon log:\n%s", body)
+	// the daemon prints the relay's link once the share is announced
+	link, shareID := waitForLink(t, sendLog.Name())
+	if link != relayURL+"/"+shareID {
+		t.Fatalf("link = %q, want it under the relay's address %s", link, relayURL)
 	}
 
 	// status: live

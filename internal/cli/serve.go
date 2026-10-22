@@ -1,14 +1,17 @@
 package cli
 
 import (
+	"cmp"
 	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -39,6 +42,7 @@ type serveFlags struct {
 	tlsCert    string // PEM certificate chain; with tlsKey, serve HTTPS
 	tlsKey     string
 	dataDir    string // operator state: reports, suspensions
+	publicURL  string // base of the links receivers open
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -58,8 +62,12 @@ func runServe(args []string) error {
 	fs.BoolVar(&f.open, "open", false, "let anyone share through this relay, no sender token needed (local testing only)")
 	fs.StringVar(&f.tlsCert, "tls-cert", "", "serve HTTPS/WSS with this PEM certificate chain (needs -tls-key)")
 	fs.StringVar(&f.tlsKey, "tls-key", "", "PEM private key for -tls-cert")
+	fs.StringVar(&f.publicURL, "public-url", "", "base URL receivers open links under, e.g. https://ephemera.run (default: the address the sender dialed)")
 	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports and account suspensions here across restarts (never file bytes)")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := checkPublicURL(f.publicURL); err != nil {
 		return err
 	}
 	if (f.tlsCert == "") != (f.tlsKey == "") {
@@ -89,6 +97,7 @@ func runServe(args []string) error {
 		Auth:        authn,
 		Limits:      hub.Limits{MaxTTLSec: f.maxTTL, MaxSize: f.maxSizeMB << 20},
 		Suspensions: suspensions,
+		PublicURL:   strings.TrimSuffix(f.publicURL, "/"),
 	}
 
 	// daemon bridge: one WS connection, one share
@@ -97,7 +106,7 @@ func runServe(args []string) error {
 		if err != nil {
 			return
 		}
-		bridge.Accept(wsconn.Wrap(c))
+		bridge.AcceptAt(wsconn.Wrap(c), linkBase(bridge.PublicURL, r))
 	})
 
 	cachepkg := cachestore.New(f.cacheMB << 20)
@@ -130,7 +139,7 @@ func runServe(args []string) error {
 		if err != nil {
 			return err
 		}
-		go acceptLoop(ln, bridge)
+		go acceptLoop(ln, bridge, cmp.Or(bridge.PublicURL, "http://"+dialable(f.addr)))
 	}
 
 	srv := &http.Server{
@@ -153,6 +162,35 @@ func runServe(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "relay listening on %s\n", f.addr)
 	return srv.ListenAndServe()
+}
+
+// checkPublicURL accepts an empty -public-url or an http(s) base
+// with a host and no query.
+func checkPublicURL(s string) error {
+	if s == "" {
+		return nil
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("-public-url %q: want http(s)://host[:port][/path]", s)
+	}
+	return nil
+}
+
+// linkBase is the base of the links a daemon connecting through r
+// should print: -public-url when set, else the address it dialed.
+// Behind a TLS proxy the Host is the proxy's public one; the scheme
+// comes from the connection or the proxy's X-Forwarded-Proto. The
+// header only shapes the link shown to that same sender.
+func linkBase(publicURL string, r *http.Request) string {
+	if publicURL != "" {
+		return publicURL
+	}
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }
 
 // moderationState opens the report queue and suspension list, in
@@ -240,17 +278,28 @@ func runToken(args []string) error {
 	return nil
 }
 
-// acceptLoop bridges raw framed TCP daemon connections (dev/test).
-func acceptLoop(ln net.Listener, bridge *hub.Bridge) {
+// acceptLoop bridges raw framed TCP daemon connections (dev/test);
+// their links live under linkBase, the relay's HTTP address.
+func acceptLoop(ln net.Listener, bridge *hub.Bridge, linkBase string) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
 		go func() {
-			bridge.Accept(conn)
+			bridge.AcceptAt(conn, linkBase)
 		}()
 	}
+}
+
+// dialable turns a listen address into one a browser can open:
+// ":7100" (every interface) becomes "localhost:7100".
+func dialable(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != "" {
+		return addr
+	}
+	return net.JoinHostPort("localhost", port)
 }
 
 func init() {

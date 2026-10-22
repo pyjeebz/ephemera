@@ -27,13 +27,14 @@ ahead of the code that reads them.
 
 ## Frame types
 
-	1  hello  daemon → relay   first frame: version, sender token
-	2  send   daemon → relay   second frame: announce the share
-	3  read   relay → daemon   ask for one byte range
-	4  data   daemon → relay   raw bytes answering a read
-	5  err    either way       a refusal or a failed read, with reason
-	6  away   daemon → relay   layer C prefix header; a data frame follows
-	7  ack    relay → daemon   how many away prefix bytes the relay holds
+	1  hello    daemon → relay   first frame: version, sender token
+	2  send     daemon → relay   second frame: announce the share
+	3  read     relay → daemon   ask for one byte range
+	4  data     daemon → relay   raw bytes answering a read
+	5  err      either way       a refusal or a failed read, with reason
+	6  away     daemon → relay   layer C prefix header; a data frame follows
+	7  ack      relay → daemon   how many away prefix bytes the relay holds
+	8  welcome  relay → daemon   announce accepted: the link receivers open
 
 ## Hello frame fields
 
@@ -61,6 +62,17 @@ ahead of the code that reads them.
 	away_prefix_bytes  int64   layer C opt-in: the daemon trickles this many
 	                           prefix bytes to the relay post-announce (paced,
 	                           ack-driven); the relay serves them offline
+
+## Welcome
+
+	welcome  {share_id, link}
+
+	Sent once the relay registers the share, before any read. The
+	link is the relay's public address (relay serve -public-url, else
+	the scheme and host the daemon dialed) plus the share id. The
+	daemon prints it then, and only then: before the announce lands
+	the link would open nothing. A redial is welcomed again; the
+	daemon reports the link only if it changed.
 
 ## Reads
 

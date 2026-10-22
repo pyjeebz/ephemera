@@ -96,8 +96,7 @@ func runSend(args []string) error {
 		sh.AwayPrefixBytes = f.away << 20
 	}
 
-	fmt.Fprintf(os.Stderr, "sharing %s (%d bytes, %s) for %ds\n", sh.Name, sh.Size, sh.MIME, f.ttl)
-	fmt.Fprintf(os.Stderr, "link: https://ephemera.run/%s\n", sh.ID)
+	fmt.Fprintf(os.Stderr, "sharing %s (%d bytes, %s) for %ds; connecting to the relay…\n", sh.Name, sh.Size, sh.MIME, f.ttl)
 
 	return runShares([]daemon.Share{sh}, []int64{f.ttl}, f.relay)
 }
@@ -128,7 +127,7 @@ func runResume(args []string) error {
 		return daemon.ErrNoActiveShares
 	}
 	for i, sh := range shares {
-		fmt.Fprintf(os.Stderr, "resuming %s (link /%s, %ds left)\n", sh.Name, sh.ID, ttls[i])
+		fmt.Fprintf(os.Stderr, "resuming %s (%ds left)\n", sh.Name, ttls[i])
 	}
 	return runShares(shares, ttls, *relay)
 }
@@ -152,6 +151,7 @@ func runShares(shares []daemon.Share, ttls []int64, relay string) error {
 				KeepAwake: ka,
 				State:     sd,
 				Token:     token,
+				OnLink:    printLink(sh, len(shares) > 1),
 			}
 			if err := daemon.Run(sh, cfg); err != nil {
 				errCh <- err
@@ -170,6 +170,19 @@ func runShares(shares []daemon.Share, ttls []int64, relay string) error {
 		fmt.Fprintln(os.Stderr, "all shares expired; nothing left on the relay")
 	}
 	return firstErr
+}
+
+// printLink prints a share's link once the relay accepts it: before
+// that, opening the link would only find nothing. With several shares
+// (resume) each line names its file.
+func printLink(sh daemon.Share, named bool) func(string) {
+	return func(link string) {
+		if named {
+			fmt.Fprintf(os.Stderr, "link: %s  (%s)\n", link, sh.Name)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "link: %s\n", link)
+	}
 }
 
 func init() {

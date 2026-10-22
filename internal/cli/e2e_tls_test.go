@@ -122,17 +122,10 @@ func TestBinariesTLS(t *testing.T) {
 	}
 	defer func() { sendProc.Process.Kill(); sendProc.Wait() }()
 
-	var shareID string
-	waitFor(t, 10*time.Second, func() bool {
-		b, _ := os.ReadFile(sendLog.Name())
-		if i := strings.Index(string(b), "link: https://ephemera.run/"); i >= 0 {
-			rest := string(b)[i+len("link: https://ephemera.run/"):]
-			if j := strings.IndexByte(rest, '\n'); j > 0 {
-				shareID = rest[:j]
-			}
-		}
-		return shareID != ""
-	}, sendLog.Name())
+	link, shareID := waitForLink(t, sendLog.Name())
+	if link != base+"/"+shareID {
+		t.Fatalf("link = %q, want an https link under %s", link, base)
+	}
 
 	// live over https once the daemon's wss announce lands
 	waitFor(t, 10*time.Second, func() bool {

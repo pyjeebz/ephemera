@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,5 +44,44 @@ func TestServeTLSFlags(t *testing.T) {
 		if err := runServe(tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want one mentioning %q", name, err, tc.want)
 		}
+	}
+}
+
+func TestLinkBase(t *testing.T) {
+	plain := httptest.NewRequest("GET", "http://192.168.1.42:7100/daemon", nil)
+	proxied := httptest.NewRequest("GET", "http://ephemera.run/daemon", nil)
+	proxied.Header.Set("X-Forwarded-Proto", "https")
+	direct := httptest.NewRequest("GET", "https://ephemera.run/daemon", nil) // r.TLS set
+
+	for name, tc := range map[string]struct {
+		public string
+		r      *http.Request
+		want   string
+	}{
+		"plain":      {"", plain, "http://192.168.1.42:7100"},
+		"tls proxy":  {"", proxied, "https://ephemera.run"},
+		"tls direct": {"", direct, "https://ephemera.run"},
+		"public url": {"https://links.example.com", plain, "https://links.example.com"},
+	} {
+		if got := linkBase(tc.public, tc.r); got != tc.want {
+			t.Errorf("%s: linkBase = %q, want %q", name, got, tc.want)
+		}
+	}
+
+	for in, ok := range map[string]bool{
+		"":                          true,
+		"https://ephemera.run":      true,
+		"http://192.168.1.42:7100":  true,
+		"https://example.com/share": true,
+		"ephemera.run":              false,
+		"ftp://ephemera.run":        false,
+		"https://ephemera.run/?x=1": false,
+	} {
+		if err := checkPublicURL(in); (err == nil) != ok {
+			t.Errorf("checkPublicURL(%q) = %v, want ok=%v", in, err, ok)
+		}
+	}
+	if dialable(":7100") != "localhost:7100" || dialable("127.0.0.1:7100") != "127.0.0.1:7100" {
+		t.Error("dialable wrong")
 	}
 }

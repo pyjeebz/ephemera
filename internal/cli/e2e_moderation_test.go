@@ -80,25 +80,7 @@ func TestBinariesModeration(t *testing.T) {
 	go func() { sendDone <- send.Wait() }()
 	defer send.Process.Kill()
 
-	var shareID string
-	waitFor(t, 10*time.Second, func() bool {
-		b, _ := os.ReadFile(sendLog.Name())
-		if i := strings.Index(string(b), "link: https://ephemera.run/"); i >= 0 {
-			rest := string(b)[i+len("link: https://ephemera.run/"):]
-			if j := strings.IndexByte(rest, '\n'); j > 0 {
-				shareID = rest[:j]
-			}
-		}
-		if shareID == "" {
-			return false
-		}
-		resp, err := http.Get(base + "/" + shareID + "/status")
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, sendLog.Name())
+	_, shareID := waitForLink(t, sendLog.Name())
 
 	// a receiver reports it
 	resp, err := http.Post(base+"/"+shareID+"/report", "application/json", strings.NewReader(`{"reason":"malware","note":"not a video"}`))
