@@ -25,6 +25,20 @@ func TestOwnerKeyCertifiesID(t *testing.T) {
 	}
 }
 
+// TestShareIDNeverLooksLikeAFlag: one raw id in 64 starts with '-';
+// across 5000 draws (~78 expected) none may reach a command line.
+func TestShareIDNeverLooksLikeAFlag(t *testing.T) {
+	for range 5000 {
+		key, id := NewOwnerKey()
+		if strings.HasPrefix(id, "-") {
+			t.Fatalf("id %q starts with '-'", id)
+		}
+		if !OwnsShare(id, key) {
+			t.Fatalf("redrawn key does not certify its id %q", id)
+		}
+	}
+}
+
 // TestOwnsShareRefuses: anything but the id's own key is refused —
 // another valid key, no key, the id itself, garbage, a truncated key.
 func TestOwnsShareRefuses(t *testing.T) {

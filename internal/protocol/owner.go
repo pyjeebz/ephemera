@@ -24,14 +24,19 @@ const shareIDLen = 16
 const idDomain = "ephemera share id v1\x00"
 
 // NewOwnerKey returns a fresh base64url owner key and the share id
-// it certifies.
+// it certifies. Keys whose id would start with '-' are redrawn: one
+// in 64 would, and command lines read such an id as a flag
+// (`ephemera kill -aNt...`). The relay's check is unchanged.
 func NewOwnerKey() (key, shareID string) {
 	var b [ownerKeyLen]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("protocol: crypto/rand unavailable: " + err.Error())
+	for {
+		if _, err := rand.Read(b[:]); err != nil {
+			panic("protocol: crypto/rand unavailable: " + err.Error())
+		}
+		if shareID = shareIDOf(b[:]); shareID[0] != '-' {
+			return base64.RawURLEncoding.EncodeToString(b[:]), shareID
+		}
 	}
-	key = base64.RawURLEncoding.EncodeToString(b[:])
-	return key, shareIDOf(b[:])
 }
 
 // ShareIDFor derives the share id an owner key certifies. ok is false
