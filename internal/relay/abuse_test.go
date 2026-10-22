@@ -19,7 +19,7 @@ func TestRateLimit429(t *testing.T) {
 	reg.Register(share.Info{ID: "x", Name: "v.mp4", Size: 3, MIME: "video/mp4",
 		Expires: time.Now().Add(time.Hour)}, &memHandle{data: body})
 
-	lim := ratelimit.New(100, 3) // burst 3
+	lim := ratelimit.New(1.0/60, 3) // burst 3; no refill within the test
 	srv := New(ServerConfig{Registry: reg, Limiter: lim})
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
