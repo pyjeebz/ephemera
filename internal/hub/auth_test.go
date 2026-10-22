@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -143,4 +144,41 @@ func TestAcceptRefusesSuspendedAccount(t *testing.T) {
 		t.Fatalf("other account refused: %v", err)
 	}
 	d.Close()
+}
+
+// TestAcceptWelcomesWithLink: an accepted daemon gets its link under
+// the relay's public address; without one, no welcome is sent.
+func TestAcceptWelcomesWithLink(t *testing.T) {
+	b := &Bridge{Registry: share.NewRegistry(time.Hour)}
+	ann := newAnnounce(60, 1024)
+	conn, daemonR := announceWith(t, protocol.Hello{Version: "0.1"}, ann)
+	d, err := b.AcceptAt(conn, "https://relay.example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	fr, err := protocol.ReadFrame(daemonR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w protocol.Welcome
+	if fr.Type != protocol.TWelcome || json.Unmarshal(fr.JSON, &w) != nil {
+		t.Fatalf("first frame type %d, want TWelcome", fr.Type)
+	}
+	if want := "https://relay.example.com/" + ann.ShareID; w.Link != want || w.ShareID != ann.ShareID {
+		t.Fatalf("welcome = %+v, want link %s", w, want)
+	}
+
+	// no public address: nothing to welcome with, and the first frame
+	// the daemon sees is a read
+	conn, daemonR = announceWith(t, protocol.Hello{Version: "0.1"}, newAnnounce(60, 1024))
+	d2, err := b.Accept(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d2.Close()
+	go d2.IssueRead(0, 1)
+	if fr, err := protocol.ReadFrame(daemonR); err != nil || fr.Type != protocol.TRead {
+		t.Fatalf("without a public URL: first frame %+v (%v), want TRead", fr, err)
+	}
 }

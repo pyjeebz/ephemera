@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -102,13 +103,26 @@ type Bridge struct {
 	// accounts. Anonymous senders (open relay) have no account to
 	// suspend.
 	Suspensions Suspensions
+
+	// PublicURL is the base receivers open links under, such as
+	// https://ephemera.run. Accept welcomes each accepted daemon with
+	// its link; empty sends no welcome. AcceptAt overrides it per
+	// connection.
+	PublicURL string
 }
 
 // Accept takes ownership of a freshly connected daemon socket:
-// it reads hello + send, registers the share, acks any away prefix
-// the relay already holds (resume hint), and starts the pump
-// goroutines. Callers hand the socket straight from Accept/Dial.
+// it reads hello + send, registers the share, welcomes the daemon
+// with its link, acks any away prefix the relay already holds (resume
+// hint), and starts the pump goroutines. Callers hand the socket
+// straight from Accept/Dial.
 func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
+	return b.AcceptAt(conn, b.PublicURL)
+}
+
+// AcceptAt is Accept with the link base for this connection, for
+// relays that derive their public address from the request.
+func (b *Bridge) AcceptAt(conn Conn, linkBase string) (*DaemonConn, error) {
 	d := &DaemonConn{
 		bridge:  b,
 		conn:    conn,
@@ -167,6 +181,13 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 		Account:    acct.Name,
 	}, d); err != nil {
 		return nil, refuse(conn, info.ShareID, "gone", "this link was taken down", err)
+	}
+
+	if linkBase != "" {
+		d.sendJSON(protocol.TWelcome, protocol.Welcome{
+			ShareID: info.ShareID,
+			Link:    strings.TrimSuffix(linkBase, "/") + "/" + info.ShareID,
+		})
 	}
 
 	// resume hint: if the relay already holds prefix bytes for this
