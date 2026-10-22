@@ -28,6 +28,10 @@ type Session struct {
 	// fine on open relays.
 	Token string
 
+	// OnLink, if set, gets the link from the relay's welcome: the
+	// share is announced and receivers can open it.
+	OnLink func(link string)
+
 	conn   net.Conn
 	writer io.Writer // frame encoder target; conn for TCP, test pipes otherwise
 	reader *bufio.Reader
@@ -193,6 +197,11 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 				}
 				msgs <- readMsg{refused: &RefusedError{Code: e.Code, Message: e.Message}}
 				return
+			case protocol.TWelcome:
+				var w protocol.Welcome
+				if json.Unmarshal(fr.JSON, &w) == nil && w.ShareID == s.Share.ID && w.Link != "" && s.OnLink != nil {
+					s.OnLink(w.Link)
+				}
 			case protocol.TAck:
 				var a protocol.Ack
 				if json.Unmarshal(fr.JSON, &a) == nil && a.ShareID == s.Share.ID {

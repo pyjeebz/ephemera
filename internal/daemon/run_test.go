@@ -338,3 +338,58 @@ func TestRunStopsWhenRefused(t *testing.T) {
 		t.Errorf("relay saw %d dials, want 1: a refusal must not be redialed", n)
 	}
 }
+
+// TestRunReportsLinkOnce: the relay welcomes every redial with the
+// same link; the sender hears about it once.
+func TestRunReportsLinkOnce(t *testing.T) {
+	path := makeTestFile(t, t.TempDir(), "clip.mp4", 4<<10)
+	sh, err := ValidateShare(path, DetectMIME)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var accepts atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			go func(conn net.Conn) {
+				defer conn.Close()
+				br := bufio.NewReader(conn)
+				for i := 0; i < 2; i++ {
+					if _, err := protocol.ReadFrame(br); err != nil {
+						return
+					}
+				}
+				protocol.EncodeJSON(conn, protocol.TWelcome, protocol.Welcome{ShareID: sh.ID, Link: "https://relay.example.com/" + sh.ID})
+				protocol.EncodeJSON(conn, protocol.TWelcome, protocol.Welcome{ShareID: "someone-else", Link: "https://relay.example.com/nope"})
+				time.Sleep(100 * time.Millisecond) // then drop: the daemon redials
+			}(conn)
+		}
+	}()
+
+	var mu sync.Mutex
+	var links []string
+	Run(sh, RunConfig{
+		Dial:   func() (net.Conn, error) { return net.Dial("tcp", ln.Addr().String()) },
+		TTLSec: 3,
+		Log:    log.New(io.Discard, "", 0),
+		OnLink: func(link string) { mu.Lock(); links = append(links, link); mu.Unlock() },
+	})
+	if accepts.Load() < 2 {
+		t.Fatalf("only %d dials; the test needs a redial", accepts.Load())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(links) != 1 || links[0] != "https://relay.example.com/"+sh.ID {
+		t.Fatalf("links reported = %v, want the share's link once", links)
+	}
+}

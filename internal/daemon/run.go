@@ -5,6 +5,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,11 @@ type RunConfig struct {
 
 	// Token is the sender's credential for relays that require one.
 	Token string
+
+	// OnLink, if set, is called with the share's link once the relay
+	// has accepted it, and again only if a later redial brings a
+	// different link.
+	OnLink func(link string)
 }
 
 // Backoff schedule for reconnects: capped exponential with jitter,
@@ -71,6 +77,18 @@ func Run(sh Share, cfg RunConfig) error {
 	deadline := time.Now().Add(time.Duration(cfg.TTLSec) * time.Second)
 	attempt := 0
 
+	// report the link once, not on every redial
+	var linkMu sync.Mutex
+	var lastLink string
+	onLink := func(link string) {
+		linkMu.Lock()
+		defer linkMu.Unlock()
+		if link != lastLink && cfg.OnLink != nil {
+			lastLink = link
+			cfg.OnLink(link)
+		}
+	}
+
 	// stop fires at the deadline so a live session ends with its TTL
 	// even if the relay never hangs up.
 	stop := make(chan struct{})
@@ -102,6 +120,7 @@ func Run(sh Share, cfg RunConfig) error {
 			continue
 		}
 		sess.Token = cfg.Token
+		sess.OnLink = onLink
 
 		if err := sess.Announce(); err != nil {
 			sess.Close()
