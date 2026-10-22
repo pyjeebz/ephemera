@@ -1,0 +1,28 @@
+# Caddy in front of the Ephemera relay. Caddy gets and renews the
+# TLS certificate and serves HTTPS, WSS, HTTP/2 and HTTP/3; the relay
+# listens on localhost only (see ephemera-relay.service).
+#
+# Install as /etc/caddy/Caddyfile. Self-hosting? Replace ephemera.run
+# with your domain here and in the relay's -public-url.
+{
+	# Let's Encrypt account email: certificate expiry warnings go here.
+	# email you@example.com
+}
+
+ephemera.run {
+	reverse_proxy 127.0.0.1:7100 {
+		# Pass video bytes on as they arrive, not in buffered batches:
+		# time to first frame is the whole point.
+		flush_interval -1
+
+		# A config reload closes proxied WebSockets. Sender daemons
+		# redial within seconds anyway; this spares them the blip.
+		stream_close_delay 5m
+	}
+
+	header Strict-Transport-Security "max-age=31536000"
+}
+
+www.ephemera.run {
+	redir https://ephemera.run{uri} permanent
+}

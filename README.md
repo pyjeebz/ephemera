@@ -8,6 +8,7 @@ Ephemera creates a shareable link before the file is uploaded. The sender daemon
 - [Architecture](docs/architecture.md)
   - [tldraw diagram](docs/architecture.tldr)
 - [Real-device testing](docs/testing.md)
+- [Deploying a relay](docs/deploy.md) (Caddy and systemd configs in `deploy/`)
 
 ## License
 

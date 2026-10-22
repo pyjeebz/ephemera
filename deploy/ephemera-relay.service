@@ -1,0 +1,53 @@
+# systemd unit for the Ephemera relay behind Caddy (deploy/Caddyfile).
+# Install as /etc/systemd/system/ephemera-relay.service. See
+# docs/deploy.md for the files it expects.
+
+[Unit]
+Description=Ephemera relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Localhost only: Caddy is the public face. Caddy forwards from
+# loopback, so that's the only trusted proxy.
+ExecStart=/usr/local/bin/relay serve \
+	-addr 127.0.0.1:7100 \
+	-public-url https://ephemera.run \
+	-trusted-proxies 127.0.0.1,::1 \
+	-tokens ${CREDENTIALS_DIRECTORY}/tokens \
+	-data-dir /var/lib/ephemera
+
+# The tokens file stays root-only (0600); systemd hands the service a
+# private copy. Read at startup: restart after adding a token.
+LoadCredential=tokens:/etc/ephemera/tokens.txt
+
+# EPHEMERA_ADMIN_TOKEN=... (root-only, 0600)
+EnvironmentFile=/etc/ephemera/relay.env
+
+Restart=on-failure
+RestartSec=2
+
+# One WebSocket per live share, one connection per viewer.
+LimitNOFILE=65536
+
+# No fixed account: a throwaway user that can write only
+# /var/lib/ephemera (reports and suspensions, never file bytes).
+DynamicUser=yes
+StateDirectory=ephemera
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
