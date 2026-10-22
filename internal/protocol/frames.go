@@ -47,6 +47,14 @@ type Ack struct {
 	Have    int64  `json:"have"`
 }
 
+// Welcome tells the daemon its announce was accepted and gives the
+// link receivers open: the relay knows its public address, the
+// daemon only knows the one it dialed.
+type Welcome struct {
+	ShareID string `json:"share_id"`
+	Link    string `json:"link"`
+}
+
 // Read asks the daemon for one byte range of one share. Offset+Length
 // must satisfy Offset+Length <= Size announced in Send.
 type Read struct {
