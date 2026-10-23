@@ -45,6 +45,35 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+func TestClientIPHeader(t *testing.T) {
+	proxies := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	for name, tc := range map[string]struct {
+		trusted []netip.Prefix
+		peer    string
+		header  string
+		want    string
+	}{
+		"no proxies listed, header read":  {nil, "172.16.0.5:5000", "1.2.3.4", "1.2.3.4"},
+		"from a trusted proxy":            {proxies, "10.0.0.2:5000", "1.2.3.4", "1.2.3.4"},
+		"from anyone else, ignored":       {proxies, "203.0.113.7:5000", "1.2.3.4", "203.0.113.7"},
+		"wins over x-forwarded-for":       {proxies, "10.0.0.2:5000", "2001:db8::1", "2001:db8::1"},
+		"ipv4-mapped":                     {nil, "172.16.0.5:5000", "::ffff:1.2.3.4", "1.2.3.4"},
+		"missing, falls back to the peer": {nil, "172.16.0.5:5000", "", "172.16.0.5"},
+		"junk, falls back to the peer":    {nil, "172.16.0.5:5000", "junk", "172.16.0.5"},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = tc.peer
+		r.Header.Set("X-Forwarded-For", "6.6.6.6")
+		if tc.header != "" {
+			r.Header.Set("Fly-Client-IP", tc.header)
+		}
+		s := &Server{cfg: ServerConfig{TrustedProxies: tc.trusted, ClientIPHeader: "Fly-Client-IP"}}
+		if got := s.clientIP(r); got != tc.want {
+			t.Errorf("%s: clientIP = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
 func TestRateKey(t *testing.T) {
 	for peer, want := range map[string]string{
 		"203.0.113.7:5000":            "203.0.113.7",

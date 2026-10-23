@@ -45,6 +45,7 @@ type serveFlags struct {
 	dataDir    string // operator state: reports, suspensions
 	publicURL  string // base of the links receivers open
 	proxies    string // trusted reverse proxies, comma-separated
+	ipHeader   string // header the proxy puts the client address in
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -66,6 +67,7 @@ func runServe(args []string) error {
 	fs.StringVar(&f.tlsKey, "tls-key", "", "PEM private key for -tls-cert")
 	fs.StringVar(&f.publicURL, "public-url", "", "base URL receivers open links under, e.g. https://ephemera.run (default: the address the sender dialed)")
 	fs.StringVar(&f.proxies, "trusted-proxies", "", "comma-separated IPs or CIDRs of reverse proxies in front of the relay; their X-Forwarded-For gives the client IP for rate limits")
+	fs.StringVar(&f.ipHeader, "client-ip-header", "", "header the proxy in front sets to the client IP, e.g. Fly-Client-IP; read only from -trusted-proxies if set, else from every request")
 	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports and account suspensions here across restarts (never file bytes)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -129,6 +131,7 @@ func runServe(args []string) error {
 		Registry:       reg,
 		Limiter:        ratelimit.New(20, 40), // 20 r/s sustained, burst 40 per IP
 		TrustedProxies: proxies,
+		ClientIPHeader: f.ipHeader,
 		AdminToken:     f.adminToken,
 		Cache:          cachepkg,
 		Away:           awaypkg,

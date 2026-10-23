@@ -62,6 +62,13 @@ type ServerConfig struct {
 	// every request is limited under its peer address.
 	TrustedProxies []netip.Prefix
 
+	// ClientIPHeader, if set, names a header the proxy in front of the
+	// relay sets to the client's address, like Fly.io's Fly-Client-IP.
+	// It wins over X-Forwarded-For. With TrustedProxies set it's read
+	// only on requests from them; without, on every request, so leave
+	// TrustedProxies empty only where that proxy is the sole way in.
+	ClientIPHeader string
+
 	// AdminToken gates /admin/* routes. Empty disables them.
 	AdminToken string
 
@@ -137,9 +144,9 @@ func (s *Server) limited(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP is the address a request came from: its peer, or behind
-// trusted proxies the nearest X-Forwarded-For hop that isn't one of
-// them. The walk goes right to left because each
+// clientIP is the address a request came from: the ClientIPHeader if
+// it's set and may be read, else its peer, or behind trusted proxies
+// the nearest X-Forwarded-For hop that isn't one of them. The walk goes right to left because each
 // proxy appends the address it saw: the right end was written by our
 // own proxy, the left end is whatever the client claimed. A hop that
 // doesn't parse stops the walk at the proxy that forwarded it.
@@ -153,7 +160,13 @@ func (s *Server) clientIP(r *http.Request) string {
 		return host
 	}
 	ip := peer.Addr().Unmap()
-	if !s.trustedProxy(ip) {
+	trusted := s.trustedProxy(ip)
+	if h := s.cfg.ClientIPHeader; h != "" && (trusted || len(s.cfg.TrustedProxies) == 0) {
+		if client, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get(h))); err == nil {
+			return client.Unmap().String()
+		}
+	}
+	if !trusted {
 		return ip.String()
 	}
 	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
