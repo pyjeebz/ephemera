@@ -123,7 +123,7 @@ func (s *Server) limited(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ok, rem, resetIn := s.cfg.Limiter.Allow(s.clientIP(r))
+		ok, rem, resetIn := s.cfg.Limiter.Allow(s.rateKey(r))
 		h := w.Header()
 		h.Set("X-RateLimit-Limit", strconv.Itoa(int(s.cfg.Limiter.Burst())))
 		h.Set("X-RateLimit-Remaining", strconv.Itoa(rem))
@@ -137,9 +137,9 @@ func (s *Server) limited(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP is the address a request is rate limited under: its
-// peer, or behind trusted proxies the nearest X-Forwarded-For hop
-// that isn't one of them. The walk goes right to left because each
+// clientIP is the address a request came from: its peer, or behind
+// trusted proxies the nearest X-Forwarded-For hop that isn't one of
+// them. The walk goes right to left because each
 // proxy appends the address it saw: the right end was written by our
 // own proxy, the left end is whatever the client claimed. A hop that
 // doesn't parse stops the walk at the proxy that forwarded it.
@@ -168,6 +168,24 @@ func (s *Server) clientIP(r *http.Request) string {
 		}
 	}
 	return ip.String()
+}
+
+// rateKey is the bucket a request is limited under: the client's IPv4
+// address, or the /64 holding its IPv6 one. ISPs hand a subscriber a
+// whole /64 (or more), so a bucket per IPv6 address would let one
+// client rotate through 2^64 fresh buckets.
+func (s *Server) rateKey(r *http.Request) string {
+	ip := s.clientIP(r)
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if !addr.Is6() {
+		return addr.String()
+	}
+	p, _ := addr.Prefix(64)
+	return p.String()
 }
 
 func (s *Server) trustedProxy(ip netip.Addr) bool {
@@ -320,7 +338,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cfg.ReportLimiter != nil {
-		if ok, _, resetIn := s.cfg.ReportLimiter.Allow(s.clientIP(r)); !ok {
+		if ok, _, resetIn := s.cfg.ReportLimiter.Allow(s.rateKey(r)); !ok {
 			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(resetIn.Seconds()))))
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many reports; try again later"})
 			return

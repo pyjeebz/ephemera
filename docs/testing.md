@@ -125,6 +125,8 @@ Behind a proxy, every request reaches the relay from the proxy's address, so all
 
 `-trusted-proxies` takes IPs or CIDRs, comma-separated. The header is ignored on requests from any other address, since a client can send whatever it likes. The proxy must append the client's address: Caddy does by default; nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
 
+An IPv6 client is limited by its /64, not its full address: an ISP hands each subscriber at least a /64, so one client could otherwise rotate through endless fresh buckets.
+
 For a self-signed or private-CA certificate, a Linux sender can trust it with `SSL_CERT_FILE=/path/to/ca.pem`.
 
 ## 9. Moderation

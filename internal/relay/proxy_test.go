@@ -45,6 +45,53 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+func TestRateKey(t *testing.T) {
+	for peer, want := range map[string]string{
+		"203.0.113.7:5000":            "203.0.113.7",
+		"[2001:db8:1:2:aaaa::1]:5000": "2001:db8:1:2::/64",
+		"[2001:db8:1:2:ffff::9]:5000": "2001:db8:1:2::/64",
+		"[2001:db8:1:3::1]:5000":      "2001:db8:1:3::/64",
+		"[::ffff:203.0.113.7]:5000":   "203.0.113.7",
+		"[fe80::1%eth0]:5000":         "fe80::/64",
+		"not-an-address":              "not-an-address",
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = peer
+		if got := (&Server{}).rateKey(r); got != want {
+			t.Errorf("rateKey(%s) = %q, want %q", peer, got, want)
+		}
+	}
+}
+
+// TestRateLimitIPv6Prefix: addresses in one /64 share a bucket, so a
+// client can't dodge the limit by rotating its interface id.
+func TestRateLimitIPv6Prefix(t *testing.T) {
+	ts := httptest.NewServer(New(ServerConfig{
+		Limiter:        ratelimit.New(1.0/60, 1), // one request, then none within the test
+		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
+	}))
+	defer ts.Close()
+	get := func(client string) int {
+		req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+		req.Header.Set("X-Forwarded-For", client)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := get("2001:db8:1:2::1"); code != http.StatusOK {
+		t.Fatalf("first request: %d, want 200", code)
+	}
+	if code := get("2001:db8:1:2::2"); code != http.StatusTooManyRequests {
+		t.Fatalf("same /64, new address: %d, want 429", code)
+	}
+	if code := get("2001:db8:1:3::1"); code != http.StatusOK {
+		t.Fatalf("next /64: %d, want 200 (own bucket)", code)
+	}
+}
+
 // TestRateLimitBehindProxy: two clients behind one trusted proxy get
 // their own buckets; without the proxy trusted, they share its one.
 func TestRateLimitBehindProxy(t *testing.T) {
