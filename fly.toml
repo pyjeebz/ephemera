@@ -1,0 +1,69 @@
+# The hosted relay on Fly.io: one machine, always on. Setup and
+# secrets are in docs/deploy.md.
+#
+# Exactly one machine, because the share registry lives in memory: a
+# receiver routed to a second machine would find no share there. The
+# data volume keeps it at one, since fly deploy starts one machine per
+# volume.
+
+app = "ephemera-relay"
+primary_region = "yyz"
+
+[env]
+  # leave headroom under the VM's 1 GB for the cache and away budgets
+  GOMEMLIMIT = "900MiB"
+
+[processes]
+  # Fly's proxy terminates TLS and is the only way in, so its
+  # Fly-Client-IP header can be read on every request.
+  app = """serve -addr :8080 \
+    -public-url https://ephemera.run \
+    -client-ip-header Fly-Client-IP \
+    -tokens /etc/ephemera/tokens.txt \
+    -data-dir /data \
+    -cache-mb 192 -away-mb 384"""
+
+[[files]]
+  # base64 of the file `relay token` writes (Fly needs secret files
+  # base64-encoded)
+  guest_path = "/etc/ephemera/tokens.txt"
+  secret_name = "EPHEMERA_TOKENS"
+
+[mounts]
+  # reports and suspensions, never file bytes
+  source = "ephemera_data"
+  destination = "/data"
+  initial_size = "1gb"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  processes = ["app"]
+  # stopping the machine would drop every live share
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    # every sender holds a WebSocket and every viewer a stream
+    type = "connections"
+    soft_limit = 800
+    hard_limit = 1000
+
+  [http_service.http_options]
+    # a sender with no viewers sends nothing; don't cut its socket
+    idle_timeout = 600
+
+  [http_service.http_options.response.headers]
+    Strict-Transport-Security = "max-age=31536000"
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
