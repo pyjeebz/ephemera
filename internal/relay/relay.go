@@ -711,8 +711,10 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 // bytes at start: 206 with Content-Range when the request asked for a
 // range or the body is short of the whole file, else 200.
 func (s *Server) writeHeaders(w http.ResponseWriter, info share.Info, start, length int64, partial bool) {
+	ctype := contentTypeOf(info)
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Content-Type", contentTypeOf(info))
+	w.Header().Set("Content-Type", ctype)
+	fileSafety(w.Header(), ctype, info.Name)
 	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
 	if partial || start > 0 || length < info.Size {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, info.Size))
@@ -871,6 +873,61 @@ func (s *Server) replayBody(w io.Writer, id string, start, length int64) {
 		offset += n
 		remaining -= n
 	}
+}
+
+// fileSafety sets the headers that keep a sender's file from acting
+// as part of the relay's site. The file name and type come from the
+// sender, so an HTML or SVG file opened on the relay's domain could
+// otherwise run scripts there (a phishing page under ephemera.run).
+// Browsers show only plain media inline; everything else downloads,
+// under its own name, so `curl -OJ` keeps it too. nosniff stops a
+// browser second-guessing the type. Downloads also get a sandbox
+// policy, in case a browser renders one anyway; inline media doesn't,
+// since it breaks the browser's own player when /file is opened
+// directly, and plain media can't run scripts.
+func fileSafety(h http.Header, ctype, name string) {
+	disposition := "inline"
+	if !inlineSafe(ctype) {
+		disposition = "attachment"
+		h.Set("Content-Security-Policy", "sandbox")
+	}
+	if v := mime.FormatMediaType(disposition, map[string]string{"filename": cleanName(name)}); v != "" {
+		disposition = v
+	}
+	h.Set("Content-Disposition", disposition)
+	h.Set("X-Content-Type-Options", "nosniff")
+}
+
+// inlineSafe reports whether a browser can show a type inline without
+// running anything: audio, video, raster images, PDF and plain text.
+func inlineSafe(ctype string) bool {
+	mt, _, err := mime.ParseMediaType(ctype)
+	if err != nil {
+		return false
+	}
+	switch {
+	case mt == "image/svg+xml":
+		return false // SVG can carry scripts
+	case strings.HasPrefix(mt, "video/"), strings.HasPrefix(mt, "audio/"), strings.HasPrefix(mt, "image/"):
+		return true
+	}
+	return mt == "application/pdf" || mt == "text/plain"
+}
+
+// cleanName keeps a sender's file name to its last path element with
+// no control characters, for the Content-Disposition header.
+func cleanName(name string) string {
+	name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+	if name == "" || name == "." || name == "/" {
+		return "file"
+	}
+	return name
 }
 
 // contentTypeOf fills gaps the daemon's announcement may have.
