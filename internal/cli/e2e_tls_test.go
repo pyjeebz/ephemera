@@ -117,6 +117,7 @@ func TestBinariesTLS(t *testing.T) {
 	sendProc.Env = append(os.Environ(), "SSL_CERT_FILE="+certPath, "XDG_CONFIG_HOME="+t.TempDir(), "HOME="+t.TempDir(), "EPHEMERA_TOKEN="+token)
 	sendLog, _ := os.CreateTemp(t.TempDir(), "send.log")
 	sendProc.Stderr = sendLog
+	sendProc.Stdout = sendLog
 	if err := sendProc.Start(); err != nil {
 		t.Fatal(err)
 	}

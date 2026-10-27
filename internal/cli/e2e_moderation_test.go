@@ -73,6 +73,7 @@ func TestBinariesModeration(t *testing.T) {
 	send.Env = senderEnv
 	sendLog, _ := os.CreateTemp(t.TempDir(), "send.log")
 	send.Stderr = sendLog
+	send.Stdout = sendLog
 	if err := send.Start(); err != nil {
 		t.Fatal(err)
 	}

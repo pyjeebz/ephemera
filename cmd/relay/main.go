@@ -8,8 +8,8 @@ import (
 )
 
 func main() {
-	if err := cli.Run(os.Args[1:]); err != nil {
+	if err := cli.Run(os.Args[1:]); err != nil && cli.ExitCode(err) != cli.ExitOK {
 		fmt.Fprintln(os.Stderr, "relay:", err)
-		os.Exit(1)
+		os.Exit(cli.ExitCode(err))
 	}
 }

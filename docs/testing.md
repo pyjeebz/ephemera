@@ -68,11 +68,25 @@ Notes:
 - `-away 1` uploads the first 1 MiB instead, if the relay won't keep the whole file.
 - Use a standard MP4/H.264 file for the safest browser test.
 
-Once the relay accepts the share, the sender prints its link:
+Once the relay accepts the share, the sender prints its link on stdout (everything else goes to stderr):
 
 ```text
-link: http://192.168.1.42:7100/pw_kcOAr43ghggBx2MnKxQ
+http://192.168.1.42:7100/pw_kcOAr43ghggBx2MnKxQ
 ```
+
+The raw bytes are at the link plus `/file`, for `curl`, `ffprobe` or DuckDB. Scripts and agents can ask for JSON events instead, one per line:
+
+```bash
+./bin/ephemera send -json -relay ws://127.0.0.1:7100/daemon /path/to/video.mp4
+```
+
+```text
+{"event":"link","share_id":"pw_kc…","name":"video.mp4","size":52428800,"mime":"video/mp4","link":"http://…/pw_kc…","file_url":"http://…/pw_kc…/file","expires":"2026-10-27T18:04:00Z"}
+{"event":"upload","share_id":"pw_kc…","have":0,"size":52428800}
+{"event":"uploaded","share_id":"pw_kc…","size":52428800,"expires":"2026-10-27T18:04:00Z"}
+```
+
+The other events are `upload_refused` (the relay won't keep the file, so the link streams live), `expired` and `error` (with `code` and `message`). Exit codes: `0` done (uploaded or expired), `1` error, `2` bad flags or arguments, `3` the relay refused the share (token, limits, a killed link).
 
 The sender connects to the relay on `127.0.0.1`: plaintext is only allowed to the same machine.
 

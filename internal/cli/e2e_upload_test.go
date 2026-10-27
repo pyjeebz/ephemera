@@ -70,10 +70,12 @@ func TestBinariesBackgroundUpload(t *testing.T) {
 	defer func() { stopRelay() }()
 
 	const ttl = 8
-	send := exec.Command(ephemeraBin, "send", "-relay", "ws://"+addr+"/daemon", "-ttl", fmt.Sprint(ttl), video)
+	send := exec.Command(ephemeraBin, "send", "-json", "-relay", "ws://"+addr+"/daemon", "-ttl", fmt.Sprint(ttl), video)
 	send.Env = append(os.Environ(), "XDG_CONFIG_HOME="+t.TempDir(), "HOME="+t.TempDir(), "EPHEMERA_TOKEN="+strings.TrimSpace(string(tokenOut)))
 	sendLog, _ := os.CreateTemp(t.TempDir(), "send.log")
 	send.Stderr = sendLog
+	events, _ := os.CreateTemp(t.TempDir(), "send.json")
+	send.Stdout = events
 	if err := send.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +84,6 @@ func TestBinariesBackgroundUpload(t *testing.T) {
 	defer send.Process.Kill()
 	started := time.Now()
 
-	_, shareID := waitForLink(t, sendLog.Name())
 	select {
 	case err := <-exited:
 		if err != nil {
@@ -94,6 +95,29 @@ func TestBinariesBackgroundUpload(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(sendLog.Name()); !strings.Contains(string(b), "uploaded: the relay has the whole file") {
 		t.Fatalf("sender didn't say the upload finished; log:\n%s", b)
+	}
+
+	// -json: one event per line on stdout, link first, uploaded last
+	b, _ := os.ReadFile(events.Name())
+	var seq []string
+	var link, fileURL, shareID string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("stdout line %q is not JSON: %v", line, err)
+		}
+		seq = append(seq, ev["event"].(string))
+		if ev["event"] == "link" {
+			link, _ = ev["link"].(string)
+			fileURL, _ = ev["file_url"].(string)
+			shareID, _ = ev["share_id"].(string)
+		}
+	}
+	if len(seq) < 3 || seq[0] != "link" || seq[1] != "upload" || seq[len(seq)-1] != "uploaded" {
+		t.Fatalf("events = %v, want link, upload…, uploaded", seq)
+	}
+	if link != "http://"+addr+"/"+shareID || fileURL != link+"/file" {
+		t.Fatalf("link event: link %q, file_url %q, share %q", link, fileURL, shareID)
 	}
 
 	base := "http://" + addr + "/" + shareID

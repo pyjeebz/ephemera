@@ -21,7 +21,7 @@ func runStats(args []string) error {
 	client := adminFlags(fs)
 	n := fs.Int("n", 20, "list at most this many recent playbacks (0 = none)")
 	asJSON := fs.Bool("json", false, "print the raw JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parse(fs, args); err != nil {
 		return err
 	}
 	c, err := client()

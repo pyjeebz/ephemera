@@ -97,7 +97,7 @@ func runKill(args []string) error {
 	fs.SetOutput(os.Stderr)
 	client := adminFlags(fs)
 	suspend := fs.Bool("suspend", false, "also suspend the sender's account and kill its other links")
-	if err := fs.Parse(args); err != nil {
+	if err := parse(fs, args); err != nil {
 		return err
 	}
 	c, err := client()
@@ -105,7 +105,7 @@ func runKill(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: ephemera kill [-relay url] [-suspend] <share-id>")
+		return usage("usage: ephemera kill [-relay url] [-suspend] <share-id>")
 	}
 	id := fs.Arg(0)
 
@@ -148,7 +148,7 @@ func runReports(args []string) error {
 	client := adminFlags(fs)
 	n := fs.Int("n", 50, "show at most this many (0 = all)")
 	asJSON := fs.Bool("json", false, "print the raw JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parse(fs, args); err != nil {
 		return err
 	}
 	c, err := client()
@@ -197,7 +197,7 @@ func runSuspend(args []string) error {
 	fs := flag.NewFlagSet("suspend", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	client := adminFlags(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := parse(fs, args); err != nil {
 		return err
 	}
 	c, err := client()
@@ -205,7 +205,7 @@ func runSuspend(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: ephemera suspend [-relay url] <account>")
+		return usage("usage: ephemera suspend [-relay url] <account>")
 	}
 	var reply struct{ Killed []string }
 	if _, err := c.do("POST", "/admin/suspend", map[string]string{"account": fs.Arg(0)}, &reply); err != nil {
@@ -220,7 +220,7 @@ func runUnsuspend(args []string) error {
 	fs := flag.NewFlagSet("unsuspend", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	client := adminFlags(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := parse(fs, args); err != nil {
 		return err
 	}
 	c, err := client()
@@ -228,7 +228,7 @@ func runUnsuspend(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: ephemera unsuspend [-relay url] <account>")
+		return usage("usage: ephemera unsuspend [-relay url] <account>")
 	}
 	if _, err := c.do("POST", "/admin/unsuspend", map[string]string{"account": fs.Arg(0)}, nil); err != nil {
 		return err
@@ -242,7 +242,7 @@ func runSuspended(args []string) error {
 	fs := flag.NewFlagSet("suspended", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	client := adminFlags(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := parse(fs, args); err != nil {
 		return err
 	}
 	c, err := client()

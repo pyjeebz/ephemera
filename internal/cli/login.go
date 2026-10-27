@@ -48,7 +48,7 @@ func senderToken() (string, error) {
 // the command line, so it stays out of shell history and ps.
 func runLogin(args []string) error {
 	if len(args) != 0 {
-		return errors.New("usage: ephemera login   (paste the token, or pipe it in)")
+		return usage("usage: ephemera login   (paste the token, or pipe it in)")
 	}
 	if st, err := os.Stdin.Stat(); err == nil && st.Mode()&os.ModeCharDevice != 0 {
 		fmt.Fprint(os.Stderr, "sender token: ")
@@ -83,7 +83,7 @@ func runLogin(args []string) error {
 // runLogout forgets the stored sender token.
 func runLogout(args []string) error {
 	if len(args) != 0 {
-		return errors.New("usage: ephemera logout")
+		return usage("usage: ephemera logout")
 	}
 	path, err := tokenFile()
 	if err != nil {

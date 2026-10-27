@@ -73,7 +73,7 @@ func runServe(args []string) error {
 	fs.StringVar(&f.proxies, "trusted-proxies", "", "comma-separated IPs or CIDRs of reverse proxies in front of the relay; their X-Forwarded-For gives the client IP for rate limits")
 	fs.StringVar(&f.ipHeader, "client-ip-header", "", "header the proxy in front sets to the client IP, e.g. Fly-Client-IP; read only from -trusted-proxies if set, else from every request")
 	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports, account suspensions and (with -upload-gb) uploaded files here across restarts")
-	if err := fs.Parse(args); err != nil {
+	if err := parse(fs, args); err != nil {
 		return err
 	}
 	if err := checkPublicURL(f.publicURL); err != nil {
@@ -327,11 +327,11 @@ func runToken(args []string) error {
 	fs := flag.NewFlagSet("token", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	file := fs.String("file", "", "append the hash line to this tokens file")
-	if err := fs.Parse(args); err != nil {
+	if err := parse(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 || !auth.ValidName(fs.Arg(0)) {
-		return errors.New("usage: relay token [-file tokens] <name>  (name: no spaces or #)")
+		return usage("usage: relay token [-file tokens] <name>  (name: no spaces or #)")
 	}
 	name := fs.Arg(0)
 	token := auth.NewToken()

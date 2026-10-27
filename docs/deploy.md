@@ -111,7 +111,7 @@ From your laptop:
 ```bash
 ephemera login                                  # paste the sender token
 ephemera send -relay ephemera.run clip.mp4      # a bare host means wss://ephemera.run/daemon
-# link: https://ephemera.run/<id>
+# prints https://ephemera.run/<id>
 ```
 
 Open the link on a phone using mobile data, not your Wi-Fi, so the test really crosses the internet.

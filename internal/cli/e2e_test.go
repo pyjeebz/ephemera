@@ -15,15 +15,16 @@ import (
 	"time"
 )
 
-// waitForLink waits for the "link: <url>" line a sender prints once
-// the relay accepts its share, and returns the link and share id.
+// waitForLink waits for the link a sender prints on stdout once the
+// relay accepts its share, and returns the link and share id. The
+// sender's stdout and stderr both go to logPath.
 func waitForLink(t *testing.T, logPath string) (link, shareID string) {
 	t.Helper()
 	waitFor(t, 10*time.Second, func() bool {
 		b, _ := os.ReadFile(logPath)
 		for _, line := range strings.Split(string(b), "\n") {
-			if rest, ok := strings.CutPrefix(line, "link: "); ok {
-				link = strings.Fields(rest)[0]
+			if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
+				link = strings.TrimSpace(line)
 				shareID = link[strings.LastIndexByte(link, '/')+1:]
 				return true
 			}
@@ -136,12 +137,17 @@ func TestBinariesEndToEnd(t *testing.T) {
 	go func() { out, _ := anon.CombinedOutput(); anonDone <- out }()
 	select {
 	case out := <-anonDone:
-		if anon.ProcessState.Success() || !strings.Contains(string(out), "needs a sender token") {
-			t.Fatalf("tokenless send: exit %v, output:\n%s", anon.ProcessState, out)
+		if anon.ProcessState.ExitCode() != 3 || !strings.Contains(string(out), "needs a sender token") {
+			t.Fatalf("tokenless send: exit %v, want 3 (refused); output:\n%s", anon.ProcessState, out)
 		}
 	case <-time.After(10 * time.Second):
 		anon.Process.Kill()
 		t.Fatal("tokenless send did not stop on the relay's refusal")
+	}
+
+	// a bad command line exits 2, before touching the relay
+	if err := exec.Command(ephemeraBin, "send", "-relay", relayWS).Run(); err == nil || err.(*exec.ExitError).ExitCode() != 2 {
+		t.Fatalf("send with no file: %v, want exit 2", err)
 	}
 
 	// start daemon
@@ -150,6 +156,7 @@ func TestBinariesEndToEnd(t *testing.T) {
 	sendProc.Env = senderEnv(token)
 	sendLog, _ := os.CreateTemp(t.TempDir(), "send.log")
 	sendProc.Stderr = sendLog
+	sendProc.Stdout = sendLog
 	if err := sendProc.Start(); err != nil {
 		t.Fatal(err)
 	}
