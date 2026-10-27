@@ -7,7 +7,7 @@
 //	GET /            what this server is; any other unknown path 404s
 //	GET /:id         receiver page (state from /:id/status)
 //	GET /:id/file    the bytes: Range-honoring, streamed in chunks
-//	GET /:id/status  JSON: {state, name, size, mime, expires}
+//	GET /:id/status  JSON: {state, name, size, mime, expires, ...}
 //	POST /:id/report a receiver reports the link: {reason, note}
 //
 // Admin (bearer token): GET /admin/metrics, GET /admin/reports,
@@ -37,6 +37,7 @@ import (
 	httprange "ephemera.run/ephemera/internal/range" // dir range; pkg httprange
 	"ephemera.run/ephemera/internal/ratelimit"
 	"ephemera.run/ephemera/internal/share"
+	"ephemera.run/ephemera/internal/upload"
 )
 
 //go:embed all:receiver
@@ -82,6 +83,11 @@ type ServerConfig struct {
 	// blobs, uploaded by opt-in daemons. Nil disables away mode
 	// server-wide.
 	Away *away.Store
+
+	// Uploads is the disk store of background uploads. Stored bytes
+	// are served from it whether the sender is online or not. Nil
+	// disables uploads server-wide.
+	Uploads *upload.Store
 
 	// Reports is the link report queue. Nil disables reporting.
 	Reports *abuse.Reports
@@ -412,8 +418,9 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Write(page)
 }
 
-// stateFor maps a registry result to the receiver page's four
-// states: live, offline, expired, gone(404).
+// stateFor maps a registry result to the receiver page's states:
+// live, available (the whole file is on the relay), offline,
+// expired, gone(404).
 type stateFor struct {
 	state  string
 	info   share.Info
@@ -429,11 +436,22 @@ func (s *Server) lookupState(id string) stateFor {
 		return stateFor{state: "expired"}
 	case err != nil:
 		return stateFor{state: "gone"}
+	case info.Upload && s.cfg.Uploads != nil && s.cfg.Uploads.Complete(id):
+		return stateFor{state: "available", info: info, handle: h}
 	case h == nil:
 		return stateFor{state: "offline", info: info}
 	default:
 		return stateFor{state: "live", info: info, handle: h}
 	}
+}
+
+// uploaded is how many bytes of a share the relay holds on disk, all
+// from offset 0: what it can serve without the sender.
+func (s *Server) uploaded(info share.Info) int64 {
+	if !info.Upload || s.cfg.Uploads == nil {
+		return 0
+	}
+	return s.cfg.Uploads.Have(info.ID)
 }
 
 func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +472,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// live / offline: serve the receiver app; it polls /status
+	// live / available / offline: serve the receiver app; it polls /status
 	page, err := receiverFS.ReadFile("receiver/index.html")
 	if err != nil {
 		http.Error(w, "receiver page missing", http.StatusInternalServerError)
@@ -466,13 +484,18 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 
 // statusBody is the JSON the receiver page polls.
 type statusBody struct {
-	State   string `json:"state"` // live | offline | expired
+	State   string `json:"state"` // live | available | offline | expired
 	Name    string `json:"name,omitempty"`
 	Size    int64  `json:"size,omitempty"`
 	MIME    string `json:"mime,omitempty"`
 	Expires int64  `json:"expires,omitempty"` // unix seconds
 	Replay  bool   `json:"replay,omitempty"`  // offline but cached bytes replayable
 	Prefix  int64  `json:"prefix,omitempty"`  // offline: away-mode prefix bytes watchable
+
+	// Upload: the file is uploading to the relay in the background.
+	// Uploaded is how much of it is there so far.
+	Upload   bool  `json:"upload,omitempty"`
+	Uploaded int64 `json:"uploaded,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -499,6 +522,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Expires: st.info.Expires.Unix(),
 		Replay:  st.state == "offline" && st.info.Cacheable && s.cfg.Cache != nil && s.cacheCoverage(id, 0, st.info.Size) > 0,
 		Prefix:  s.offlinePrefix(st, id),
+
+		Upload:   st.info.Upload,
+		Uploaded: s.uploaded(st.info),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
@@ -507,6 +533,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // handleFile serves the bytes. Range semantics per PRD §9:
 // single ranges honored (206), no-range full-body streamed (200),
 // unsatisfiable 416, malformed/multi-range ignored as 200 full.
+// Bytes the relay holds from a background upload come off its disk;
+// the rest stream live from the sender, or, with the sender offline,
+// from layers B and C when they cover the range.
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Robots-Tag", "noindex")
 	id := r.PathValue("id")
@@ -521,54 +550,8 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusGone)
 		fmt.Fprintln(w, "This link has expired.")
 		return
-	case "offline":
-		metrics.DarkLinkHits.Add(1)
-		// layers B and C: what can we serve while the sender is gone?
-		var start, length int64
-		switch rng, err := httprange.Parse(r.Header.Get("Range"), st.info.Size); {
-		case errors.Is(err, httprange.ErrUnsatisfiable):
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", st.info.Size))
-			http.Error(w, "range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
-			return
-		case errors.Is(err, httprange.ErrNoRange), errors.Is(err, httprange.ErrMalformed):
-			start, length = 0, st.info.Size
-		case err != nil:
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		default:
-			start, length = rng.Start, rng.Length()
-		}
-
-		// layer B first: exact cached ranges replay from RAM
-		if s.cfg.Cache != nil && st.info.Cacheable && s.cacheCoverage(id, start, length) == 1 {
-			s.serveOfflineRange(w, st.info, start, length)
-			s.replayBody(w, id, start, length)
-			return
-		}
-
-		// layer C: away prefix. The stored prefix covers the head
-		// of the file; serve the covered part of the request.
-		if s.cfg.Away != nil && st.info.AwayPrefix > 0 {
-			if covered := min(length, max(0, s.cfg.Away.Have(id)-start)); covered > 0 {
-				s.serveOfflineRange(w, st.info, start, covered)
-				s.awayBody(w, id, start, covered)
-				if covered < length {
-					// the receiver asked past the prefix end:
-					// count it, end the body short
-					metrics.AwayOutlasts.Add(1)
-				}
-				return
-			}
-		}
-
-		// nothing to serve: the honest offline page
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprintln(w, "This link streams live from the sender's device. It'll return when the sender is back online.")
-		return
 	}
-
-	info, h := st.info, st.handle
+	info := st.info
 	size := info.Size
 
 	// 5GB abuse re-check: announced size is re-validated here
@@ -577,64 +560,123 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// thesis receipt: browsers asking for slices, not files
-	if r.Header.Get("Range") != "" {
-		metrics.RangeRequests.Add(1)
-	}
-
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Content-Type", contentTypeOf(info))
-
-	req, err := httprange.Parse(r.Header.Get("Range"), size)
-	switch {
+	var start, length int64
+	ranged := false
+	switch rng, err := httprange.Parse(r.Header.Get("Range"), size); {
 	case errors.Is(err, httprange.ErrUnsatisfiable):
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
 		http.Error(w, "range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
 		return
-	case errors.Is(err, httprange.ErrMalformed), errors.Is(err, httprange.ErrNoRange):
-		// 200 full body
-		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-		w.WriteHeader(http.StatusOK)
-		s.streamBody(w, h, info, 0, size)
-		return
+	case errors.Is(err, httprange.ErrNoRange), errors.Is(err, httprange.ErrMalformed):
+		start, length = 0, size
 	case err != nil:
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
-	}
-
-	// 206 partial
-	w.Header().Set("Content-Range", req.ContentRange(size))
-	w.Header().Set("Content-Length", strconv.FormatInt(req.Length(), 10))
-	w.WriteHeader(http.StatusPartialContent)
-	s.streamBody(w, h, info, req.Start, req.Length())
-}
-
-// offlinePrefix reports the away-prefix bytes the relay holds —
-// reported in both live (upload progress) and offline states.
-func (s *Server) offlinePrefix(st stateFor, id string) int64 {
-	if st.info.AwayPrefix <= 0 || s.cfg.Away == nil {
-		return 0
-	}
-	switch st.state {
-	case "live", "offline":
-		return s.cfg.Away.Have(id)
 	default:
-		return 0
+		start, length, ranged = rng.Start, rng.Length(), true
+		// thesis receipt: browsers asking for slices, not files
+		metrics.RangeRequests.Add(1)
 	}
+
+	// uploaded bytes: off the relay's disk, sender online or not
+	if stored := s.uploaded(info); start+length <= stored {
+		s.writeHeaders(w, info, start, length, ranged)
+		s.uploadBody(w, id, start, length)
+		return
+	}
+
+	if st.handle != nil {
+		s.writeHeaders(w, info, start, length, ranged)
+		s.streamBody(w, st.handle, info, start, length)
+		return
+	}
+
+	metrics.DarkLinkHits.Add(1)
+	// layers B and C: what can we serve while the sender is gone?
+
+	// layer B first: exact cached ranges replay from RAM
+	if s.cfg.Cache != nil && info.Cacheable && s.cacheCoverage(id, start, length) == 1 {
+		s.writeHeaders(w, info, start, length, ranged)
+		s.replayBody(w, id, start, length)
+		return
+	}
+
+	// a partial upload or layer C's away prefix covers the head of
+	// the file; serve the covered part of the request
+	if covered := min(length, max(0, s.uploaded(info)-start)); covered > 0 {
+		s.writeHeaders(w, info, start, covered, true)
+		s.uploadBody(w, id, start, covered)
+		if covered < length {
+			metrics.AwayOutlasts.Add(1) // asked past what's stored
+		}
+		return
+	}
+	if s.cfg.Away != nil && info.AwayPrefix > 0 {
+		if covered := min(length, max(0, s.cfg.Away.Have(id)-start)); covered > 0 {
+			s.writeHeaders(w, info, start, covered, ranged || covered < length)
+			s.awayBody(w, id, start, covered)
+			if covered < length {
+				// the receiver asked past the prefix end:
+				// count it, end the body short
+				metrics.AwayOutlasts.Add(1)
+			}
+			return
+		}
+	}
+
+	// nothing to serve: the honest offline page
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	fmt.Fprintln(w, "This link streams live from the sender's device. It'll return when the sender is back online.")
 }
 
-// serveOfflineRange writes the status and headers for an offline
-// (replay or prefix) body, honoring range semantics.
-func (s *Server) serveOfflineRange(w http.ResponseWriter, info share.Info, start, length int64) {
+// writeHeaders writes the status and headers for a body of length
+// bytes at start: 206 with Content-Range when the request asked for a
+// range or the body is short of the whole file, else 200.
+func (s *Server) writeHeaders(w http.ResponseWriter, info share.Info, start, length int64, partial bool) {
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", contentTypeOf(info))
 	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
-	if start > 0 || length < info.Size {
+	if partial || start > 0 || length < info.Size {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, info.Size))
 		w.WriteHeader(http.StatusPartialContent)
-	} else {
-		w.WriteHeader(http.StatusOK)
+		return
 	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// uploadBody writes stored upload bytes to the response.
+// Precondition: the store covers [start, start+length).
+func (s *Server) uploadBody(w io.Writer, id string, start, length int64) {
+	buf := make([]byte, min(s.cfg.ChunkSize, length))
+	for offset, end := start, start+length; offset < end; {
+		p := buf[:min(int64(len(buf)), end-offset)]
+		if err := s.cfg.Uploads.ReadAt(id, p, offset); err != nil {
+			return // dropped (expiry, kill): end the body short
+		}
+		if _, err := w.Write(p); err != nil {
+			return
+		}
+		metrics.BytesServed.Add(int64(len(p)))
+		metrics.UploadBytesServed.Add(int64(len(p)))
+		offset += int64(len(p))
+	}
+}
+
+// offlinePrefix reports the bytes from the start of the file the
+// relay holds: a partial upload's, else the away prefix's. Reported
+// in both live (upload progress) and offline states.
+func (s *Server) offlinePrefix(st stateFor, id string) int64 {
+	if st.state != "live" && st.state != "offline" {
+		return 0
+	}
+	if st.info.Upload {
+		return s.uploaded(st.info)
+	}
+	if st.info.AwayPrefix <= 0 || s.cfg.Away == nil {
+		return 0
+	}
+	return s.cfg.Away.Have(id)
 }
 
 // awayBody writes prefix bytes from the away store to the response.
@@ -757,3 +799,20 @@ func contentTypeOf(info share.Info) string {
 // not import the daemon package (it must not); the constant is
 // duplicated by design and asserted equal in a test.
 const hubMaxShareSize = int64(5 << 30)
+
+// RestoreUploads puts the shares in the upload store back in the
+// share table after a restart, offline until their senders redial,
+// so what was uploaded keeps being served. It returns how many.
+func RestoreUploads(reg *share.Registry, st *upload.Store) int {
+	n := 0
+	for _, m := range st.Stored() {
+		err := reg.Register(share.Info{
+			ID: m.ID, Name: m.Name, Size: m.Size, MIME: m.MIME,
+			Expires: m.Expires, Upload: true, Account: m.Account,
+		}, nil)
+		if err == nil {
+			n++
+		}
+	}
+	return n
+}
