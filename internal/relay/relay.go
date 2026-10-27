@@ -9,8 +9,10 @@
 //	GET /:id/file    the bytes: Range-honoring, streamed in chunks
 //	GET /:id/status  JSON: {state, name, size, mime, expires, ...}
 //	POST /:id/report a receiver reports the link: {reason, note}
+//	POST /:id/playback the receiver page reports how a playback went
 //
-// Admin (bearer token): GET /admin/metrics, GET /admin/reports,
+// Admin (bearer token): GET /admin/metrics, GET /admin/playback,
+// GET /admin/reports,
 // GET /admin/suspended, POST /admin/kill {id, suspend},
 // POST /admin/suspend {account}, POST /admin/unsuspend {account}.
 package relay
@@ -29,11 +31,13 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"ephemera.run/ephemera/internal/abuse"
 	"ephemera.run/ephemera/internal/away"
 	"ephemera.run/ephemera/internal/cache"
 	"ephemera.run/ephemera/internal/metrics"
+	"ephemera.run/ephemera/internal/playback"
 	httprange "ephemera.run/ephemera/internal/range" // dir range; pkg httprange
 	"ephemera.run/ephemera/internal/ratelimit"
 	"ephemera.run/ephemera/internal/share"
@@ -89,6 +93,12 @@ type ServerConfig struct {
 	// disables uploads server-wide.
 	Uploads *upload.Store
 
+	// Playback keeps what receiver pages report about playbacks, and
+	// Senders how fast each sender delivers; together they say whether
+	// it feels instant. Nil Playback turns the reports away.
+	Playback *playback.Log
+	Senders  *playback.Senders
+
 	// Reports is the link report queue. Nil disables reporting.
 	Reports *abuse.Reports
 
@@ -118,7 +128,9 @@ func New(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("GET /{id}/file", s.handleFile)
 	mux.HandleFunc("GET /{id}/status", s.handleStatus)
 	mux.HandleFunc("POST /{id}/report", s.handleReport)
+	mux.HandleFunc("POST /{id}/playback", s.handlePlayback)
 	mux.HandleFunc("GET /admin/metrics", s.guardAdmin(s.handleMetrics))
+	mux.HandleFunc("GET /admin/playback", s.guardAdmin(s.handleAdminPlayback))
 	mux.HandleFunc("POST /admin/kill", s.guardAdmin(s.handleKill))
 	mux.HandleFunc("GET /admin/reports", s.guardAdmin(s.handleReports))
 	mux.HandleFunc("GET /admin/suspended", s.guardAdmin(s.handleSuspended))
@@ -395,6 +407,64 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"reported": true})
 }
 
+// maxPlaybackBody caps a playback report: a dozen numbers.
+const maxPlaybackBody = 4 << 10
+
+// handlePlayback takes a receiver page's report on one playback of a
+// link that still exists, and files it with what the relay knows: the
+// file's bitrate, its sender's live delivery rate, and how much was
+// served from the relay.
+func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Playback == nil {
+		http.NotFound(w, r)
+		return
+	}
+	id := r.PathValue("id")
+	info, _, err := s.cfg.Registry.Lookup(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var rep playback.Report
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPlaybackBody)).Decode(&rep); err != nil || !rep.Valid() {
+		http.Error(w, "bad playback report", http.StatusBadRequest)
+		return
+	}
+	v := playback.View{Report: rep, Share: id, At: time.Now(), Size: info.Size}
+	if rep.DurationS > 0 {
+		v.BitrateBps = int64(float64(info.Size*8) / rep.DurationS)
+	}
+	if s.cfg.Senders != nil {
+		v.SenderBps, v.FromRelayPct = s.cfg.Senders.Stats(id)
+	}
+	s.cfg.Playback.Add(v)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAdminPlayback returns the playback summary and the latest
+// views, newest first. ?limit=N caps the views (default 50).
+func (s *Server) handleAdminPlayback(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Playback == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"summary": playback.Summary{}, "views": []playback.View{}})
+		return
+	}
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil {
+		limit = 50
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"summary": s.cfg.Playback.Summary(),
+		"views":   s.cfg.Playback.Views(limit),
+	})
+}
+
+// fromRelay counts bytes served without the sender.
+func (s *Server) fromRelay(id string, n int64) {
+	if s.cfg.Senders != nil {
+		s.cfg.Senders.FromRelay(id, n)
+	}
+}
+
 // writeJSON writes v as a JSON response with status.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -667,6 +737,7 @@ func (s *Server) uploadBody(w io.Writer, id string, start, length int64) bool {
 		}
 		metrics.BytesServed.Add(int64(len(p)))
 		metrics.UploadBytesServed.Add(int64(len(p)))
+		s.fromRelay(id, int64(len(p)))
 		offset += int64(len(p))
 	}
 	return true
@@ -704,6 +775,7 @@ func (s *Server) awayBody(w io.Writer, id string, start, length int64) {
 		}
 		metrics.BytesServed.Add(n)
 		metrics.AwayBytesServed.Add(n)
+		s.fromRelay(id, n)
 		offset += n
 		remaining -= n
 	}
@@ -719,7 +791,11 @@ func (s *Server) streamBody(w io.Writer, h share.Handle, sh share.Info, start, l
 	offset := start
 	for remaining > 0 {
 		n := min(s.cfg.ChunkSize, remaining)
+		asked := time.Now()
 		data, err := h.IssueRead(offset, n)
+		if err == nil && s.cfg.Senders != nil {
+			s.cfg.Senders.Live(sh.ID, int64(len(data)), time.Since(asked))
+		}
 		if err != nil {
 			// partial body delivered so far is all the receiver
 			// gets; the connection just ends
@@ -791,6 +867,7 @@ func (s *Server) replayBody(w io.Writer, id string, start, length int64) {
 		}
 		metrics.BytesServed.Add(n)
 		metrics.BytesCachedReplay.Add(n)
+		s.fromRelay(id, n)
 		offset += n
 		remaining -= n
 	}
