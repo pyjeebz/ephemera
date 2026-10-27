@@ -154,8 +154,11 @@ func runServe(args []string) error {
 	reg.OnExpire(senders.Drop)
 
 	surface := relay.New(relay.ServerConfig{
-		Registry:       reg,
-		Limiter:        ratelimit.New(20, 40), // 20 r/s sustained, burst 40 per IP
+		Registry: reg,
+		Limiter:  ratelimit.New(20, 40), // 20 r/s sustained, burst 40 per IP
+		// file bytes: a DuckDB query is a couple of hundred range
+		// requests, and got throttled at the page limit
+		FileLimiter:    ratelimit.New(200, 400),
 		TrustedProxies: proxies,
 		ClientIPHeader: f.ipHeader,
 		AdminToken:     f.adminToken,

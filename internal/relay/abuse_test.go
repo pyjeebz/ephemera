@@ -161,3 +161,55 @@ func TestCountersMove(t *testing.T) {
 		t.Errorf("range_requests delta = %d, want 1", got)
 	}
 }
+
+// TestFileRequestsHaveTheirOwnLimit: file requests spend the file
+// limiter's tokens, not the page limiter's, so a range reader's
+// hundreds of small requests neither get throttled at the page limit
+// nor use up the budget for pages.
+func TestFileRequestsHaveTheirOwnLimit(t *testing.T) {
+	body := []byte{1, 2, 3}
+	reg := share.NewRegistry(time.Hour)
+	reg.Register(share.Info{ID: "x", Name: "v.mp4", Size: 3, MIME: "video/mp4",
+		Expires: time.Now().Add(time.Hour)}, &memHandle{data: body})
+	ts := httptest.NewServer(New(ServerConfig{
+		Registry:    reg,
+		Limiter:     ratelimit.New(1.0/60, 2),
+		FileLimiter: ratelimit.New(1.0/60, 50),
+	}))
+	defer ts.Close()
+	status := func(path string) int {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for i := range 50 {
+		if code := status("/x/file"); code != 200 {
+			t.Fatalf("file request %d: %d, want 200", i, code)
+		}
+	}
+	if code := status("/x/file"); code != http.StatusTooManyRequests {
+		t.Fatalf("file request past its burst: %d, want 429", code)
+	}
+	for i := range 2 {
+		if code := status("/x/status"); code != 200 {
+			t.Fatalf("status request %d after the file requests: %d, want 200", i, code)
+		}
+	}
+	if code := status("/x/status"); code != http.StatusTooManyRequests {
+		t.Fatalf("status past its burst: %d, want 429", code)
+	}
+}
+
+func TestIsFilePath(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/abc/file": true, "/abc/file/": false, "/abc": false, "/file": false,
+		"/a/b/file": false, "/abc/status": false, "//file": false,
+	} {
+		if got := isFilePath(path); got != want {
+			t.Errorf("isFilePath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

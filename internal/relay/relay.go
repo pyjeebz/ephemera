@@ -60,6 +60,11 @@ type ServerConfig struct {
 	// Limiter, if set, throttles receiver requests per IP.
 	Limiter *ratelimit.Limiter
 
+	// FileLimiter, if set, throttles /:id/file requests per IP in
+	// place of Limiter. Range readers like DuckDB fire hundreds of
+	// small requests for one query, far past what a page needs.
+	FileLimiter *ratelimit.Limiter
+
 	// TrustedProxies are the reverse proxies in front of the relay.
 	// A request from one of them is limited under the client address
 	// it forwarded in X-Forwarded-For; from anywhere else the header
@@ -143,18 +148,23 @@ func New(cfg ServerConfig) http.Handler {
 	return s.limited(mux)
 }
 
-// limited wraps the mux with per-IP rate limiting. 429s carry
-// Retry-After; the bucket metrics feed the admin counters.
+// limited wraps the mux with per-IP rate limiting: file requests
+// under FileLimiter when it's set, everything else under Limiter.
+// 429s carry Retry-After; the bucket metrics feed the admin counters.
 func (s *Server) limited(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		metrics.Requests.Add(1)
-		if s.cfg.Limiter == nil {
+		lim := s.cfg.Limiter
+		if s.cfg.FileLimiter != nil && isFilePath(r.URL.Path) {
+			lim = s.cfg.FileLimiter
+		}
+		if lim == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ok, rem, resetIn := s.cfg.Limiter.Allow(s.rateKey(r))
+		ok, rem, resetIn := lim.Allow(s.rateKey(r))
 		h := w.Header()
-		h.Set("X-RateLimit-Limit", strconv.Itoa(int(s.cfg.Limiter.Burst())))
+		h.Set("X-RateLimit-Limit", strconv.Itoa(int(lim.Burst())))
 		h.Set("X-RateLimit-Remaining", strconv.Itoa(rem))
 		if !ok {
 			metrics.RateLimited429.Add(1)
@@ -164,6 +174,12 @@ func (s *Server) limited(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isFilePath reports whether path is a share's bytes: /:id/file.
+func isFilePath(path string) bool {
+	id, ok := strings.CutSuffix(strings.TrimPrefix(path, "/"), "/file")
+	return ok && id != "" && !strings.Contains(id, "/")
 }
 
 // clientIP is the address a request came from: the ClientIPHeader if
