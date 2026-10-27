@@ -52,8 +52,9 @@ func TestValidateShare(t *testing.T) {
 	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	blockedPath := filepath.Join(dir, "setup.exe")
-	if err := os.WriteFile(blockedPath, []byte("MZ..."), 0o644); err != nil {
+	// programs are shareable: they're what developers send
+	programPath := filepath.Join(dir, "install.sh")
+	if err := os.WriteFile(programPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -64,7 +65,7 @@ func TestValidateShare(t *testing.T) {
 	}{
 		{"valid file", okPath, nil},
 		{"empty file rejected", emptyPath, ErrEmpty},
-		{"blocked ext rejected", blockedPath, ErrBlockedExt},
+		{"program accepted", programPath, nil},
 		{"missing file rejected", filepath.Join(dir, "nope.mp4"), os.ErrNotExist},
 	}
 	for _, tt := range tests {

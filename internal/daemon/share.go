@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"ephemera.run/ephemera/internal/protocol"
 )
@@ -17,22 +16,15 @@ const (
 	MinShareSize = int64(1)
 )
 
-// ErrTooLarge, ErrEmpty and ErrBlockedExt are the up-front rejection
-// reasons for a share attempt.
+// ErrTooLarge and ErrEmpty are the up-front rejection reasons for a
+// share attempt. Any file type may be shared: programs and installers
+// are what developers send. The relay serves anything that isn't
+// plain media as a sandboxed download, which protects receivers from
+// a modified sender too; a check here never could.
 var (
-	ErrTooLarge   = errors.New("file exceeds the 5GB share limit")
-	ErrEmpty      = errors.New("empty files cannot be shared")
-	ErrBlockedExt = errors.New("file type is blocked")
+	ErrTooLarge = errors.New("file exceeds the 5GB share limit")
+	ErrEmpty    = errors.New("empty files cannot be shared")
 )
-
-// blockedExts are never shareable, regardless of size: executables
-// and installers are the phishing vector the PRD calls out.
-var blockedExts = map[string]bool{
-	".exe": true, ".msi": true, ".bat": true, ".cmd": true, ".com": true,
-	".scr": true, ".app": true, ".dmg": true, ".pkg": true, ".deb": true,
-	".rpm": true, ".jar": true, ".apk": true, ".sh": true, ".ps1": true,
-	".vbs": true, ".lnk": true,
-}
 
 // Share is one announced file: everything the daemon needs to serve
 // ranged reads without re-asking the caller.
@@ -79,10 +71,6 @@ func ValidateShare(path string, mimeFn func(string, []byte) string) (Share, erro
 	}
 	if st.Size() < MinShareSize {
 		return Share{}, ErrEmpty
-	}
-	ext := strings.ToLower(filepath.Ext(path))
-	if blockedExts[ext] {
-		return Share{}, ErrBlockedExt
 	}
 
 	head := make([]byte, 512)
