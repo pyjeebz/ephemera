@@ -23,6 +23,7 @@ import (
 	cachestore "ephemera.run/ephemera/internal/cache"
 	"ephemera.run/ephemera/internal/daemon"
 	"ephemera.run/ephemera/internal/hub"
+	"ephemera.run/ephemera/internal/playback"
 	"ephemera.run/ephemera/internal/ratelimit"
 	"ephemera.run/ephemera/internal/relay"
 	"ephemera.run/ephemera/internal/share"
@@ -146,6 +147,12 @@ func runServe(args []string) error {
 			fmt.Fprintf(os.Stderr, "serving %d uploaded links kept from before the restart\n", n)
 		}
 	}
+	// how playback went, per view: kept for `ephemera stats` and
+	// logged, so the host's log shows it too
+	views, senders := playback.NewLog(1000), playback.NewSenders()
+	views.OnAdd = logPlayback
+	reg.OnExpire(senders.Drop)
+
 	surface := relay.New(relay.ServerConfig{
 		Registry:       reg,
 		Limiter:        ratelimit.New(20, 40), // 20 r/s sustained, burst 40 per IP
@@ -155,6 +162,8 @@ func runServe(args []string) error {
 		Cache:          cachepkg,
 		Away:           awaypkg,
 		Uploads:        uploads,
+		Playback:       views,
+		Senders:        senders,
 
 		Reports:       reports,
 		ReportLimiter: ratelimit.New(1.0/60, 5), // 5 reports, then 1 a minute, per IP
@@ -193,6 +202,25 @@ func runServe(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "relay listening on %s\n", f.addr)
 	return srv.ListenAndServe()
+}
+
+// logPlayback writes one line per playback report to stderr.
+func logPlayback(v playback.View) {
+	line := fmt.Sprintf("playback %s: %s, first frame %dms", v.Share, v.State, v.TTFFMs)
+	if v.StartMs > 0 {
+		line += fmt.Sprintf(", playing %dms after play", v.StartMs)
+	}
+	line += fmt.Sprintf(", %d stalls (%.1fs), %d seeks, watched %.0fs", v.Stalls, float64(v.StallMs)/1000, v.Seeks, v.WatchedS)
+	if v.Seeks > 0 {
+		line += fmt.Sprintf(", %dms a seek", v.SeekWaitMs/v.Seeks)
+	}
+	if v.BitrateBps > 0 {
+		line += fmt.Sprintf(", file %.1f Mbps", float64(v.BitrateBps)/1e6)
+	}
+	if v.SenderBps > 0 {
+		line += fmt.Sprintf(", sender %.1f Mbps", float64(v.SenderBps)/1e6)
+	}
+	fmt.Fprintf(os.Stderr, "%s, %d%% from the relay\n", line, v.FromRelayPct)
 }
 
 // checkPublicURL accepts an empty -public-url or an http(s) base
