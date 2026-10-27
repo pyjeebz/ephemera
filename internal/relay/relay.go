@@ -587,6 +587,13 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 
 	if st.handle != nil {
 		s.writeHeaders(w, info, start, length, ranged)
+		// the stored head off disk, then the rest live
+		if head := s.uploaded(info) - start; head > 0 {
+			if !s.uploadBody(w, id, start, head) {
+				return
+			}
+			start, length = start+head, length-head
+		}
 		s.streamBody(w, st.handle, info, start, length)
 		return
 	}
@@ -645,22 +652,24 @@ func (s *Server) writeHeaders(w http.ResponseWriter, info share.Info, start, len
 	w.WriteHeader(http.StatusOK)
 }
 
-// uploadBody writes stored upload bytes to the response.
-// Precondition: the store covers [start, start+length).
-func (s *Server) uploadBody(w io.Writer, id string, start, length int64) {
+// uploadBody writes stored upload bytes to the response, reporting
+// whether all of them went out. Precondition: the store covers
+// [start, start+length).
+func (s *Server) uploadBody(w io.Writer, id string, start, length int64) bool {
 	buf := make([]byte, min(s.cfg.ChunkSize, length))
 	for offset, end := start, start+length; offset < end; {
 		p := buf[:min(int64(len(buf)), end-offset)]
 		if err := s.cfg.Uploads.ReadAt(id, p, offset); err != nil {
-			return // dropped (expiry, kill): end the body short
+			return false // dropped (expiry, kill): end the body short
 		}
 		if _, err := w.Write(p); err != nil {
-			return
+			return false
 		}
 		metrics.BytesServed.Add(int64(len(p)))
 		metrics.UploadBytesServed.Add(int64(len(p)))
 		offset += int64(len(p))
 	}
+	return true
 }
 
 // offlinePrefix reports the bytes from the start of the file the

@@ -92,6 +92,17 @@ func TestStoredBytesSpareTheSender(t *testing.T) {
 		t.Fatal("bytes past the upload didn't come from the sender")
 	}
 
+	// how a browser opens a video: the stored head off disk, then the
+	// rest live, in one response
+	h.reads.Store(0)
+	code, data, _ = get(t, ts.URL+"/up/file", "bytes=0-")
+	if code != 206 || !bytes.Equal(data, body) {
+		t.Fatalf("open-ended range: %d, %d bytes", code, len(data))
+	}
+	if n := h.reads.Load(); n != 8 { // 32 KiB live in 4 KiB chunks
+		t.Fatalf("sender answered %d reads, want 8 for the part not uploaded", n)
+	}
+
 	var st statusBody
 	resp, _ := http.Get(ts.URL + "/up/status")
 	readJSON(t, resp, &st)
