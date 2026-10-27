@@ -39,6 +39,13 @@ var (
 	AwayOutlasts    = expvar.NewInt("away_outlasts")     // receivers who hit the prefix end offline
 	AwayBytesHeld   = expvar.NewInt("away_bytes_held")   // gauge: blob bytes currently held
 
+	// Background uploads: whole files on the relay's disk.
+	UploadBytesStored = expvar.NewInt("upload_bytes_stored") // bytes received
+	UploadBytesServed = expvar.NewInt("upload_bytes_served") // bytes served from disk
+	UploadBytesHeld   = expvar.NewInt("upload_bytes_held")   // gauge: bytes on disk now
+	UploadsCompleted  = expvar.NewInt("uploads_completed")   // files fully uploaded
+	UploadsRefused    = expvar.NewInt("uploads_refused")     // no room left in the budget
+
 	// Requests counts receiver-facing requests (page, status, file).
 	Requests = expvar.NewInt("requests")
 
