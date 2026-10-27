@@ -19,6 +19,9 @@ type Hello struct {
 // is offline. AwayPrefixBytes > 0 opts into layer C: the daemon
 // will trickle that many prefix bytes to the relay after announcing,
 // for the relay to serve while the sender is offline.
+// Upload=true asks for a background upload: the daemon sends the
+// whole file the same way, and the relay keeps it on disk until the
+// link expires, so the link outlives the sender being online.
 // OwnerKey proves the daemon owns ShareID (see owner.go); the relay
 // refuses an announce whose key does not certify the id.
 type Send struct {
@@ -30,18 +33,21 @@ type Send struct {
 	TTLSec          int64  `json:"ttl_sec"`
 	Cache           bool   `json:"cache,omitempty"`
 	AwayPrefixBytes int64  `json:"away_prefix_bytes,omitempty"`
+	Upload          bool   `json:"upload,omitempty"`
 }
 
-// Away carries layer-C prefix bytes: the offset is where these bytes
-// belong in the file. Chunks arrive in order, one frame each, in
-// the background at the daemon's own pace.
+// Away carries uploaded bytes, layer C's prefix or a background
+// upload's whole file: the offset is where these bytes belong in the
+// file. Chunks arrive in order, one frame each, in the background at
+// the daemon's own pace.
 type Away struct {
 	ShareID string `json:"share_id"`
 	Offset  int64  `json:"offset"`
 }
 
-// Ack tells the daemon how many prefix bytes the relay durably
-// holds, so a reconnecting daemon resumes the trickle from there.
+// Ack tells the daemon how many bytes of the share the relay holds,
+// all from offset 0. Acks are cumulative: a later one covers every
+// burst before it.
 type Ack struct {
 	ShareID string `json:"share_id"`
 	Have    int64  `json:"have"`
@@ -49,10 +55,15 @@ type Ack struct {
 
 // Welcome tells the daemon its announce was accepted and gives the
 // link receivers open: the relay knows its public address, the
-// daemon only knows the one it dialed.
+// daemon only knows the one it dialed. Link is empty when the relay
+// doesn't know one. Upload says whether the relay took the background
+// upload the announce asked for; Have is how many bytes of the share
+// (upload or away prefix) it already holds, where the daemon resumes.
 type Welcome struct {
 	ShareID string `json:"share_id"`
-	Link    string `json:"link"`
+	Link    string `json:"link,omitempty"`
+	Upload  bool   `json:"upload,omitempty"`
+	Have    int64  `json:"have,omitempty"`
 }
 
 // Read asks the daemon for one byte range of one share. Offset+Length

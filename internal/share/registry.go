@@ -37,6 +37,10 @@ type Info struct {
 	// offline.
 	AwayPrefix int64
 
+	// Upload: the relay took a background upload of the whole file
+	// and serves the stored part from disk, sender online or not.
+	Upload bool
+
 	// Account is the sender's account name on relays that require
 	// tokens; empty on open relays. Never shown to receivers.
 	Account string

@@ -26,6 +26,7 @@ import (
 	"ephemera.run/ephemera/internal/metrics"
 	"ephemera.run/ephemera/internal/protocol"
 	"ephemera.run/ephemera/internal/share"
+	"ephemera.run/ephemera/internal/upload"
 )
 
 // Conn is the hub's view of a daemon connection: a framed byte
@@ -41,6 +42,7 @@ type DaemonConn struct {
 
 	shareID string
 	ttlSec  int64
+	upload  bool // away bursts go to the disk store, not layer C
 
 	conn   Conn
 	reader *bufio.Reader
@@ -96,6 +98,7 @@ func (l Limits) maxSize() int64   { return cmp.Or(l.MaxSize, DefaultMaxSize) }
 type Bridge struct {
 	Registry *share.Registry
 	Away     *away.Store   // nil: layer C disabled
+	Uploads  *upload.Store // nil: background uploads refused
 	Auth     Authenticator // nil: open relay, every sender anonymous
 	Limits   Limits        // relay-wide; an Account's limits override
 
@@ -112,9 +115,10 @@ type Bridge struct {
 }
 
 // Accept takes ownership of a freshly connected daemon socket:
-// it reads hello + send, registers the share, welcomes the daemon
-// with its link, acks any away prefix the relay already holds (resume
-// hint), and starts the pump goroutines. Callers hand the socket
+// it reads hello + send, reserves room for a background upload if
+// asked, registers the share, welcomes the daemon with its link and
+// the bytes the relay already holds (its resume point), and starts
+// the pump goroutines. Callers hand the socket
 // straight from Accept/Dial.
 func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 	return b.AcceptAt(conn, b.PublicURL)
@@ -169,6 +173,31 @@ func (b *Bridge) AcceptAt(conn Conn, linkBase string) (*DaemonConn, error) {
 	d.ttlSec = info.TTLSec
 
 	expires := time.Now().Add(time.Duration(info.TTLSec) * time.Second)
+	welcome := protocol.Welcome{ShareID: info.ShareID}
+	if linkBase != "" {
+		welcome.Link = strings.TrimSuffix(linkBase, "/") + "/" + info.ShareID
+	}
+
+	// a background upload needs room for the whole file up front; a
+	// redial gets back what the relay already holds. No room is not
+	// a refusal: the share still streams live from the sender.
+	if info.Upload && b.Uploads != nil {
+		have, err := b.Uploads.Reserve(upload.Meta{
+			ID: info.ShareID, Name: info.Name, Size: info.Size, MIME: info.MIME,
+			Account: acct.Name, Expires: expires,
+		})
+		if err == nil {
+			d.upload = true
+			welcome.Upload, welcome.Have = true, have
+		}
+	}
+	awayPrefix := min(info.AwayPrefixBytes, info.Size)
+	if d.upload {
+		awayPrefix = 0 // the whole file is coming: no prefix needed
+	} else if b.Away != nil && awayPrefix > 0 {
+		welcome.Have = b.Away.Have(info.ShareID)
+	}
+
 	reg := b.Registry
 	if err := reg.Register(share.Info{
 		ID:         info.ShareID,
@@ -177,26 +206,16 @@ func (b *Bridge) AcceptAt(conn Conn, linkBase string) (*DaemonConn, error) {
 		MIME:       info.MIME,
 		Expires:    expires,
 		Cacheable:  info.Cache,
-		AwayPrefix: min(info.AwayPrefixBytes, info.Size),
+		AwayPrefix: awayPrefix,
+		Upload:     d.upload,
 		Account:    acct.Name,
 	}, d); err != nil {
+		if d.upload {
+			b.Uploads.Drop(info.ShareID)
+		}
 		return nil, refuse(conn, info.ShareID, "gone", "this link was taken down", err)
 	}
-
-	if linkBase != "" {
-		d.sendJSON(protocol.TWelcome, protocol.Welcome{
-			ShareID: info.ShareID,
-			Link:    strings.TrimSuffix(linkBase, "/") + "/" + info.ShareID,
-		})
-	}
-
-	// resume hint: if the relay already holds prefix bytes for this
-	// share (daemon redial), tell the daemon where to continue
-	if b.Away != nil && info.AwayPrefixBytes > 0 {
-		if have := b.Away.Have(info.ShareID); have > 0 {
-			d.sendJSON(protocol.TAck, protocol.Ack{ShareID: info.ShareID, Have: have})
-		}
-	}
+	d.sendJSON(protocol.TWelcome, welcome)
 
 	// thesis receipts: every announcement counts
 	metrics.SharesStarted.Add(1)
@@ -291,8 +310,8 @@ func (d *DaemonConn) writeLoop() {
 }
 
 // readLoop decodes frames: TData goes to the FIFO reply queue,
-// TAway extends the away blob (acking progress), TErr fails the
-// waiting reader, anything else is skipped.
+// TAway extends the upload or away blob (acking progress), TErr
+// fails the waiting reader, anything else is skipped.
 func (d *DaemonConn) readLoop() {
 	for {
 		fr, err := protocol.ReadFrame(d.reader)
@@ -342,18 +361,24 @@ func (d *DaemonConn) readLoop() {
 	}
 }
 
-// handleAway appends prefix bytes to the away blob and acks the
-// new length, so a redialing daemon resumes from the ack.
+// handleAway appends uploaded bytes, to the disk store for a
+// background upload or the away blob for a layer C prefix, and acks
+// the new length, so a redialing daemon resumes from the ack.
 func (d *DaemonConn) handleAway(a protocol.Away, data []byte) {
-	st := d.bridge.Away
-	if st == nil {
+	var have int64
+	switch {
+	case d.upload:
+		have = d.bridge.Uploads.Put(a.ShareID, a.Offset, data)
+	case d.bridge.Away != nil:
+		have = d.bridge.Away.Put(a.ShareID, a.Offset, data)
+	default:
 		return // layer C disabled: never ack; daemon stops quietly
 	}
-	have := st.Put(a.ShareID, a.Offset, data)
 	d.sendJSON(protocol.TAck, protocol.Ack{ShareID: a.ShareID, Have: have})
 }
 
-// sendJSON queues a framed JSON message on the writer pump.
+// sendJSON queues a framed JSON message on the writer pump, waiting
+// for room: the uploader counts on every ack arriving.
 func (d *DaemonConn) sendJSON(typ uint8, v any) {
 	buf := &bytes.Buffer{}
 	if err := protocol.EncodeJSON(buf, typ, v); err != nil {
@@ -362,8 +387,6 @@ func (d *DaemonConn) sendJSON(typ uint8, v any) {
 	select {
 	case d.writeCh <- buf.Bytes():
 	case <-d.done:
-	default:
-		// pump backlog full: the ack is advisory, drop it
 	}
 }
 

@@ -147,7 +147,7 @@ func TestAcceptRefusesSuspendedAccount(t *testing.T) {
 }
 
 // TestAcceptWelcomesWithLink: an accepted daemon gets its link under
-// the relay's public address; without one, no welcome is sent.
+// the relay's public address; without one, the welcome has no link.
 func TestAcceptWelcomesWithLink(t *testing.T) {
 	b := &Bridge{Registry: share.NewRegistry(time.Hour)}
 	ann := newAnnounce(60, 1024)
@@ -169,16 +169,17 @@ func TestAcceptWelcomesWithLink(t *testing.T) {
 		t.Fatalf("welcome = %+v, want link %s", w, want)
 	}
 
-	// no public address: nothing to welcome with, and the first frame
-	// the daemon sees is a read
+	// no public address: still welcomed (the daemon learns its resume
+	// point there), with no link to print
 	conn, daemonR = announceWith(t, protocol.Hello{Version: "0.1"}, newAnnounce(60, 1024))
 	d2, err := b.Accept(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d2.Close()
-	go d2.IssueRead(0, 1)
-	if fr, err := protocol.ReadFrame(daemonR); err != nil || fr.Type != protocol.TRead {
-		t.Fatalf("without a public URL: first frame %+v (%v), want TRead", fr, err)
+	fr, err = protocol.ReadFrame(daemonR)
+	w = protocol.Welcome{}
+	if err != nil || fr.Type != protocol.TWelcome || json.Unmarshal(fr.JSON, &w) != nil || w.Link != "" {
+		t.Fatalf("without a public URL: first frame %+v (%v), want a welcome with no link", fr, err)
 	}
 }

@@ -85,8 +85,11 @@ func (fd *fakeDaemon) serve() {
 		fd.mu.Lock()
 		dead := fd.dead
 		fd.mu.Unlock()
-		if dead || fr.Type != protocol.TRead {
+		if dead {
 			return
+		}
+		if fr.Type != protocol.TRead {
+			continue // the welcome, acks
 		}
 		var rd protocol.Read
 		if json.Unmarshal(fr.JSON, &rd) != nil {

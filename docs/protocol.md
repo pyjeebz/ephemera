@@ -32,9 +32,9 @@ ahead of the code that reads them.
 	3  read     relay → daemon   ask for one byte range
 	4  data     daemon → relay   raw bytes answering a read
 	5  err      either way       a refusal or a failed read, with reason
-	6  away     daemon → relay   layer C prefix header; a data frame follows
-	7  ack      relay → daemon   how many away prefix bytes the relay holds
-	8  welcome  relay → daemon   announce accepted: the link receivers open
+	6  away     daemon → relay   uploaded bytes header; a data frame follows
+	7  ack      relay → daemon   how many uploaded bytes the relay holds
+	8  welcome  relay → daemon   announce accepted: the link, the resume point
 
 ## Hello frame fields
 
@@ -62,17 +62,32 @@ ahead of the code that reads them.
 	away_prefix_bytes  int64   layer C opt-in: the daemon trickles this many
 	                           prefix bytes to the relay post-announce (paced,
 	                           ack-driven); the relay serves them offline
+	upload             bool    background upload: the daemon sends the whole
+	                           file the same way; the relay keeps it on disk
+	                           until the link expires and serves the stored
+	                           part itself, sender online or not
 
 ## Welcome
 
-	welcome  {share_id, link}
+	welcome  {share_id, link, upload, have}
 
 	Sent once the relay registers the share, before any read. The
 	link is the relay's public address (relay serve -public-url, else
-	the scheme and host the daemon dialed) plus the share id. The
-	daemon prints it then, and only then: before the announce lands
-	the link would open nothing. A redial is welcomed again; the
-	daemon reports the link only if it changed.
+	the scheme and host the daemon dialed) plus the share id; it is
+	left out when the relay knows no address. The daemon prints it
+	then, and only then: before the announce lands the link would
+	open nothing. A redial is welcomed again; the daemon reports the
+	link only if it changed.
+
+	upload is true when the relay took the background upload the
+	announce asked for. It reserves room for the whole file first; a
+	relay without upload storage, or without room, leaves it false
+	and the share streams live only. That is not a refusal.
+
+	have is how many bytes of the share (the upload, else the away
+	prefix) the relay already holds, all from offset 0. The daemon
+	starts uploading there, so a redial resumes instead of starting
+	over.
 
 ## Reads
 
@@ -121,10 +136,14 @@ ahead of the code that reads them.
 	err in reply to its announce stops sharing instead of redialing:
 	none of these get better by trying again.
 
-## Away trickle (layer C)
+## Uploads: away prefix (layer C) and background upload
 
-	Each burst is two adjacent frames: away (JSON: share_id, offset)
-	then data (the bytes). The relay acks every burst with ack
-	{share_id, have}; a reconnecting daemon resumes from the ack it
-	receives at accept. No ack in time: the trickle stops quietly
-	(relay full, budgeted out, or layer C disabled).
+	Both send bytes the same way. Each burst is two adjacent frames:
+	away (JSON: share_id, offset) then data (the bytes). Bursts go in
+	order from the welcome's have. The relay stores a burst only if
+	it starts exactly where its stored bytes end, and acks every
+	burst with ack {share_id, have}. Acks are cumulative, so the
+	daemon may keep several bursts in flight. An ack that doesn't
+	move have forward means the relay stopped taking bytes, and the
+	daemon stops; so does no ack in time (relay full, budgeted out,
+	or layer C disabled).
