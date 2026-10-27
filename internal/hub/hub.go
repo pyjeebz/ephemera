@@ -313,15 +313,17 @@ func (d *DaemonConn) readLoop() {
 		case protocol.TAway:
 			// layer C: TAway header is immediately followed by its
 			// TData bytes (the daemon writes them adjacent under
-			// one lock). Consume the pair atomically.
-			var a protocol.Away
-			if json.Unmarshal(fr.JSON, &a) != nil || a.ShareID != d.shareID {
-				continue
-			}
+			// one lock). Consume the pair atomically, even when the
+			// header is bad: a data frame left behind would be read
+			// as the reply to a receiver's read.
 			dataFr, err := protocol.ReadFrame(d.reader)
 			if err != nil {
 				d.fail(err)
 				return
+			}
+			var a protocol.Away
+			if json.Unmarshal(fr.JSON, &a) != nil || a.ShareID != d.shareID {
+				continue
 			}
 			if dataFr.Type != protocol.TData {
 				continue // protocol violation: drop, trickle stalls on no-ack

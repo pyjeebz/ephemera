@@ -130,3 +130,31 @@ func TestAwayAckRoundTrip(t *testing.T) {
 		t.Fatal("second ack never arrived")
 	}
 }
+
+// TestAwayForOtherShareKeepsReadsAligned: an away header naming
+// another share is dropped together with its data frame. Leaving the
+// data behind would hand those bytes to the next receiver read.
+func TestAwayForOtherShareKeepsReadsAligned(t *testing.T) {
+	reg := share.NewRegistry(time.Hour)
+	fd, relayR, relayW, _ := startFakeDaemon(t, 64, 3600)
+
+	// a stray burst for some other share, ahead of any read reply
+	protocol.EncodeJSON(fd.toRelayW, protocol.TAway, protocol.Away{ShareID: "not-this-one", Offset: 0})
+	protocol.EncodeData(fd.toRelayW, []byte("stray bytes"))
+
+	d, err := (&Bridge{Registry: reg, Away: away.New(1 << 20)}).Accept(&pipeConn{r: relayR, w: relayW})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	defer d.Close()
+
+	data, err := d.IssueRead(0, 16)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for i, b := range data {
+		if b != byte(i%251) {
+			t.Fatalf("read got %q: the stray burst's bytes leaked into a reply", data)
+		}
+	}
+}
