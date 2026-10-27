@@ -46,6 +46,9 @@ var (
 	UploadsCompleted  = expvar.NewInt("uploads_completed")   // files fully uploaded
 	UploadsRefused    = expvar.NewInt("uploads_refused")     // no room left in the budget
 
+	// PlaybackViews counts playbacks receiver pages reported.
+	PlaybackViews = expvar.NewInt("playback_views")
+
 	// Requests counts receiver-facing requests (page, status, file).
 	Requests = expvar.NewInt("requests")
 
