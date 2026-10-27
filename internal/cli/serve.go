@@ -164,6 +164,7 @@ func runServe(args []string) error {
 		Uploads:        uploads,
 		Playback:       views,
 		Senders:        senders,
+		FirstBytes:     playback.NewFirstBytes(1000),
 
 		Reports:       reports,
 		ReportLimiter: ratelimit.New(1.0/60, 5), // 5 reports, then 1 a minute, per IP

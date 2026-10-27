@@ -99,6 +99,10 @@ type ServerConfig struct {
 	Playback *playback.Log
 	Senders  *playback.Senders
 
+	// FirstBytes times every file request to its first byte, any
+	// client, by where the bytes came from. Nil turns it off.
+	FirstBytes *playback.FirstBytes
+
 	// Reports is the link report queue. Nil disables reporting.
 	Reports *abuse.Reports
 
@@ -441,11 +445,16 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleAdminPlayback returns the playback summary and the latest
-// views, newest first. ?limit=N caps the views (default 50).
+// handleAdminPlayback returns the playback summary, the latest views
+// (newest first, ?limit=N, default 50) and time to first byte for
+// every file request by source.
 func (s *Server) handleAdminPlayback(w http.ResponseWriter, r *http.Request) {
+	firstBytes := map[string]playback.FirstByteStats{}
+	if s.cfg.FirstBytes != nil {
+		firstBytes = s.cfg.FirstBytes.Summary()
+	}
 	if s.cfg.Playback == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"summary": playback.Summary{}, "views": []playback.View{}})
+		writeJSON(w, http.StatusOK, map[string]any{"summary": playback.Summary{}, "views": []playback.View{}, "first_byte": firstBytes})
 		return
 	}
 	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -453,8 +462,9 @@ func (s *Server) handleAdminPlayback(w http.ResponseWriter, r *http.Request) {
 		limit = 50
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"summary": s.cfg.Playback.Summary(),
-		"views":   s.cfg.Playback.Views(limit),
+		"summary":    s.cfg.Playback.Summary(),
+		"views":      s.cfg.Playback.Views(limit),
+		"first_byte": firstBytes,
 	})
 }
 
@@ -607,6 +617,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // the rest stream live from the sender, or, with the sender offline,
 // from layers B and C when they cover the range.
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
+	arrived := time.Now()
 	w.Header().Set("X-Robots-Tag", "noindex")
 	id := r.PathValue("id")
 	st := s.lookupState(id)
@@ -651,20 +662,22 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	// uploaded bytes: off the relay's disk, sender online or not
 	if stored := s.uploaded(info); start+length <= stored {
 		s.writeHeaders(w, info, start, length, ranged)
-		s.uploadBody(w, id, start, length)
+		s.uploadBody(s.timed(w, arrived, "relay"), id, start, length)
 		return
 	}
 
 	if st.handle != nil {
 		s.writeHeaders(w, info, start, length, ranged)
 		// the stored head off disk, then the rest live
-		if head := s.uploaded(info) - start; head > 0 {
-			if !s.uploadBody(w, id, start, head) {
-				return
-			}
-			start, length = start+head, length-head
+		head := s.uploaded(info) - start
+		if head <= 0 {
+			s.streamBody(s.timed(w, arrived, "sender"), st.handle, info, start, length)
+			return
 		}
-		s.streamBody(w, st.handle, info, start, length)
+		bw := s.timed(w, arrived, "relay")
+		if s.uploadBody(bw, id, start, head) {
+			s.streamBody(bw, st.handle, info, start+head, length-head)
+		}
 		return
 	}
 
@@ -674,7 +687,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	// layer B first: exact cached ranges replay from RAM
 	if s.cfg.Cache != nil && info.Cacheable && s.cacheCoverage(id, start, length) == 1 {
 		s.writeHeaders(w, info, start, length, ranged)
-		s.replayBody(w, id, start, length)
+		s.replayBody(s.timed(w, arrived, "relay"), id, start, length)
 		return
 	}
 
@@ -682,7 +695,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	// the file; serve the covered part of the request
 	if covered := min(length, max(0, s.uploaded(info)-start)); covered > 0 {
 		s.writeHeaders(w, info, start, covered, true)
-		s.uploadBody(w, id, start, covered)
+		s.uploadBody(s.timed(w, arrived, "relay"), id, start, covered)
 		if covered < length {
 			metrics.AwayOutlasts.Add(1) // asked past what's stored
 		}
@@ -691,7 +704,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Away != nil && info.AwayPrefix > 0 {
 		if covered := min(length, max(0, s.cfg.Away.Have(id)-start)); covered > 0 {
 			s.writeHeaders(w, info, start, covered, ranged || covered < length)
-			s.awayBody(w, id, start, covered)
+			s.awayBody(s.timed(w, arrived, "relay"), id, start, covered)
 			if covered < length {
 				// the receiver asked past the prefix end:
 				// count it, end the body short
@@ -705,6 +718,29 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	fmt.Fprintln(w, "This link streams live from the sender's device. It'll return when the sender is back online.")
+}
+
+// timed wraps a response body so its first byte records how long the
+// request took to get there, under source: "relay" for its own copy,
+// "sender" for bytes asked live.
+func (s *Server) timed(w io.Writer, arrived time.Time, source string) io.Writer {
+	if s.cfg.FirstBytes == nil {
+		return w
+	}
+	return &firstByteWriter{w: w, record: func() { s.cfg.FirstBytes.Add(source, time.Since(arrived)) }}
+}
+
+type firstByteWriter struct {
+	w      io.Writer
+	record func() // nil once called
+}
+
+func (f *firstByteWriter) Write(p []byte) (int, error) {
+	if f.record != nil && len(p) > 0 {
+		f.record()
+		f.record = nil
+	}
+	return f.w.Write(p)
 }
 
 // writeHeaders writes the status and headers for a body of length

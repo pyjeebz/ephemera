@@ -264,3 +264,57 @@ func (s *Senders) Drop(id string) {
 	defer s.mu.Unlock()
 	delete(s.stats, id)
 }
+
+// FirstBytes keeps how long recent file requests took to their first
+// byte, by where the bytes came from: "relay" (its own copy) or
+// "sender" (asked live). It's timed on the relay, from the request
+// arriving to the first body byte written, so the receiver's own
+// network isn't in it. Every client counts: browsers, curl, DuckDB,
+// agents. The latest max requests per source are kept.
+type FirstBytes struct {
+	mu      sync.Mutex
+	max     int
+	samples map[string][]time.Duration
+}
+
+// NewFirstBytes keeps up to max requests per source.
+func NewFirstBytes(max int) *FirstBytes {
+	return &FirstBytes{max: max, samples: make(map[string][]time.Duration)}
+}
+
+// Add records one request's time to first byte.
+func (f *FirstBytes) Add(source string, d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	xs := append(f.samples[source], d)
+	if len(xs) > f.max {
+		xs = xs[len(xs)-f.max:]
+	}
+	f.samples[source] = xs
+}
+
+// FirstByteStats sums up one source's recent requests.
+type FirstByteStats struct {
+	Requests int     `json:"requests"`
+	P50Ms    float64 `json:"p50_ms"`
+	P90Ms    float64 `json:"p90_ms"`
+}
+
+// Summary returns the stats for each source that has requests.
+func (f *FirstBytes) Summary() map[string]FirstByteStats {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]FirstByteStats, len(f.samples))
+	for source, xs := range f.samples {
+		us := make([]int64, len(xs))
+		for i, d := range xs {
+			us[i] = d.Microseconds()
+		}
+		out[source] = FirstByteStats{
+			Requests: len(xs),
+			P50Ms:    math.Round(float64(pct(us, 50))/100) / 10,
+			P90Ms:    math.Round(float64(pct(us, 90))/100) / 10,
+		}
+	}
+	return out
+}

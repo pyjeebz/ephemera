@@ -37,8 +37,9 @@ func runStats(args []string) error {
 		return err
 	}
 	var pb struct {
-		Summary playback.Summary
-		Views   []playback.View
+		Summary   playback.Summary
+		Views     []playback.View
+		FirstByte map[string]playback.FirstByteStats `json:"first_byte"`
 	}
 	if err := json.Unmarshal(raw, &pb); err != nil {
 		return err
@@ -55,13 +56,24 @@ func runStats(args []string) error {
 			counters[k] = f
 		}
 	}
-	printStats(os.Stdout, pb.Summary, pb.Views, counters)
+	printStats(os.Stdout, pb.Summary, pb.Views, pb.FirstByte, counters)
 	return nil
 }
 
-func printStats(w io.Writer, s playback.Summary, views []playback.View, counters map[string]float64) {
+func printStats(w io.Writer, s playback.Summary, views []playback.View, firstByte map[string]playback.FirstByteStats, counters map[string]float64) {
 	fmt.Fprintf(w, "uploads: %.0f finished, %s on the relay's disk, %.0f turned away for lack of room\n",
 		counters["uploads_completed"], sizeMB(int64(counters["upload_bytes_held"])), counters["uploads_refused"])
+	// every file request, any client: browsers, curl, DuckDB, agents
+	var fb []string
+	for _, src := range []string{"relay", "sender"} {
+		if st, ok := firstByte[src]; ok {
+			from := map[string]string{"relay": "from the relay's copy", "sender": "live from the sender"}[src]
+			fb = append(fb, fmt.Sprintf("%s %s median, %s p90 (%d requests)", from, msf(st.P50Ms), msf(st.P90Ms), st.Requests))
+		}
+	}
+	if len(fb) > 0 {
+		fmt.Fprintf(w, "first byte, any client: %s\n", strings.Join(fb, "; "))
+	}
 	if s.Views == 0 {
 		fmt.Fprintln(w, "playbacks: none reported yet (receiver pages report when they're closed or hidden)")
 		return
@@ -117,6 +129,14 @@ func ms(v int64) string {
 		return fmt.Sprintf("%dms", v)
 	}
 	return fmt.Sprintf("%.1fs", float64(v)/1000)
+}
+
+// msf renders fractional milliseconds for people.
+func msf(v float64) string {
+	if v < 10 {
+		return fmt.Sprintf("%.1fms", v)
+	}
+	return ms(int64(v))
 }
 
 // mbps renders bits per second as megabits, "-" for unknown.

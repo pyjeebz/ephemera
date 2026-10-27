@@ -88,3 +88,21 @@ func TestFromRelayShare(t *testing.T) {
 		t.Fatalf("stats = %d bps, %d%% from relay; want 75%% and a live rate", bps, rel)
 	}
 }
+
+// TestFirstByteBySource: each file request is timed under where its
+// first byte came from.
+func TestFirstByteBySource(t *testing.T) {
+	body := patterned(64 << 10)
+	_, reg, st := uploadServer(t, body, 32<<10, &memHandle{data: body})
+	fb := playback.NewFirstBytes(100)
+	ts := httptest.NewServer(New(ServerConfig{Registry: reg, Uploads: st, FirstBytes: fb}))
+	defer ts.Close()
+
+	get(t, ts.URL+"/up/file", "bytes=0-99")        // stored
+	get(t, ts.URL+"/up/file", "bytes=0-")          // stored head, then live
+	get(t, ts.URL+"/up/file", "bytes=40000-40099") // live
+	got := fb.Summary()
+	if got["relay"].Requests != 2 || got["sender"].Requests != 1 || len(got) != 2 {
+		t.Fatalf("first bytes = %+v, want 2 from the relay and 1 from the sender", got)
+	}
+}

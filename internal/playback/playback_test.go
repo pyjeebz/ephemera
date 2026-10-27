@@ -94,3 +94,19 @@ func TestSenders(t *testing.T) {
 		t.Fatal("dropped link still has stats")
 	}
 }
+
+func TestFirstBytes(t *testing.T) {
+	f := NewFirstBytes(4)
+	for _, ms := range []int{100, 1, 2, 3, 4} { // the 100 falls out of the window
+		f.Add("relay", time.Duration(ms)*time.Millisecond)
+	}
+	f.Add("sender", 250*time.Millisecond+400*time.Microsecond)
+	got := f.Summary()
+	want := map[string]FirstByteStats{
+		"relay":  {Requests: 4, P50Ms: 2, P90Ms: 4},
+		"sender": {Requests: 1, P50Ms: 250.4, P90Ms: 250.4},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("summary = %+v, want %+v", got, want)
+	}
+}

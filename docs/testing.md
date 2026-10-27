@@ -122,6 +122,7 @@ Every receiver page reports how its playback went when it's closed or hidden: ho
 
 ```text
 uploads: 1 finished, 907 MB on the relay's disk, 0 turned away for lack of room
+first byte, any client: from the relay's copy 1.5ms median, 4.0ms p90 (40 requests); live from the sender 180ms median, 1.2s p90 (12 requests)
 playbacks: 3 (live 2, available 1)
 first frame: 420ms median, 1.5s p90
 play to playing: 30ms median
@@ -129,6 +130,8 @@ stalls: 66% of playbacks never stalled; 2.5% of watch time spent stalled
 seeks: 300ms median wait
 speed: files play at 4.0 Mbps median, senders deliver live at 12.0 Mbps median; sender slower than the file in 33% of playbacks
 ```
+
+The "first byte" line covers every file request from any client (browsers, `curl`, DuckDB, agents), timed on the relay from the request arriving to its first byte, split by whether the bytes came from the relay's own copy or live from the sender.
 
 "Sender slower than the file" is the one to watch: those links stutter while they stream live, until the upload catches up. `-json` prints the raw numbers. Reports keep no IP addresses and live in memory only (the latest 1000).
 
