@@ -209,6 +209,7 @@ Turn off GoDaddy **Forwarding** if it's on. `fly certs show ephemera.run --app e
 - **Add a sender.** `./bin/relay token -file tokens.txt alice`, then set `EPHEMERA_TOKENS` again as above, without `--stage`. That restarts the machine.
 - **Update the relay.** `fly deploy --ha=false`.
 - **Moderate.** `ephemera reports -relay https://ephemera.run` and `ephemera kill -suspend ...` work as on your own server, with `EPHEMERA_ADMIN_TOKEN` set.
+- **Does it feel instant?** `ephemera stats -relay https://ephemera.run` sums up what receiver pages reported: first frame, stalls, seek waits, sender speed against file bitrate. Each report is also a `playback ...` line in `fly logs`.
 - **Logs.** `fly logs --app ephemera-relay`.
 
 A deploy or secrets change restarts the machine and drops live shares for a few seconds, as a restart does on your own server. Senders redial on their own, and uploaded files come back with the relay, but the replay cache and away prefixes start empty.

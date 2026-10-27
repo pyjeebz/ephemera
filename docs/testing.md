@@ -98,13 +98,33 @@ On the receiving device:
 4. Run `ephemera resume` with the same `-relay`. The upload continues where it stopped, not from the start.
 5. When the sender prints `uploaded: the relay has the whole file`, it exits. The page should read "ready to watch, even with the sender offline", and the whole video should play and seek.
 
-## 7. Network notes
+## 7. Read the numbers
+
+Every receiver page reports how its playback went when it's closed or hidden: how long the first frame took, stalls, seek waits. The relay adds the file's bitrate, how fast the sender delivered live reads, and how much it served from its own copy. Each report is one line in the relay's log, and an admin can see the summary:
+
+```bash
+./bin/ephemera stats -relay http://127.0.0.1:7100 -token "$EPHEMERA_ADMIN_TOKEN"
+```
+
+```text
+uploads: 1 finished, 907 MB on the relay's disk, 0 turned away for lack of room
+playbacks: 3 (live 2, available 1)
+first frame: 420ms median, 1.5s p90
+play to playing: 30ms median
+stalls: 66% of playbacks never stalled; 2.5% of watch time spent stalled
+seeks: 300ms median wait
+speed: files play at 4.0 Mbps median, senders deliver live at 12.0 Mbps median; sender slower than the file in 33% of playbacks
+```
+
+"Sender slower than the file" is the one to watch: those links stutter while they stream live, until the upload catches up. `-json` prints the raw numbers. Reports keep no IP addresses and live in memory only (the latest 1000).
+
+## 8. Network notes
 
 - Both devices should be on the same Wi-Fi unless the relay is on a public server.
 - Allow TCP port `7100` through the local firewall.
 - For remote testing, run the relay on a public server or use a tunnel such as Tailscale, Cloudflare Tunnel, or ngrok.
 
-## 8. TLS
+## 9. TLS
 
 A sender only uses plaintext (`ws://`, `http://`, `tcp://`) to a relay on its own machine. Anywhere else it needs `wss://`, because the sender token and owner key would otherwise cross the network in the clear. `-insecure` overrides this on purpose. A bare host such as `-relay relay.example.com` means `wss://relay.example.com/daemon`.
 
@@ -130,7 +150,7 @@ An IPv6 client is limited by its /64, not its full address: an ISP hands each su
 
 For a self-signed or private-CA certificate, a Linux sender can trust it with `SSL_CERT_FILE=/path/to/ca.pem`.
 
-## 9. Moderation
+## 10. Moderation
 
 Start the relay with an admin token and a data dir, so link reports and account suspensions survive restarts:
 
