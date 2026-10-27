@@ -74,17 +74,24 @@
 
 		switch (st.state) {
 		case "live":
+		case "available": {
+			// live: streams from the sender (and maybe uploading);
+			// available: the whole file is on the relay
+			const where = st.state === "available"
+				? "ready to watch, even with the sender offline"
+				: "streams live from the sender's device" +
+					(st.upload && st.size ? ` · ${Math.floor(100 * (st.uploaded || 0) / st.size)}% uploaded` : "");
 			if (st.expires) {
 				const tick = () => {
 					const left = st.expires - Date.now()/1000;
 					if (left <= 0) { pollNow(); return; }
 					const h = Math.floor(left/3600), m = Math.floor(left%3600/60), s = Math.floor(left%60);
-					stateEl.textContent = `streams live from the sender's device · link expires in ${h}h ${m}m ${s}s`;
+					stateEl.textContent = `${where} · link expires in ${h}h ${m}m ${s}s`;
 				};
 				tick();
 				countdownTimer = setInterval(tick, 1000);
 			} else {
-				stateEl.textContent = "streams live from the sender's device";
+				stateEl.textContent = where;
 			}
 			if (!hero && STREAMABLE.includes(st.mime)) {
 				hero = "video";
@@ -98,6 +105,7 @@
 				renderDownload(st);
 			}
 			break;
+		}
 		case "offline":
 			hero = "";
 			heroEl.replaceChildren();
@@ -184,7 +192,7 @@
 			lastState = st.state;
 			render(st);
 			reportEl.hidden = false;
-			if (wasOffline && st.state === "live") pollFast = false; // back: normal cadence
+			if (wasOffline && st.state !== "offline") pollFast = false; // back: normal cadence
 			return st.state !== "expired" && st.state !== "gone";
 		} catch {
 			return true; // network blip: keep polling
