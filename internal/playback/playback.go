@@ -17,8 +17,9 @@ import (
 // Report is what a receiver page sends about one playback.
 type Report struct {
 	View       string  `json:"view"`         // random per page view
-	State      string  `json:"state"`        // link state when play was pressed
-	TTFFMs     int64   `json:"ttff_ms"`      // play pressed to first frame
+	State      string  `json:"state"`        // link state when the video loaded
+	TTFFMs     int64   `json:"ttff_ms"`      // video loading to its first frame ready
+	StartMs    int64   `json:"start_ms"`     // play pressed to playing; 0 if never played
 	Stalls     int64   `json:"stalls"`       // waits for data mid-play, not after seeks
 	StallMs    int64   `json:"stall_ms"`     // time spent in those waits
 	Seeks      int64   `json:"seeks"`        // seeks after playback started
@@ -38,7 +39,7 @@ func (r Report) Valid() bool {
 		return false
 	}
 	return r.View != "" && len(r.View) <= 64 &&
-		r.TTFFMs > 0 && inMs(r.TTFFMs) && inMs(r.StallMs) && inMs(r.SeekWaitMs) &&
+		r.TTFFMs > 0 && inMs(r.TTFFMs) && inMs(r.StartMs) && inMs(r.StallMs) && inMs(r.SeekWaitMs) &&
 		r.Stalls >= 0 && r.Stalls <= 100000 && r.Seeks >= 0 && r.Seeks <= 100000 &&
 		r.WatchedS >= 0 && r.WatchedS <= day && r.DurationS >= 0 && r.DurationS <= 10*day
 }
@@ -112,6 +113,9 @@ type Summary struct {
 	TTFFMsP50 int64 `json:"ttff_ms_p50"`
 	TTFFMsP90 int64 `json:"ttff_ms_p90"`
 
+	// StartMsP50: play pressed to playing, among views that played.
+	StartMsP50 int64 `json:"start_ms_p50"`
+
 	// StallFreePct: views that never waited for data mid-play.
 	// RebufferPct: time spent stalled, over time spent watching.
 	StallFreePct int     `json:"stall_free_pct"`
@@ -136,12 +140,15 @@ func (l *Log) Summary() Summary {
 	if len(views) == 0 {
 		return s
 	}
-	var ttff, seekWait, bitrate, sender []int64
+	var ttff, start, seekWait, bitrate, sender []int64
 	var stallFree, slow, both int
 	var stalledMs, watchedMs float64
 	for _, v := range views {
 		s.ByState[v.State]++
 		ttff = append(ttff, v.TTFFMs)
+		if v.StartMs > 0 {
+			start = append(start, v.StartMs)
+		}
 		if v.Stalls == 0 {
 			stallFree++
 		}
@@ -164,6 +171,7 @@ func (l *Log) Summary() Summary {
 		}
 	}
 	s.TTFFMsP50, s.TTFFMsP90 = pct(ttff, 50), pct(ttff, 90)
+	s.StartMsP50 = pct(start, 50)
 	s.StallFreePct = stallFree * 100 / len(views)
 	if watchedMs+stalledMs > 0 {
 		s.RebufferPct = math.Round(stalledMs/(watchedMs+stalledMs)*1000) / 10

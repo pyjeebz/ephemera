@@ -97,6 +97,7 @@
 				hero = "video";
 				const v = document.createElement("video");
 				v.controls = true;
+				watch(v);
 				v.src = `/${id}/file`;
 				v.onerror = () => { hero = "download"; render(st); };
 				heroEl.replaceChildren(v);
@@ -159,6 +160,7 @@
 		if (STREAMABLE.includes(st.mime)) {
 			const v = document.createElement("video");
 			v.controls = true;
+			watch(v);
 			v.src = `/${id}/file`;
 			heroEl.replaceChildren(v);
 			return;
@@ -181,6 +183,70 @@
 	}
 
 	let pollFast = false;
+
+	// Playback report: how watching went on this page, sent to the
+	// relay when the page is hidden or closed. Numbers only: how long
+	// the first frame took, how soon playing started after pressing
+	// play, how often and how long playback waited for data, how long
+	// seeks took. The relay adds what it measured of the sender; it
+	// never sees who you are.
+	const pb = {
+		view: (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replace(/-/g, "").slice(0, 32),
+		state: "", ttff_ms: 0, start_ms: 0, stalls: 0, stall_ms: 0, seeks: 0, seek_wait_ms: 0, watched_s: 0, duration_s: 0,
+	};
+	let pbVideo = null, loadAt = 0, playAt = 0, waitAt = 0, seekAt = 0, pbSent = "";
+	const now = () => performance.now();
+	function endWait() {
+		if (waitAt) { pb.stall_ms += Math.round(now() - waitAt); waitAt = 0; }
+	}
+	// watch is called before the video's src is set, so loadAt is
+	// when it started loading
+	function watch(v) {
+		pbVideo = v;
+		if (!loadAt) { loadAt = now(); pb.state = lastState; }
+		v.addEventListener("loadeddata", () => {
+			if (!pb.ttff_ms) pb.ttff_ms = Math.max(1, Math.round(now() - loadAt));
+		});
+		v.addEventListener("play", () => {
+			if (!playAt) playAt = now();
+		});
+		v.addEventListener("playing", () => {
+			if (playAt && !pb.start_ms) pb.start_ms = Math.max(1, Math.round(now() - playAt));
+			endWait();
+		});
+		v.addEventListener("waiting", () => {
+			// a wait for data mid-play; waits right after a seek are
+			// counted as seek time instead
+			if (pb.start_ms && !v.seeking && !waitAt) { pb.stalls++; waitAt = now(); }
+		});
+		v.addEventListener("pause", endWait);
+		v.addEventListener("seeking", () => {
+			endWait();
+			if (pb.start_ms) { pb.seeks++; seekAt = now(); }
+		});
+		v.addEventListener("seeked", () => {
+			if (seekAt) { pb.seek_wait_ms += Math.round(now() - seekAt); seekAt = 0; }
+		});
+	}
+	function sendPlayback() {
+		if (!pb.ttff_ms || !pbVideo) return; // never got to a first frame
+		endWait();
+		let watched = 0;
+		for (let i = 0; i < pbVideo.played.length; i++) watched += pbVideo.played.end(i) - pbVideo.played.start(i);
+		pb.watched_s = Math.round(watched * 10) / 10;
+		pb.duration_s = isFinite(pbVideo.duration) ? Math.round(pbVideo.duration * 10) / 10 : 0;
+		const json = JSON.stringify(pb);
+		if (json === pbSent) return; // hidden and closed: one report
+		pbSent = json;
+		const body = new Blob([json], {type: "application/json"});
+		if (!navigator.sendBeacon || !navigator.sendBeacon(`/${id}/playback`, body)) {
+			fetch(`/${id}/playback`, {method: "POST", body, keepalive: true}).catch(() => {});
+		}
+	}
+	addEventListener("pagehide", sendPlayback);
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "hidden") sendPlayback();
+	});
 
 	async function poll() {
 		try {

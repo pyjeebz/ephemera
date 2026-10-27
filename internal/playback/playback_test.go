@@ -58,13 +58,14 @@ func TestSummary(t *testing.T) {
 			v.SenderBps = 2e6             // slower than the file plays
 		case 1:
 			v.Seeks, v.SeekWaitMs = 2, 1000
+			v.StartMs = 40
 			v.SenderBps = 8e6
 		}
 		l.Add(v)
 	}
 	s := l.Summary()
 	want := Summary{
-		Views: 5, TTFFMsP50: 300, TTFFMsP90: 1000,
+		Views: 5, TTFFMsP50: 300, TTFFMsP90: 1000, StartMsP50: 40,
 		StallFreePct: 80, RebufferPct: 1.0, // 3s of 303s
 		SeekWaitMsP50: 500,
 		BitrateBpsP50: 4e6, SenderBpsP50: 2e6,
