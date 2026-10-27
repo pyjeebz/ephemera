@@ -26,6 +26,7 @@ import (
 	"ephemera.run/ephemera/internal/ratelimit"
 	"ephemera.run/ephemera/internal/relay"
 	"ephemera.run/ephemera/internal/share"
+	"ephemera.run/ephemera/internal/upload"
 	"ephemera.run/ephemera/internal/wsconn"
 )
 
@@ -36,13 +37,14 @@ type serveFlags struct {
 	adminToken string
 	cacheMB    int64
 	awayMB     int64
+	uploadGB   int64 // background upload disk budget
 	maxTTL     int64 // seconds
 	maxSizeMB  int64
 	tokens     string // sender tokens file
 	open       bool   // no sender auth at all
 	tlsCert    string // PEM certificate chain; with tlsKey, serve HTTPS
 	tlsKey     string
-	dataDir    string // operator state: reports, suspensions
+	dataDir    string // operator state: reports, suspensions, uploads
 	publicURL  string // base of the links receivers open
 	proxies    string // trusted reverse proxies, comma-separated
 	ipHeader   string // header the proxy puts the client address in
@@ -59,6 +61,7 @@ func runServe(args []string) error {
 	fs.StringVar(&f.adminToken, "admin-token", os.Getenv("EPHEMERA_ADMIN_TOKEN"), "admin API token (or EPHEMERA_ADMIN_TOKEN); empty disables admin routes")
 	fs.Int64Var(&f.cacheMB, "cache-mb", 256, "layer-B volatile cache budget in MiB (0 disables replay)")
 	fs.Int64Var(&f.awayMB, "away-mb", 512, "layer-C away-prefix budget in MiB (0 disables away mode)")
+	fs.Int64Var(&f.uploadGB, "upload-gb", 0, "disk budget in GiB for background uploads, kept in -data-dir until each link expires (0 disables them)")
 	fs.Int64Var(&f.maxTTL, "max-ttl", hub.DefaultMaxTTLSec, "longest link lifetime a sender may ask for, in seconds")
 	fs.Int64Var(&f.maxSizeMB, "max-size-mb", hub.DefaultMaxSize>>20, "largest file a sender may share, in MiB")
 	fs.StringVar(&f.tokens, "tokens", "", "sender tokens file (see `relay token`); senders without a listed token are refused")
@@ -68,7 +71,7 @@ func runServe(args []string) error {
 	fs.StringVar(&f.publicURL, "public-url", "", "base URL receivers open links under, e.g. https://ephemera.run (default: the address the sender dialed)")
 	fs.StringVar(&f.proxies, "trusted-proxies", "", "comma-separated IPs or CIDRs of reverse proxies in front of the relay; their X-Forwarded-For gives the client IP for rate limits")
 	fs.StringVar(&f.ipHeader, "client-ip-header", "", "header the proxy in front sets to the client IP, e.g. Fly-Client-IP; read only from -trusted-proxies if set, else from every request")
-	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports and account suspensions here across restarts (never file bytes)")
+	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports, account suspensions and (with -upload-gb) uploaded files here across restarts")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -93,6 +96,10 @@ func runServe(args []string) error {
 	if f.maxSizeMB<<20 > hub.DefaultMaxSize {
 		// the daemon and the read path both stop at 5GB today
 		return fmt.Errorf("-max-size-mb %d is over the %d MiB shares support", f.maxSizeMB, hub.DefaultMaxSize>>20)
+	}
+
+	if f.uploadGB > 0 && f.dataDir == "" {
+		return errors.New("-upload-gb needs -data-dir: uploaded files are kept on disk there")
 	}
 
 	reports, suspensions, err := moderationState(f.dataDir)
@@ -127,6 +134,18 @@ func runServe(args []string) error {
 		reg.OnExpire(awaypkg.DropShare)
 		bridge.Away = awaypkg
 	}
+	var uploads *upload.Store
+	if f.uploadGB > 0 {
+		uploads, err = upload.Open(filepath.Join(f.dataDir, "uploads"), f.uploadGB<<30)
+		if err != nil {
+			return fmt.Errorf("uploads: %w", err)
+		}
+		reg.OnExpire(uploads.Drop)
+		bridge.Uploads = uploads
+		if n := relay.RestoreUploads(reg, uploads); n > 0 {
+			fmt.Fprintf(os.Stderr, "serving %d uploaded links kept from before the restart\n", n)
+		}
+	}
 	surface := relay.New(relay.ServerConfig{
 		Registry:       reg,
 		Limiter:        ratelimit.New(20, 40), // 20 r/s sustained, burst 40 per IP
@@ -135,6 +154,7 @@ func runServe(args []string) error {
 		AdminToken:     f.adminToken,
 		Cache:          cachepkg,
 		Away:           awaypkg,
+		Uploads:        uploads,
 
 		Reports:       reports,
 		ReportLimiter: ratelimit.New(1.0/60, 5), // 5 reports, then 1 a minute, per IP

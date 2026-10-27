@@ -21,6 +21,7 @@ type stateFile struct {
 	MIME       string `json:"mime"`
 	Cache      bool   `json:"cache,omitempty"`
 	AwayPrefix int64  `json:"away_prefix,omitempty"` // layer C bytes
+	Upload     bool   `json:"upload,omitempty"`      // background upload
 	TTLSec     int64  `json:"ttl_sec"`               // original, for reference
 	ExpiresAt  int64  `json:"expires_at"`            // unix seconds
 }
@@ -51,6 +52,7 @@ func (s *StateDir) Save(sh Share, ttlSec int64) error {
 		MIME:       sh.MIME,
 		Cache:      sh.Cache,
 		AwayPrefix: sh.AwayPrefixBytes,
+		Upload:     sh.Upload,
 		TTLSec:     ttlSec,
 		ExpiresAt:  time.Now().Add(time.Duration(ttlSec) * time.Second).Unix(),
 	}
@@ -117,6 +119,7 @@ func (s *StateDir) Active() ([]Share, []int64, error) {
 		sh.MIME = st.MIME
 		sh.Cache = st.Cache
 		sh.AwayPrefixBytes = st.AwayPrefix
+		sh.Upload = st.Upload
 		shares = append(shares, sh)
 		ttls = append(ttls, remain)
 	}

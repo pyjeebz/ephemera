@@ -58,6 +58,10 @@ type Share struct {
 	// many prefix bytes to the relay post-announce; the relay
 	// serves them while the sender is offline. 0 = off.
 	AwayPrefixBytes int64
+
+	// Upload: send the whole file to the relay in the background.
+	// Once it's all there the link no longer needs this machine.
+	Upload bool
 }
 
 // ValidateShare checks path against the abuse floor and returns the

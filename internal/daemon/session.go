@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ephemera.run/ephemera/internal/protocol"
@@ -32,15 +33,32 @@ type Session struct {
 	// share is announced and receivers can open it.
 	OnLink func(link string)
 
+	// OnUpload, if set, follows a background upload: once when the
+	// relay welcomes the share, then on every ack.
+	OnUpload func(UploadProgress)
+
 	conn   net.Conn
 	writer io.Writer // frame encoder target; conn for TCP, test pipes otherwise
 	reader *bufio.Reader
 	file   *os.File
 
 	// writeMu serializes frame writes: receiver replies and the
-	// away trickle share the socket, and a TAway header must stay
+	// uploader share the socket, and a TAway header must stay
 	// adjacent to its TData bytes.
 	writeMu sync.Mutex
+
+	// lastRead is when a receiver read last came in (unix nanos):
+	// the uploader keeps out of the way while people are watching.
+	lastRead atomic.Int64
+}
+
+// UploadProgress is where a background upload stands.
+type UploadProgress struct {
+	Have, Size int64 // bytes on the relay, of the whole file
+
+	// Refused: the relay isn't keeping this upload (it has no upload
+	// storage or no room), so the link streams live only.
+	Refused bool
 }
 
 // NewSession opens the relay connection and wraps it for framing.
@@ -102,6 +120,7 @@ func (s *Session) Announce() error {
 		TTLSec:          s.TTLSec,
 		Cache:           s.Share.Cache,
 		AwayPrefixBytes: s.Share.AwayPrefixBytes,
+		Upload:          s.Share.Upload,
 	})
 }
 
@@ -110,6 +129,7 @@ func (s *Session) Announce() error {
 // current file size so a file that shrank on disk cannot leak
 // out-of-bounds reads the relay may still believe valid.
 func (s *Session) serveRead(rd protocol.Read) error {
+	s.lastRead.Store(time.Now().UnixNano())
 	st, err := s.file.Stat()
 	if err != nil {
 		return protocol.EncodeJSON(s.writer, protocol.TErr, protocol.Err{ShareID: rd.ShareID, Code: "io", Message: "stat failed"})
@@ -141,6 +161,10 @@ func (s *Session) serveRead(rd protocol.Read) error {
 // connection: the run loop treats it as a reconnect trigger.
 var ErrSessionClosed = errors.New("daemon: session closed by relay")
 
+// ErrUploaded is returned by Serve once the relay holds the whole
+// file: the link no longer needs this machine, so the share is done.
+var ErrUploaded = errors.New("daemon: the whole file is on the relay")
+
 // RefusedError is the relay turning the share down: over its limits,
 // a killed link, or an owner key it does not accept. Redialing cannot
 // fix it, so Run stops and returns it.
@@ -152,25 +176,24 @@ type RefusedError struct {
 func (e *RefusedError) Error() string { return "relay refused the share: " + e.Message }
 
 // Serve reads frames until the connection drops, an IO error occurs,
-// or stop fires. TReads get synchronous replies; TAcks steer the
-// away trickle; the away upload runs in the background at a pace
-// that never competes with receiver reads.
+// stop fires, or a background upload finishes. TReads get synchronous
+// replies; the welcome starts the uploader, and TAcks steer it; it
+// runs in the background and gives way to receiver reads.
 func (s *Session) Serve(stop <-chan struct{}) error {
 	type readMsg struct {
 		rd      protocol.Read
-		ack     int64 // >0: ack for away bytes (rd zero)
 		ok      bool
 		refused *RefusedError // the relay sent TErr: stop for good
 	}
 	msgs := make(chan readMsg, 8)
 	defer close(msgs)
 
-	// away trickle state: acks move the frontier; pace is fixed and
-	// modest. Reads preempt the trickle.
-	awayCh := make(chan int64, 1) // latest ack value
-	if s.Share.AwayPrefixBytes > 0 {
-		go s.trickleAway(stop, awayCh)
-	}
+	// quit ends the uploader with this session; uploaded fires when
+	// the relay acks the last byte of a background upload
+	quit := make(chan struct{})
+	defer close(quit)
+	uploaded := make(chan struct{})
+	acks := make(chan int64, 1) // latest ack value
 
 	// decoder goroutine: turns frames into parsed reads / acks
 	go func() {
@@ -199,20 +222,24 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 				return
 			case protocol.TWelcome:
 				var w protocol.Welcome
-				if json.Unmarshal(fr.JSON, &w) == nil && w.ShareID == s.Share.ID && w.Link != "" && s.OnLink != nil {
+				if json.Unmarshal(fr.JSON, &w) != nil || w.ShareID != s.Share.ID {
+					continue
+				}
+				if w.Link != "" && s.OnLink != nil {
 					s.OnLink(w.Link)
 				}
+				s.startUpload(w, acks, quit, uploaded)
 			case protocol.TAck:
 				var a protocol.Ack
 				if json.Unmarshal(fr.JSON, &a) == nil && a.ShareID == s.Share.ID {
 					select {
-					case awayCh <- a.Have:
-					default: // keep the latest
+					case acks <- a.Have:
+					default: // keep the latest: acks are cumulative
 						select {
-						case <-awayCh:
+						case <-acks:
 						default:
 						}
-						awayCh <- a.Have
+						acks <- a.Have
 					}
 				}
 			}
@@ -223,6 +250,8 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 		select {
 		case <-stop:
 			return ErrSessionClosed
+		case <-uploaded:
+			return ErrUploaded
 		case m := <-msgs:
 			if m.refused != nil {
 				return m.refused
@@ -240,63 +269,103 @@ func (s *Session) Serve(stop <-chan struct{}) error {
 	}
 }
 
-// awayBurst is the prefix trickle's step: bytes per burst, each
-// waiting for its ack. Small enough that reads always win; big enough
-// to finish a 100MB prefix in a few minutes of idleness.
-const awayBurst = int64(64 << 10) // 64 KiB per burst
-
-// trickleAway uploads the away prefix in bursts. Each burst is two
-// adjacent frames under one write lock: TAway (JSON header: offset)
-// then TData (the bytes). Each burst waits for its TAck before the
-// next; no ack in time: the relay is gone or refusing — stop quietly.
-func (s *Session) trickleAway(stop <-chan struct{}, acks chan int64) {
-	prefix := min(s.Share.AwayPrefixBytes, s.fileSize())
-	if prefix <= 0 {
-		return
+// startUpload starts the uploader the welcome calls for: the whole
+// file if the relay took the background upload, else the away prefix
+// if one was asked for. It resumes from the bytes the relay holds.
+func (s *Session) startUpload(w protocol.Welcome, acks <-chan int64, quit <-chan struct{}, uploaded chan<- struct{}) {
+	size := s.fileSize()
+	switch {
+	case s.Share.Upload && w.Upload:
+		s.progress(UploadProgress{Have: w.Have, Size: size})
+		go func() {
+			report := func(have int64) { s.progress(UploadProgress{Have: have, Size: size}) }
+			if s.upload(quit, acks, w.Have, size, report) {
+				close(uploaded)
+			}
+		}()
+	case s.Share.Upload:
+		s.progress(UploadProgress{Refused: true})
+		fallthrough
+	case s.Share.AwayPrefixBytes > 0:
+		if prefix := min(s.Share.AwayPrefixBytes, size); prefix > 0 {
+			go s.upload(quit, acks, w.Have, prefix, nil)
+		}
 	}
+}
 
-	have := int64(0)
-	// drain any pre-announce ack the relay sent on accept (redial)
-	select {
-	case have = <-acks:
-	default:
+func (s *Session) progress(p UploadProgress) {
+	if s.OnUpload != nil {
+		s.OnUpload(p)
 	}
+}
 
-	for have < prefix {
+// Uploader pacing. Bytes go out in bursts of uploadChunk with up to a
+// window of them unacked, so a long round trip doesn't throttle the
+// upload. While receivers are reading, the window drops to a single
+// burst: their replies queue behind whatever upload bytes are already
+// in flight, and live playback matters more than upload speed.
+const (
+	uploadChunk      = int64(256 << 10)
+	uploadWindow     = 16 * uploadChunk // 4 MiB in flight, nobody watching
+	uploadWindowBusy = uploadChunk      // receivers reading
+	readingFor       = 2 * time.Second  // "reading" = a read this recently
+	uploadAckTimeout = 30 * time.Second // no ack this long: relay gone
+)
+
+// upload sends the file's bytes [from, target) to the relay as
+// adjacent TAway+TData bursts and reports true once the relay has
+// acked target. It stops early when the relay stops taking bytes (an
+// ack that doesn't move forward), no ack arrives in time, or quit
+// fires; a redial resumes from the relay's welcome. report, if set,
+// gets every new ack.
+func (s *Session) upload(quit <-chan struct{}, acks <-chan int64, from, target int64, report func(have int64)) bool {
+	sent, acked := from, from
+	buf := make([]byte, uploadChunk)
+	for acked < target {
+		window := uploadWindow
+		if time.Since(time.Unix(0, s.lastRead.Load())) < readingFor {
+			window = uploadWindowBusy
+		}
+		if sent < target && sent-acked < window {
+			n := min(uploadChunk, target-sent)
+			if _, err := s.file.ReadAt(buf[:n], sent); err != nil {
+				return false
+			}
+			// header + data adjacent: the hub pairs them by order
+			s.writeMu.Lock()
+			err := protocol.EncodeJSON(s.writer, protocol.TAway, protocol.Away{ShareID: s.Share.ID, Offset: sent})
+			if err == nil {
+				err = protocol.EncodeData(s.writer, buf[:n])
+			}
+			s.writeMu.Unlock()
+			if err != nil {
+				return false
+			}
+			sent += n
+			select {
+			case <-quit:
+				return false
+			default:
+			}
+			continue
+		}
+
 		select {
-		case <-stop:
-			return
-		case have = <-acks:
-			// frontier moved (ack for our own or earlier uploads)
-		default:
-		}
-
-		n := min(awayBurst, prefix-have)
-		buf := make([]byte, n)
-		if _, err := s.file.ReadAt(buf, have); err != nil {
-			return
-		}
-
-		// header + data adjacent: the hub pairs them by order
-		s.writeMu.Lock()
-		err := protocol.EncodeJSON(s.writer, protocol.TAway, protocol.Away{ShareID: s.Share.ID, Offset: have})
-		if err == nil {
-			err = protocol.EncodeData(s.writer, buf)
-		}
-		s.writeMu.Unlock()
-		if err != nil {
-			return
-		}
-
-		// wait for this burst's ack before continuing
-		select {
-		case have = <-acks:
-		case <-stop:
-			return
-		case <-time.After(10 * time.Second):
-			return // no ack: relay full or gone
+		case <-quit:
+			return false
+		case have := <-acks:
+			if have <= acked {
+				return false // the relay stopped taking bytes
+			}
+			acked, sent = have, max(sent, have)
+			if report != nil {
+				report(acked)
+			}
+		case <-time.After(uploadAckTimeout):
+			return false
 		}
 	}
+	return true
 }
 
 // fileSize returns the current size of the open file.
