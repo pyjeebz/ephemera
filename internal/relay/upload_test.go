@@ -172,3 +172,22 @@ func TestRestoreUploadsAfterRestart(t *testing.T) {
 		t.Fatalf("after restart: %d, %d bytes", code, len(data))
 	}
 }
+
+// TestHeadAsksNothing: HEAD gets the size and headers without the
+// relay reading the file, from its disk or from the sender.
+func TestHeadAsksNothing(t *testing.T) {
+	body := patterned(64 << 10)
+	h := &countingHandle{memHandle: memHandle{data: body}}
+	ts, _, _ := uploadServer(t, body, 0, h)
+	resp, err := http.Head(ts.URL + "/up/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.ContentLength != int64(len(body)) || resp.Header.Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("HEAD = %d, length %d, ranges %q", resp.StatusCode, resp.ContentLength, resp.Header.Get("Accept-Ranges"))
+	}
+	if n := h.reads.Load(); n != 0 {
+		t.Fatalf("HEAD made the sender answer %d reads", n)
+	}
+}

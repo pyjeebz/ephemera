@@ -661,13 +661,17 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 
 	// uploaded bytes: off the relay's disk, sender online or not
 	if stored := s.uploaded(info); start+length <= stored {
-		s.writeHeaders(w, info, start, length, ranged)
+		if !s.writeHeaders(w, r, info, start, length, ranged) {
+			return
+		}
 		s.uploadBody(s.timed(w, arrived, "relay"), id, start, length)
 		return
 	}
 
 	if st.handle != nil {
-		s.writeHeaders(w, info, start, length, ranged)
+		if !s.writeHeaders(w, r, info, start, length, ranged) {
+			return
+		}
 		// the stored head off disk, then the rest live
 		head := s.uploaded(info) - start
 		if head <= 0 {
@@ -686,7 +690,9 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 
 	// layer B first: exact cached ranges replay from RAM
 	if s.cfg.Cache != nil && info.Cacheable && s.cacheCoverage(id, start, length) == 1 {
-		s.writeHeaders(w, info, start, length, ranged)
+		if !s.writeHeaders(w, r, info, start, length, ranged) {
+			return
+		}
 		s.replayBody(s.timed(w, arrived, "relay"), id, start, length)
 		return
 	}
@@ -694,7 +700,9 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	// a partial upload or layer C's away prefix covers the head of
 	// the file; serve the covered part of the request
 	if covered := min(length, max(0, s.uploaded(info)-start)); covered > 0 {
-		s.writeHeaders(w, info, start, covered, true)
+		if !s.writeHeaders(w, r, info, start, covered, true) {
+			return
+		}
 		s.uploadBody(s.timed(w, arrived, "relay"), id, start, covered)
 		if covered < length {
 			metrics.AwayOutlasts.Add(1) // asked past what's stored
@@ -703,7 +711,9 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.cfg.Away != nil && info.AwayPrefix > 0 {
 		if covered := min(length, max(0, s.cfg.Away.Have(id)-start)); covered > 0 {
-			s.writeHeaders(w, info, start, covered, ranged || covered < length)
+			if !s.writeHeaders(w, r, info, start, covered, ranged || covered < length) {
+				return
+			}
 			s.awayBody(s.timed(w, arrived, "relay"), id, start, covered)
 			if covered < length {
 				// the receiver asked past the prefix end:
@@ -745,8 +755,11 @@ func (f *firstByteWriter) Write(p []byte) (int, error) {
 
 // writeHeaders writes the status and headers for a body of length
 // bytes at start: 206 with Content-Range when the request asked for a
-// range or the body is short of the whole file, else 200.
-func (s *Server) writeHeaders(w http.ResponseWriter, info share.Info, start, length int64, partial bool) {
+// range or the body is short of the whole file, else 200. It reports
+// whether the body should follow: not for HEAD, which tools like
+// DuckDB send first to learn the size. Reading the body anyway would
+// pull the whole file from the sender just to throw it away.
+func (s *Server) writeHeaders(w http.ResponseWriter, r *http.Request, info share.Info, start, length int64, partial bool) bool {
 	ctype := contentTypeOf(info)
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", ctype)
@@ -755,9 +768,10 @@ func (s *Server) writeHeaders(w http.ResponseWriter, info share.Info, start, len
 	if partial || start > 0 || length < info.Size {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, info.Size))
 		w.WriteHeader(http.StatusPartialContent)
-		return
+	} else {
+		w.WriteHeader(http.StatusOK)
 	}
-	w.WriteHeader(http.StatusOK)
+	return r.Method != http.MethodHead
 }
 
 // uploadBody writes stored upload bytes to the response, reporting
