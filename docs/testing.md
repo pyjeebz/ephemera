@@ -36,11 +36,13 @@ A relay started with neither `-tokens` nor `-open` refuses to start. `-open` let
 
 Senders are held to the relay's limits: `-max-ttl` (seconds, default 86400) and `-max-size-mb` (default 5120). A share over either is refused, and `ephemera send` exits with the reason.
 
-To enable the optional in-memory replay and away-prefix stores:
+To keep background uploads, give the relay a data directory and a disk budget:
 
 ```bash
-./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt -public-url http://192.168.1.42:7100 -cache-mb 256 -away-mb 64
+./bin/relay serve -addr 0.0.0.0:7100 -tokens tokens.txt -public-url http://192.168.1.42:7100 -data-dir ./relay-data -upload-gb 10
 ```
+
+Without `-upload-gb`, senders are told the relay isn't keeping uploads and their links stream live only. `-cache-mb` and `-away-mb` size the optional in-memory replay and away-prefix stores.
 
 ## 3. Share a real video
 
@@ -56,15 +58,14 @@ From a second terminal, log in with the token from step 2 (paste it, or pipe it 
 ./bin/ephemera send \
   -relay ws://127.0.0.1:7100/daemon \
   -ttl 600 \
-  -cache \
-  -away 1 \
   /path/to/video.mp4
 ```
 
 Notes:
 
+- The file uploads to the relay in the background; the sender prints progress and exits once the relay has all of it. `-upload=false` streams live only.
 - `-cache` enables replay of byte ranges that were already watched.
-- `-away 1` uploads the first 1 MiB of the file to the relay.
+- `-away 1` uploads the first 1 MiB instead, if the relay won't keep the whole file.
 - Use a standard MP4/H.264 file for the safest browser test.
 
 Once the relay accepts the share, the sender prints its link:
@@ -91,13 +92,11 @@ On the receiving device:
 
 ## 6. Verify offline behavior
 
-1. Let the away-prefix upload finish.
-2. Stop the sender daemon.
-3. Refresh the receiver page.
-4. The status should become `offline`.
-5. With `-cache`, already-watched ranges should replay from RAM.
-6. With `-away`, the uploaded prefix should remain playable while the sender is offline.
-7. Requests outside the cached or away-prefix coverage should fail honestly with `503`.
+1. Stop the sender partway through the upload (Ctrl-C).
+2. Refresh the receiver page. The status should become `offline`, and the uploaded start of the file should still play.
+3. Requests past what's uploaded (or cached, with `-cache`) should fail honestly with `503`.
+4. Run `ephemera resume` with the same `-relay`. The upload continues where it stopped, not from the start.
+5. When the sender prints `uploaded: the relay has the whole file`, it exits. The page should read "ready to watch, even with the sender offline", and the whole video should play and seek.
 
 ## 7. Network notes
 

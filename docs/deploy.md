@@ -159,13 +159,14 @@ Reports and suspensions live in `/var/lib/ephemera` and survive restarts. That d
 - **Client IP.** Fly's `X-Forwarded-For` ends with the app's own IP, so the relay reads `Fly-Client-IP` instead (`-client-ip-header`). Fly's proxy overwrites that header, so clients can't pick their own rate-limit bucket. Without `-trusted-proxies` the header is read on every request, which is only safe because Fly's proxy is the sole way in.
 - **Idle sockets.** A sender with no viewers sends nothing. `idle_timeout = 600` keeps its WebSocket open through quiet stretches.
 - **Memory.** The VM has 1 GB. The replay cache and away store are capped at 192 and 384 MiB, with `GOMEMLIMIT` under the VM size.
+- **Uploads.** Background uploads live on the `ephemera_data` volume under `/data/uploads`, capped by `-upload-gb`. Keep the cap a gigabyte or so under the volume's size: reports and suspensions share the volume, and the budget counts each upload's full size from the start, so a full volume shows up as uploads being turned away, not as failed writes. Grow both together: `fly volumes extend <volume id> --size 10 --app ephemera-relay` (find the id with `fly volumes list`), then raise `-upload-gb`. Volumes cost $0.15/GB a month.
 
 ### First deploy
 
 ```bash
 fly auth login
 fly apps create ephemera-relay
-fly volumes create ephemera_data --app ephemera-relay --region yyz --size 1
+fly volumes create ephemera_data --app ephemera-relay --region yyz --size 10
 ```
 
 Mint the sender tokens file locally and stage it and an admin token as secrets. Fly needs secret files base64-encoded:
@@ -210,6 +211,6 @@ Turn off GoDaddy **Forwarding** if it's on. `fly certs show ephemera.run --app e
 - **Moderate.** `ephemera reports -relay https://ephemera.run` and `ephemera kill -suspend ...` work as on your own server, with `EPHEMERA_ADMIN_TOKEN` set.
 - **Logs.** `fly logs --app ephemera-relay`.
 
-A deploy or secrets change restarts the machine and drops live shares for a few seconds, as a restart does on your own server. Senders redial on their own, but the replay cache and away prefixes start empty.
+A deploy or secrets change restarts the machine and drops live shares for a few seconds, as a restart does on your own server. Senders redial on their own, and uploaded files come back with the relay, but the replay cache and away prefixes start empty.
 
 Egress costs $0.02/GB in North America and Europe, with no free allowance. If that becomes the bill, the same binary runs on a VPS with the steps above.

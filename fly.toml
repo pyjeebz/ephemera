@@ -20,7 +20,7 @@ primary_region = "yyz"
     -public-url https://ephemera.run \
     -client-ip-header Fly-Client-IP \
     -tokens /etc/ephemera/tokens.txt \
-    -data-dir /data \
+    -data-dir /data -upload-gb 8 \
     -cache-mb 192 -away-mb 384"""
 
 [[files]]
@@ -30,10 +30,11 @@ primary_region = "yyz"
   secret_name = "EPHEMERA_TOKENS"
 
 [mounts]
-  # reports and suspensions, never file bytes
+  # reports, suspensions and background uploads (deleted at expiry);
+  # keep it a gigabyte or so over -upload-gb
   source = "ephemera_data"
   destination = "/data"
-  initial_size = "1gb"
+  initial_size = "10gb"
 
 [http_service]
   internal_port = 8080

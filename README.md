@@ -1,6 +1,6 @@
 # ephemera
 
-Ephemera creates a shareable link before the file is uploaded. The sender daemon streams only the byte ranges the receiver requests; the relay keeps no durable copy, and the link expires.
+Ephemera creates a shareable link before the file is uploaded. The link streams live from the sender's disk, only the byte ranges the receiver asks for, while the file uploads to the relay in the background. Once it's all there the sender can go offline. When the link expires, the relay deletes its copy.
 
 ## Documentation
 
