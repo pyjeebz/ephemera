@@ -4,10 +4,10 @@
 //
 // Concurrency shape: a per-connection writer goroutine is the only
 // writer to the socket (frames are never interleaved); a reader
-// goroutine decodes frames and routes data frames to the waiting
-// IssueRead caller. Reads are correlated FIFO: daemons answer in
-// the order asked, so a single reply queue per connection suffices
-// — no stream-id multiplexing in v0.
+// goroutine decodes frames and routes data frames to the read they
+// answer. Reads are correlated FIFO: daemons answer in the order
+// asked, so several reads can be in flight at once and each reply
+// goes to the oldest unanswered read. No request ids in v0.
 package hub
 
 import (
@@ -47,15 +47,16 @@ type DaemonConn struct {
 	conn   Conn
 	reader *bufio.Reader
 
-	// readMu serializes IssueRead calls: the protocol has no
-	// request ids in v0, so replies are matched to asks FIFO.
-	// Without the lock, two concurrent receiver streams could
-	// cross-consume each other's data.
-	readMu sync.Mutex
+	// Reads in flight, oldest first. The protocol has no request
+	// ids in v0: the daemon answers in the order asked, so a reply
+	// belongs to the head of the queue. sendMu keeps the queue in
+	// the order read frames reach the writer; qMu guards the queue.
+	sendMu sync.Mutex
+	qMu    sync.Mutex
+	queue  []*pendingRead
+	slots  chan struct{} // one per read in flight, up to maxInFlight
 
 	writeCh chan []byte   // frames to encode and send
-	replyCh chan []byte   // data payload per IssueRead, FIFO
-	errCh   chan error    // first terminal error wins
 	done    chan struct{} // closed exactly once on failure/close
 
 	closeOnce sync.Once
@@ -132,8 +133,7 @@ func (b *Bridge) AcceptAt(conn Conn, linkBase string) (*DaemonConn, error) {
 		conn:    conn,
 		reader:  bufio.NewReader(conn),
 		writeCh: make(chan []byte, 16),
-		replyCh: make(chan []byte, 4),
-		errCh:   make(chan error, 1),
+		slots:   make(chan struct{}, maxInFlight),
 		done:    make(chan struct{}),
 	}
 
@@ -309,9 +309,9 @@ func (d *DaemonConn) writeLoop() {
 	}
 }
 
-// readLoop decodes frames: TData goes to the FIFO reply queue,
+// readLoop decodes frames: TData answers the oldest read in flight,
 // TAway extends the upload or away blob (acking progress), TErr
-// fails the waiting reader, anything else is skipped.
+// fails the oldest read in flight, anything else is skipped.
 func (d *DaemonConn) readLoop() {
 	for {
 		fr, err := protocol.ReadFrame(d.reader)
@@ -324,11 +324,7 @@ func (d *DaemonConn) readLoop() {
 		}
 		switch fr.Type {
 		case protocol.TData:
-			select {
-			case d.replyCh <- fr.Data:
-			case <-d.done:
-				return
-			}
+			d.answer(fr.Data, nil)
 		case protocol.TAway:
 			// layer C: TAway header is immediately followed by its
 			// TData bytes (the daemon writes them adjacent under
@@ -353,8 +349,13 @@ func (d *DaemonConn) readLoop() {
 			if json.Unmarshal(fr.JSON, &e) != nil {
 				e = protocol.Err{Code: "unknown"}
 			}
-			d.fail(fmt.Errorf("hub: daemon error: %s: %s", e.Code, e.Message))
-			return
+			err := fmt.Errorf("hub: daemon error: %s: %s", e.Code, e.Message)
+			// the daemon refuses a read instead of answering it: that
+			// read fails, the others carry on
+			if !d.answer(nil, err) {
+				d.fail(err)
+				return
+			}
 		default:
 			// v0: no other frame types matter
 		}
@@ -390,41 +391,84 @@ func (d *DaemonConn) sendJSON(typ uint8, v any) {
 	}
 }
 
-// IssueRead asks the daemon for bytes. Blocking; one reply per call.
-// Serialized per connection: the reply queue is FIFO, so concurrent
-// callers would cross-consume each other's data. The relay layer
-// may parallelize across connections, never within one.
-func (d *DaemonConn) IssueRead(offset, length int64) ([]byte, error) {
-	d.readMu.Lock()
-	defer d.readMu.Unlock()
-	rd := protocol.Read{ShareID: d.shareID, Offset: offset, Length: length}
-	frame, err := encodeReadFrame(rd)
-	if err != nil {
-		return nil, err
-	}
+// maxInFlight caps the reads one daemon connection has outstanding:
+// enough to hide the round trip to the sender, bounded so the
+// replies waiting at the relay stay small (16 × 256 KiB chunks).
+const maxInFlight = 16
 
+// pendingRead is one read in flight: the bytes asked for, the bytes
+// so far, and where its outcome goes.
+type pendingRead struct {
+	want int64
+	data []byte
+	done chan error // buffered 1: the reader loop never waits on it
+}
+
+// IssueRead asks the daemon for bytes and waits for them. Safe to
+// call concurrently: each call takes its place in the queue as its
+// read frame goes out, and the daemon's replies come back in that
+// order, so up to maxInFlight reads overlap their round trips.
+func (d *DaemonConn) IssueRead(offset, length int64) ([]byte, error) {
 	select {
-	case d.writeCh <- frame:
-	case err := <-d.errCh:
-		return nil, err
+	case d.slots <- struct{}{}:
 	case <-d.done:
 		return nil, ErrDaemonGone
 	}
+	defer func() { <-d.slots }()
 
-	var out []byte
-	remaining := length
-	for remaining > 0 {
-		select {
-		case data := <-d.replyCh:
-			out = append(out, data...)
-			remaining -= int64(len(data))
-		case err := <-d.errCh:
-			return nil, err
-		case <-d.done:
-			return nil, ErrDaemonGone
-		}
+	frame, err := encodeReadFrame(protocol.Read{ShareID: d.shareID, Offset: offset, Length: length})
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	p := &pendingRead{want: length, done: make(chan error, 1)}
+
+	// queue it and send it in one step, so the queue order is the
+	// order the daemon sees the reads
+	d.sendMu.Lock()
+	d.qMu.Lock()
+	d.queue = append(d.queue, p)
+	d.qMu.Unlock()
+	select {
+	case d.writeCh <- frame:
+	case <-d.done:
+		d.sendMu.Unlock()
+		return nil, ErrDaemonGone
+	}
+	d.sendMu.Unlock()
+
+	select {
+	case err := <-p.done:
+		if err != nil {
+			return nil, err
+		}
+		return p.data, nil
+	case <-d.done:
+		return nil, ErrDaemonGone
+	}
+}
+
+// answer gives a reply to the oldest read in flight: data extends it
+// and completes it once it has all it asked for; err fails it. It
+// reports whether there was a read to answer.
+func (d *DaemonConn) answer(data []byte, err error) bool {
+	d.qMu.Lock()
+	if len(d.queue) == 0 {
+		d.qMu.Unlock()
+		return false // nothing asked: drop it
+	}
+	p := d.queue[0]
+	if err == nil {
+		p.data = append(p.data, data...)
+	}
+	finished := err != nil || int64(len(p.data)) >= p.want
+	if finished {
+		d.queue = d.queue[1:]
+	}
+	d.qMu.Unlock()
+	if finished {
+		p.done <- err
+	}
+	return true
 }
 
 // encodeReadFrame marshals and frames a TRead without touching the
@@ -451,18 +495,13 @@ func encodeReadFrame(rd protocol.Read) ([]byte, error) {
 
 func uint32le(n int) uint32 { return uint32(n) }
 
-// fail records the terminal error and closes the socket. Exactly
-// once: closes done (waking both pumps and all IssueRead callers),
-// publishes the error, and detaches from the registry so the share
-// reads as offline until the daemon redials.
+// fail closes the socket. Exactly once: closes done (waking both
+// pumps and every IssueRead caller with ErrDaemonGone), and detaches
+// from the registry so the share reads as offline until the daemon
+// redials.
 func (d *DaemonConn) fail(cause error) {
 	d.closeOnce.Do(func() {
 		close(d.done)
-		// first terminal error wins; buffer 1, never blocks
-		select {
-		case d.errCh <- ErrDaemonGone:
-		default:
-		}
 		d.conn.Close()
 		if d.bridge != nil && d.bridge.Registry != nil && d.shareID != "" {
 			d.bridge.Registry.Detach(d.shareID, d)
