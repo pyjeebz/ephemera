@@ -5,6 +5,7 @@
 // Routes:
 //
 //	GET /            what this server is; any other unknown path 404s
+//	GET /send        send files from the browser (send.js, app.css)
 //	GET /:id         receiver page (state from /:id/status)
 //	GET /:id/file    the bytes: Range-honoring, streamed in chunks
 //	GET /:id/status  JSON: {state, name, size, mime, expires, ...}
@@ -133,6 +134,9 @@ func New(cfg ServerConfig) http.Handler {
 	s := &Server{cfg: cfg}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleRoot)
+	mux.HandleFunc("GET /send", asset("send.html", "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /send.js", asset("send.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /app.css", asset("app.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /{id}", s.handlePage)
 	mux.HandleFunc("GET /{id}/file", s.handleFile)
 	mux.HandleFunc("GET /{id}/status", s.handleStatus)
@@ -496,6 +500,29 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// appCSP is the content policy for the relay's own pages: their own
+// script and stylesheet only, connections only back to this relay.
+// The browser sender holds a sender token, so nothing else may run.
+const appCSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+// asset serves one embedded file of the relay's web app. Browsers
+// revalidate each time, so a deploy reaches them at once.
+func asset(name, ctype string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := receiverFS.ReadFile("receiver/" + name)
+		if err != nil {
+			http.Error(w, name+" missing", http.StatusInternalServerError)
+			return
+		}
+		h := w.Header()
+		h.Set("Content-Type", ctype)
+		h.Set("Cache-Control", "no-cache")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Content-Security-Policy", appCSP)
+		w.Write(body)
+	}
 }
 
 // handleRoot serves the relay's home page. "GET /" is also the mux's

@@ -1,0 +1,81 @@
+/* Ephemera's shared look. Every visual decision is a token here, so a
+   design system replaces this block and the pages follow. */
+:root {
+	color-scheme: light dark;
+	--font: system-ui, -apple-system, "Segoe UI", sans-serif;
+	--mono: ui-monospace, "SF Mono", Menlo, monospace;
+	--bg: #ffffff;
+	--surface: #f6f6f7;
+	--fg: #18181b;
+	--muted: #71717a;
+	--border: #e4e4e7;
+	--accent: #2563eb;
+	--accent-fg: #ffffff;
+	--ok: #15803d;
+	--warn: #b45309;
+	--bad: #b91c1c;
+	--radius: 10px;
+	--gap: 1rem;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #0f0f11;
+		--surface: #18181b;
+		--fg: #f4f4f5;
+		--muted: #a1a1aa;
+		--border: #2e2e33;
+		--accent: #60a5fa;
+		--accent-fg: #0f0f11;
+		--ok: #4ade80;
+		--warn: #fbbf24;
+		--bad: #f87171;
+	}
+}
+
+* { box-sizing: border-box; }
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--fg);
+	font: 16px/1.5 var(--font);
+}
+main { max-width: 640px; margin: 0 auto; padding: 2rem 1rem 4rem; }
+h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+p.lede { color: var(--muted); margin: 0 0 1.5rem; }
+a { color: var(--accent); }
+small, .muted { color: var(--muted); }
+
+button, .btn {
+	font: inherit; cursor: pointer;
+	border: 1px solid var(--border); border-radius: var(--radius);
+	background: var(--surface); color: var(--fg);
+	padding: .45rem .9rem;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button:disabled { opacity: .5; cursor: default; }
+input, select {
+	font: inherit; color: var(--fg); background: var(--bg);
+	border: 1px solid var(--border); border-radius: var(--radius);
+	padding: .45rem .6rem;
+}
+
+.drop {
+	display: grid; place-items: center; gap: .5rem; text-align: center;
+	border: 2px dashed var(--border); border-radius: var(--radius);
+	padding: 2.5rem 1rem; margin-bottom: var(--gap);
+}
+.drop.over { border-color: var(--accent); background: var(--surface); }
+.row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.row > input[type=text], .row > input[type=password], .row > input[readonly] { flex: 1; min-width: 0; }
+
+.card {
+	border: 1px solid var(--border); border-radius: var(--radius);
+	padding: var(--gap); margin-bottom: var(--gap); display: grid; gap: .5rem;
+}
+.card .name { font-weight: 600; overflow-wrap: anywhere; }
+.card .state { color: var(--muted); }
+.card .state.ok { color: var(--ok); }
+.card .state.warn { color: var(--warn); }
+.card .state.bad { color: var(--bad); }
+.card input[readonly] { font-family: var(--mono); font-size: .9rem; }
+progress { width: 100%; height: .5rem; accent-color: var(--accent); }

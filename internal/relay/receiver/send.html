@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Send a file · Ephemera</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main>
+	<h1>Send a file</h1>
+	<p class="lede">The link works the moment you drop the file. It streams from this tab while the file uploads; once it's up, you can close the tab.</p>
+
+	<section id="token" hidden>
+		<p>This relay needs a sender token. It stays in this browser.</p>
+		<form id="token-form" class="row">
+			<input type="password" name="token" placeholder="eph_…" autocomplete="off" required>
+			<button class="primary">Save</button>
+		</form>
+	</section>
+
+	<label class="drop" id="drop">
+		<strong>Drop files here</strong>
+		<span class="muted">or click to choose</span>
+		<input type="file" id="files" multiple hidden>
+	</label>
+
+	<div class="row">
+		<label>Link lasts
+			<select id="ttl">
+				<option value="3600">1 hour</option>
+				<option value="21600">6 hours</option>
+				<option value="86400" selected>24 hours</option>
+			</select>
+		</label>
+		<span class="muted" id="who"></span>
+	</div>
+
+	<div id="shares"></div>
+</main>
+<script src="/send.js"></script>
+</body>
+</html>
