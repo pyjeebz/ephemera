@@ -35,6 +35,9 @@ primary_region = "yyz"
   source = "ephemera_data"
   destination = "/data"
   initial_size = "10gb"
+  # no daily snapshots: they'd keep uploaded files for days after their
+  # links expire, and nothing else here is worth backing up
+  scheduled_snapshots = false
 
 [http_service]
   internal_port = 8080
