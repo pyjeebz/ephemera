@@ -6,6 +6,7 @@
 //
 //	GET /            what this server is; any other unknown path 404s
 //	GET /send        send files from the browser (send.js, app.css)
+//	GET /view.js     the link page's script
 //	GET /:id         receiver page (state from /:id/status)
 //	GET /:id/file    the bytes: Range-honoring, streamed in chunks
 //	GET /:id/status  JSON: {state, name, size, mime, expires, ...}
@@ -137,6 +138,7 @@ func New(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("GET /send", asset("send.html", "text/html; charset=utf-8"))
 	mux.HandleFunc("GET /send.js", asset("send.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /app.css", asset("app.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /view.js", asset("view.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /{id}", s.handlePage)
 	mux.HandleFunc("GET /{id}/file", s.handleFile)
 	mux.HandleFunc("GET /{id}/status", s.handleStatus)
@@ -507,6 +509,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // The browser sender holds a sender token, so nothing else may run.
 const appCSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
+// viewCSP is appCSP for the link page, which also plays the file.
+const viewCSP = appCSP + "; media-src 'self'"
+
 // asset serves one embedded file of the relay's web app. Browsers
 // revalidate each time, so a deploy reaches them at once.
 func asset(name, ctype string) http.HandlerFunc {
@@ -602,6 +607,8 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Security-Policy", viewCSP)
 	w.Write(page)
 }
 

@@ -24,7 +24,7 @@ func TestWebAppRoutes(t *testing.T) {
 	ts := httptest.NewServer(New(ServerConfig{Registry: share.NewRegistry(time.Hour)}))
 	defer ts.Close()
 	for path, ctype := range map[string]string{
-		"/send": "text/html", "/send.js": "text/javascript", "/app.css": "text/css",
+		"/send": "text/html", "/send.js": "text/javascript", "/app.css": "text/css", "/view.js": "text/javascript",
 	} {
 		resp, err := http.Get(ts.URL + path)
 		if err != nil {
