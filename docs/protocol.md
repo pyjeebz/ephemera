@@ -95,9 +95,12 @@ ahead of the code that reads them.
 
 	The daemon answers each read in the order asked: length bytes as
 	one or more consecutive data frames (each at most 1 MiB), or one
-	err frame. v0 has no request ids, so the relay keeps one read in
-	flight per connection. The daemon re-checks every range against
-	the file's current size on disk.
+	err frame. v0 has no request ids: the relay may send several reads
+	before the first answer (it keeps up to 16 in flight) and matches
+	answers to reads by order, so a daemon must never reorder them.
+	An err frame answers one read; the reads after it carry on. The
+	daemon re-checks every range against the file's current size on
+	disk.
 
 	err codes on a read:
 	denied   range out of bounds
