@@ -220,9 +220,9 @@ func (s *Senders) get(id string) *senderStats {
 	return st
 }
 
-// Live records one read the sender answered: n bytes in d, measured
-// from asking to having them all, round trip included. That is the
-// rate a receiver sees while the relay has nothing stored.
+// Live records a stretch of live reads: n bytes in d, from the first
+// ask to the last byte, round trips included. That is the rate a
+// receiver sees while the relay has nothing stored.
 func (s *Senders) Live(id string, n int64, d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

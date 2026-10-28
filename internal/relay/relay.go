@@ -849,36 +849,60 @@ func (s *Server) awayBody(w io.Writer, id string, start, length int64) {
 	}
 }
 
+// readAhead is how many chunks one response asks the sender for
+// before the first comes back. Each chunk costs a round trip to the
+// sender; with several in flight the round trips overlap and the
+// sender's upload speed becomes the limit.
+const readAhead = 4
+
 // streamBody relays bytes from the daemon to the HTTP response in
-// chunk-bounded reads, writing through to the layer-B cache when
-// the share opted in. A daemon drop mid-stream just ends the body:
-// browsers treat it like a network hiccup and the page recovers via
-// /status polling. Served bytes are counted — the thesis receipt.
+// chunk-bounded reads, readAhead of them in flight, writing through
+// to the layer-B cache when the share opted in. A daemon drop
+// mid-stream just ends the body: browsers treat it like a network
+// hiccup and the page recovers via /status polling. Served bytes are
+// counted — the thesis receipt.
 func (s *Server) streamBody(w io.Writer, h share.Handle, sh share.Info, start, length int64) {
-	remaining := length
-	offset := start
-	for remaining > 0 {
-		n := min(s.cfg.ChunkSize, remaining)
-		asked := time.Now()
-		data, err := h.IssueRead(offset, n)
-		if err == nil && s.cfg.Senders != nil {
-			s.cfg.Senders.Live(sh.ID, int64(len(data)), time.Since(asked))
+	type reply struct {
+		data []byte
+		err  error
+	}
+	type ask struct {
+		offset, n int64
+		reply     chan reply // buffered 1: an abandoned ask never blocks
+	}
+	var asks []ask
+	next, end := start, start+length
+	began, got := time.Now(), int64(0)
+	defer func() {
+		// the rate this stream saw, round trips and all
+		if got > 0 && s.cfg.Senders != nil {
+			s.cfg.Senders.Live(sh.ID, got, time.Since(began))
 		}
-		if err != nil {
+	}()
+	for next < end || len(asks) > 0 {
+		for len(asks) < readAhead && next < end {
+			a := ask{offset: next, n: min(s.cfg.ChunkSize, end-next), reply: make(chan reply, 1)}
+			go func() {
+				data, err := h.IssueRead(a.offset, a.n)
+				a.reply <- reply{data, err}
+			}()
+			asks = append(asks, a)
+			next += a.n
+		}
+		a := asks[0]
+		asks = asks[1:]
+		r := <-a.reply
+		if r.err != nil || int64(len(r.data)) < a.n {
 			// partial body delivered so far is all the receiver
 			// gets; the connection just ends
 			return
 		}
-		if int64(len(data)) < n {
-			return // short read: end the body
+		if _, err := w.Write(r.data); err != nil {
+			return // receiver hung up; stop asking the daemon
 		}
-		if _, err := w.Write(data); err != nil {
-			return // receiver hung up; stop reading from the daemon
-		}
-		metrics.BytesServed.Add(n)
-		s.cacheWriteThrough(sh, offset, data)
-		offset += n
-		remaining -= n
+		got += a.n
+		metrics.BytesServed.Add(a.n)
+		s.cacheWriteThrough(sh, a.offset, r.data)
 	}
 }
 
