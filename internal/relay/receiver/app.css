@@ -553,3 +553,5 @@ svg { display: block; flex-shrink: 0; }
 .guest-note { margin: 0; padding: 10px 16px; border-top: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 30%, transparent); font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
 .guest-note .btn-link { font: inherit; font-weight: 500; color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
 .toggle-group input:disabled + span { opacity: .4; cursor: not-allowed; background: transparent; }
+.btn-icon { width: 32px; padding: 0 !important; }
+.btn.delete:hover { color: var(--destructive); }

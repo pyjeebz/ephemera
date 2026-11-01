@@ -272,6 +272,9 @@ func (r *shareReporter) suffix() string {
 }
 
 func (r *shareReporter) link(link string) {
+	// keep the owner key until expiry, so `ephemera revoke` can delete
+	// the link after send has exited
+	saveLink(linkRecord{ID: r.sh.ID, OwnerKey: r.sh.OwnerKey, Link: link, Name: r.sh.Name, Expires: r.expires.Unix()})
 	if r.out.json {
 		r.out.event("link", r.sh, map[string]any{
 			"name": r.sh.Name, "size": r.sh.Size, "mime": r.sh.MIME,

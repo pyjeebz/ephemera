@@ -42,6 +42,7 @@ import (
 	"ephemera.run/ephemera/internal/cache"
 	"ephemera.run/ephemera/internal/metrics"
 	"ephemera.run/ephemera/internal/playback"
+	"ephemera.run/ephemera/internal/protocol"
 	httprange "ephemera.run/ephemera/internal/range" // dir range; pkg httprange
 	"ephemera.run/ephemera/internal/ratelimit"
 	"ephemera.run/ephemera/internal/share"
@@ -171,6 +172,7 @@ func New(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("GET /{id}/file", s.handleFile)
 	mux.HandleFunc("GET /{id}/status", s.handleStatus)
 	mux.HandleFunc("POST /{id}/report", s.handleReport)
+	mux.HandleFunc("POST /{id}/revoke", s.handleRevoke)
 	mux.HandleFunc("POST /{id}/playback", s.handlePlayback)
 	mux.HandleFunc("GET /admin/metrics", s.guardAdmin(s.handleMetrics))
 	mux.HandleFunc("GET /admin/playback", s.guardAdmin(s.handleAdminPlayback))
@@ -317,6 +319,32 @@ func (s *Server) guardAdmin(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(metrics.Snapshot())
+}
+
+// handleRevoke deletes a link for its sender. The body carries the
+// link's owner key, which only the sender holds (the link's id is
+// derived from it), so no account or admin token is needed. The link
+// goes the way an admin kill takes it: gone now, the relay's copy
+// deleted, and a re-announce refused until it would have expired.
+func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		OwnerKey string `json:"owner_key"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil || body.OwnerKey == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "body must be JSON: {owner_key}"})
+		return
+	}
+	if !protocol.OwnsShare(id, body.OwnerKey) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "that key doesn't own this link"})
+		return
+	}
+	if !s.cfg.Registry.Kill(id) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such link: it has expired or was already deleted"})
+		return
+	}
+	metrics.SenderRevokes.Add(1)
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
 
 // handleKill force-expires a share: registry eviction now, daemon

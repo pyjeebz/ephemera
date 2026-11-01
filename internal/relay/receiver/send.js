@@ -97,7 +97,7 @@ class Share {
 		this.createdAt = Date.now();
 		this.deadline = this.createdAt + ttlSec * 1000;
 		this.onChange = onChange;
-		this.state = "connecting"; // connecting|live|uploaded|refused|expired
+		this.state = "connecting"; // connecting|live|uploaded|refused|expired|revoked
 		this.link = "";
 		this.uploading = false;    // the relay is keeping the upload
 		this.acked = 0;            // bytes the relay holds
@@ -241,7 +241,24 @@ class Share {
 		}
 	}
 
-	finished() { return this.state === "uploaded" || this.state === "refused" || this.state === "expired"; }
+	finished() { return ["uploaded", "refused", "expired", "revoked"].includes(this.state); }
+
+	// revoke deletes the link on the relay with its owner key, which
+	// only this tab holds: the link stops working and the relay drops
+	// its copy.
+	async revoke() {
+		const resp = await fetch(`/${this.id}/revoke`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ owner_key: this.key }),
+		});
+		if (!resp.ok && resp.status !== 404) {
+			const body = await resp.json().catch(() => ({}));
+			throw new Error(body.error || resp.statusText);
+		}
+		this.set("revoked");
+		this.ws?.close();
+	}
 
 	set(state) {
 		this.state = state;
@@ -296,6 +313,7 @@ function badge(kind, text) {
 		warning: ["badge badge-warning", "triangle-alert"],
 		refused: ["badge badge-destructive", "circle-slash"],
 		expired: ["badge badge-outline muted", "hourglass"],
+		deleted: ["badge badge-outline muted", "trash"],
 	}[kind];
 	b.className = look[0];
 	if (look[1]) b.append(ui.icon(look[1], kind === "connecting" ? "spin" : ""));
@@ -332,6 +350,8 @@ function describe(s) {
 			: `${s.message[0].toUpperCase() + s.message.slice(1)}.`];
 	case "expired":
 		return ["expired", "Expired", "The link expired and the relay deleted its copy."];
+	case "revoked":
+		return ["deleted", "Deleted", "You deleted this link. It no longer works, and the relay dropped its copy."];
 	}
 }
 
@@ -349,6 +369,7 @@ const CARD = `<div class="share-life" aria-hidden="true"><span></span></div>
 		<input class="input mono" readonly aria-label="Link">
 		<button class="btn btn-outline" type="button"><i data-icon="copy"></i><span data-label="Copy">Copy</span></button>
 		<a class="btn btn-outline" target="_blank" rel="noopener" aria-label="Open link page"><i data-icon="arrow-up-right"></i>Open</a>
+		<button class="btn btn-outline btn-icon delete" type="button" aria-label="Delete link" data-tip="Delete link"><i data-icon="trash"></i></button>
 	</div>
 	<div><button class="btn btn-sm" type="button" data-signin hidden>Sign in</button></div>
 </div>
@@ -531,7 +552,7 @@ function startPage() {
 	}
 
 	const inFlight = (s) => s.state === "live" || s.state === "connecting";
-	const clearable = (s) => s.state === "uploaded" || s.state === "refused" || s.state === "expired";
+	const clearable = (s) => ["uploaded", "refused", "expired", "revoked"].includes(s.state);
 
 	// showList sets the list's heading and the header mark from all shares.
 	function showList() {
@@ -547,13 +568,13 @@ function startPage() {
 	// whose time is up has expired on the relay too.
 	function tick(s) {
 		const now = Date.now();
-		if (now >= s.deadline && s.state !== "refused" && s.state !== "expired") {
+		if (now >= s.deadline && !["refused", "expired", "revoked"].includes(s.state)) {
 			s.set("expired");
 			s.ws?.close();
 			return;
 		}
 		const total = s.deadline - s.createdAt;
-		const life = s.state === "expired" ? 0 : Math.max(0, Math.min(1, (s.deadline - now) / total));
+		const life = s.state === "expired" || s.state === "revoked" ? 0 : Math.max(0, Math.min(1, (s.deadline - now) / total));
 		$(".share-life > span", s.card).style.transform = `scaleX(${life})`;
 		$(".share-left", s.card).textContent = `${leftText(s.deadline - now)} left`;
 	}
@@ -563,7 +584,7 @@ function startPage() {
 		const [kind, label, line] = describe(s);
 		$(".share-badge", card).replaceChildren(badge(kind, label));
 		$(".share-line", card).textContent = line;
-		card.classList.toggle("dim", s.state === "expired");
+		card.classList.toggle("dim", s.state === "expired" || s.state === "revoked");
 
 		const bar = $(".progress", card);
 		bar.hidden = !(s.state === "live" && s.uploading);
@@ -574,12 +595,12 @@ function startPage() {
 		}
 		$(".share-skeleton", card).hidden = !(s.state === "connecting" && !s.link);
 		const linkRow = $(".share-link", card);
-		linkRow.hidden = !s.link || s.state === "refused" || s.state === "expired";
+		linkRow.hidden = !s.link || ["refused", "expired", "revoked"].includes(s.state);
 		$("input", linkRow).value = s.link;
 		$("button", linkRow).dataset.copy = s.link;
 		$("a", linkRow).href = s.link || "#";
 		$("[data-signin]", card).hidden = !needsToken(s) || !!token;
-		$(".share-foot", card).hidden = s.state === "refused" || s.state === "expired";
+		$(".share-foot", card).hidden = ["refused", "expired", "revoked"].includes(s.state);
 		$(".share-until", card).textContent = `Expires at ${untilText(s.deadline)}`;
 		tick(s);
 		showList();
@@ -611,6 +632,18 @@ function startPage() {
 		const ttl = Number($("input[name=ttl]:checked").value);
 		const s = new Share(file, ttl, token, render);
 		s.card = card;
+		const del = $(".delete", card);
+		del.onclick = async () => {
+			if (!confirm(`Delete the link to ${file.name}? It stops working for everyone, and the relay drops its copy.`)) return;
+			del.disabled = true;
+			try {
+				await s.revoke();
+				ui.toast("Link deleted", { description: file.name });
+			} catch (err) {
+				del.disabled = false;
+				ui.toast("Couldn't delete the link", { description: String(err.message || err), kind: "error" });
+			}
+		};
 		shares.push(s);
 		render(s);
 		s.start().catch((err) => { s.message = String(err.message || err); s.set("refused"); });

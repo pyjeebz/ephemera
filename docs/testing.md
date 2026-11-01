@@ -102,6 +102,8 @@ The raw bytes are at the link plus `/file`, for `curl`, `ffprobe` or DuckDB. Scr
 {"event":"uploaded","share_id":"pw_kc…","size":52428800,"expires":"2026-10-27T18:04:00Z"}
 ```
 
+To take a link back, run `ephemera revoke <link>` on the machine that shared it (`-json` prints a `revoked` event). The relay checks the link's owner key, which only the sender has, stops serving the link and deletes its copy. The web page has a delete button on each link for the same thing.
+
 The other events are `upload_refused` (the relay won't keep the file, so the link streams live), `expired` and `error` (with `code` and `message`). Exit codes: `0` done (uploaded or expired), `1` error, `2` bad flags or arguments, `3` the relay refused the share (token, limits, a killed link).
 
 The sender connects to the relay on `127.0.0.1`: plaintext is only allowed to the same machine.

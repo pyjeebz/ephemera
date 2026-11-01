@@ -68,6 +68,9 @@ var (
 	// AdminKills counts /admin/kill invocations.
 	AdminKills = expvar.NewInt("admin_kills")
 
+	// SenderRevokes counts links their own senders deleted.
+	SenderRevokes = expvar.NewInt("sender_revokes")
+
 	// ReportsFiled counts link reports receivers filed.
 	ReportsFiled = expvar.NewInt("reports_filed")
 

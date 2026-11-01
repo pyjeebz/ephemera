@@ -413,3 +413,41 @@ func TestLinkPagesNotIndexed(t *testing.T) {
 		}
 	}
 }
+
+// TestSenderRevoke: the link's owner key deletes it; a wrong key, a
+// missing one, or a second try don't.
+func TestSenderRevoke(t *testing.T) {
+	reg := share.NewRegistry(time.Hour)
+	key, id := protocol.NewOwnerKey()
+	otherKey, _ := protocol.NewOwnerKey()
+	reg.Register(share.Info{ID: id, Name: "dump.sql", Size: 3, Expires: time.Now().Add(time.Hour)}, &memHandle{data: []byte("abc")})
+	ts := httptest.NewServer(New(ServerConfig{Registry: reg}))
+	defer ts.Close()
+
+	revoke := func(body string) int {
+		resp, err := http.Post(ts.URL+"/"+id+"/revoke", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := revoke(`{}`); got != http.StatusBadRequest {
+		t.Errorf("no key: %d", got)
+	}
+	if got := revoke(`{"owner_key":"` + otherKey + `"}`); got != http.StatusForbidden {
+		t.Errorf("someone else's key: %d", got)
+	}
+	if _, _, err := reg.Lookup(id); err != nil {
+		t.Fatalf("link gone after refused revokes: %v", err)
+	}
+	if got := revoke(`{"owner_key":"` + key + `"}`); got != http.StatusOK {
+		t.Fatalf("owner's key: %d", got)
+	}
+	if resp, _ := http.Get(ts.URL + "/" + id + "/file"); resp.StatusCode/100 == 2 {
+		t.Errorf("file after revoke: %d, still served", resp.StatusCode)
+	}
+	if got := revoke(`{"owner_key":"` + key + `"}`); got != http.StatusNotFound {
+		t.Errorf("second revoke: %d, want 404", got)
+	}
+}
