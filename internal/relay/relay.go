@@ -140,8 +140,9 @@ type SenderPolicy struct {
 
 // Limits is one kind of sender's caps.
 type Limits struct {
-	MaxTTLSec int64 `json:"max_ttl"`  // seconds
-	MaxSize   int64 `json:"max_size"` // bytes
+	MaxTTLSec int64 `json:"max_ttl"`             // seconds
+	MaxSize   int64 `json:"max_size"`            // bytes
+	LiveOnly  bool  `json:"live_only,omitempty"` // the relay keeps no copy: the link lasts while the sender does
 }
 
 // Server is the relay HTTP handler.

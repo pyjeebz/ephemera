@@ -432,6 +432,7 @@ func senderPolicy(b *hub.Bridge, authn hub.Authenticator, signIn *signin.Server)
 		p.Guest = &p.Max
 	case b.Guests != nil:
 		g := limits(b.Guests.Limits)
+		g.LiveOnly = true // the hub keeps no guest bytes
 		p.Guest = &g
 	}
 	return p

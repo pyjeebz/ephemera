@@ -555,3 +555,12 @@ svg { display: block; flex-shrink: 0; }
 .toggle-group input:disabled + span { opacity: .4; cursor: not-allowed; background: transparent; }
 .btn-icon { width: 32px; padding: 0 !important; }
 .btn.delete:hover { color: var(--destructive); }
+.drop-options { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+.nocopy { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.nocopy:has(input:disabled) { cursor: not-allowed; }
+.switch-input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch-input:checked + .switch { background: var(--primary); }
+.switch-input:checked + .switch::after { transform: translateX(14px); }
+.switch-input:focus-visible + .switch { box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
+.switch-input:disabled + .switch { opacity: .6; }
+.nocopy[data-tip]::after { white-space: normal; width: 260px; }

@@ -30,19 +30,26 @@
 				<input type="file" id="files" multiple class="sr-only">
 			</label>
 			<div class="drop-bar">
-				<div class="ttl" role="radiogroup" aria-labelledby="ttl-label">
-					<span class="xs muted" id="ttl-label">Link lasts</span>
-					<div class="toggle-group">
-						<label><input type="radio" name="ttl" value="3600" aria-label="1 hour"><span>1h</span></label>
-						<label><input type="radio" name="ttl" value="21600" aria-label="6 hours"><span>6h</span></label>
-						<label><input type="radio" name="ttl" value="86400" aria-label="24 hours" checked><span>24h</span></label>
+				<div class="drop-options">
+					<div class="ttl" role="radiogroup" aria-labelledby="ttl-label">
+						<span class="xs muted" id="ttl-label">Link lasts</span>
+						<div class="toggle-group">
+							<label><input type="radio" name="ttl" value="3600" aria-label="1 hour"><span>1h</span></label>
+							<label><input type="radio" name="ttl" value="21600" aria-label="6 hours"><span>6h</span></label>
+							<label><input type="radio" name="ttl" value="86400" aria-label="24 hours" checked><span>24h</span></label>
+						</div>
 					</div>
+					<label class="nocopy" data-tip="Streams from this tab only: nothing is stored on the relay, and the link stops when you close the tab">
+						<input type="checkbox" id="nocopy" class="switch-input">
+						<span class="switch" aria-hidden="true"></span>
+						<span class="xs muted">Don't keep a copy</span>
+					</label>
 				</div>
 				<div class="drop-tools">
 					<button class="btn btn-ghost btn-sm muted" type="button" id="account-btn"><i data-icon="key-round"></i><span id="account-label">Sign in</span></button>
 				</div>
 			</div>
-			<p class="guest-note" id="guest-note" hidden>Sharing as a guest: links up to <span id="guest-ttl">1 hour</span>, files up to <span id="guest-size">1 GB</span>. <button class="btn-link" type="button" data-signin>Sign in</button> for more.</p>
+			<p class="guest-note" id="guest-note" hidden>Sharing as a guest: links stream from this tab and stop when you close it, for up to <span id="guest-ttl">1 hour</span>, with files up to <span id="guest-size">1 GB</span>. <button class="btn-link" type="button" data-signin>Sign in</button> to upload, so links keep working after you leave.</p>
 		</div>
 
 		<div class="shares" id="shares-box" hidden>

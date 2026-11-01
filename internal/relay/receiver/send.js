@@ -91,9 +91,10 @@ const READING_MS = 2000;
 const ACK_TIMEOUT_MS = 30000;
 
 class Share {
-	constructor(file, ttlSec, token, onChange) {
+	constructor(file, ttlSec, token, onChange, upload = true) {
 		this.file = file;
 		this.token = token;
+		this.upload = upload;      // ask the relay to keep a copy
 		this.createdAt = Date.now();
 		this.deadline = this.createdAt + ttlSec * 1000;
 		this.onChange = onChange;
@@ -129,7 +130,7 @@ class Share {
 				share_id: this.id, owner_key: this.key, name: this.file.name, size: this.file.size,
 				mime: this.file.type || "application/octet-stream",
 				ttl_sec: Math.max(1, Math.round((this.deadline - Date.now()) / 1000)),
-				upload: true,
+				upload: this.upload,
 			}));
 		};
 		ws.onmessage = (ev) => {
@@ -338,6 +339,9 @@ function describe(s) {
 			const pct = Math.floor(100 * s.acked / s.file.size);
 			return ["live", `Live · ${pct}%`, `Streaming from this tab while it uploads${s.rate ? ` at ${sizeText(s.rate)}/s` : ""}. Keep the tab open until it's up.`];
 		}
+		if (s.liveOnly) {
+			return ["live", "Live", `Streaming from this tab. ${s.guest ? "As a guest, nothing is kept on the relay" : "The relay keeps no copy"}, so the link stops when you close the tab (and at ${untilText(s.deadline)} at the latest).`];
+		}
 		return ["warning", "Live only",
 			`${s.message ? s.message[0].toUpperCase() + s.message.slice(1) : "This relay isn't keeping uploads right now"}. The link streams from this tab, so keep it open until ${untilText(s.deadline)}.`];
 	case "uploaded":
@@ -398,6 +402,7 @@ function startPage() {
 	// guests get less than a token would: there's a reason to sign in
 	const guestLimited = () => !!policy.guest && (policy.guest.max_ttl < policy.max.max_ttl || policy.guest.max_size < policy.max.max_size);
 	let ttlPicked = false; // the sender chose a lifetime themselves
+	let noCopyChosen = false; // "Don't keep a copy", as the sender left it
 
 	// showSender sets everything that depends on who is sending: the
 	// account button, the guest note, the lifetimes on offer, the size
@@ -418,6 +423,11 @@ function startPage() {
 			$("#guest-size").textContent = capText(policy.guest.max_size);
 		}
 		$("#max-size").textContent = capText(limits().max_size);
+
+		// guests can't have a copy kept; others choose
+		const nocopy = $("#nocopy"), guestLive = !!(guest && policy.guest.live_only);
+		nocopy.disabled = guestLive;
+		nocopy.checked = guestLive || noCopyChosen;
 
 		// lifetimes over the cap can't be picked; unless the sender chose
 		// one, offer the longest that can
@@ -540,6 +550,7 @@ function startPage() {
 
 	$("#account-btn").onclick = () => (token ? openAccount() : openSignIn());
 	for (const r of document.querySelectorAll("input[name=ttl]")) r.addEventListener("change", () => { ttlPicked = true; });
+	$("#nocopy").addEventListener("change", (e) => { noCopyChosen = e.target.checked; });
 	document.addEventListener("click", (e) => { if (e.target.closest("[data-signin]")) openSignIn(); });
 
 	// keep the screen (and so the tab) awake while anything still
@@ -630,7 +641,10 @@ function startPage() {
 		$("#shares").prepend(card);
 
 		const ttl = Number($("input[name=ttl]:checked").value);
-		const s = new Share(file, ttl, token, render);
+		const liveOnly = $("#nocopy").checked;
+		const s = new Share(file, ttl, token, render, !liveOnly);
+		s.liveOnly = liveOnly;
+		s.guest = !token && !!policy.guest?.live_only;
 		s.card = card;
 		const del = $(".delete", card);
 		del.onclick = async () => {

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"ephemera.run/ephemera/internal/away"
 	"ephemera.run/ephemera/internal/protocol"
 	"ephemera.run/ephemera/internal/share"
 	"ephemera.run/ephemera/internal/upload"
@@ -172,5 +174,51 @@ func TestKilledUploadLeavesNothing(t *testing.T) {
 	expectRefusal(t, daemonR, "gone")
 	if st.Reserved() != 0 || len(st.Stored()) != 0 {
 		t.Fatalf("store after kill: reserved %d, %d shares", st.Reserved(), len(st.Stored()))
+	}
+}
+
+// TestGuestSharesAreLiveOnly: a guest asking for a background upload,
+// an away prefix and the replay cache gets none of them: the relay
+// keeps no guest bytes. A sender with a token on the same relay
+// still uploads.
+func TestGuestSharesAreLiveOnly(t *testing.T) {
+	reg := share.NewRegistry(time.Hour)
+	st, err := upload.Open(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &Bridge{
+		Registry: reg, Uploads: st, Away: away.New(1 << 20),
+		Auth:   &fakeAuth{accounts: map[string]Account{"good": {Name: "alice"}}},
+		Guests: &Guests{},
+	}
+	ann := newAnnounce(60, 20)
+	ann.Upload, ann.Cache, ann.AwayPrefixBytes = true, true, 10
+
+	conn, _, daemonR := uploadDaemon(t, ann)
+	d, err := b.AcceptFrom(conn, "", "203.0.113.7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var w protocol.Welcome
+	nextJSON(t, daemonR, protocol.TWelcome, &w)
+	info, _, _ := reg.Lookup(ann.ShareID)
+	if w.Upload || info.Upload || info.Cacheable || info.AwayPrefix != 0 || !strings.HasPrefix(info.Account, "guest-") {
+		t.Fatalf("guest share: welcome %+v, info %+v; want live-only", w, info)
+	}
+
+	ann2 := newAnnounce(60, 20)
+	ann2.Upload = true
+	conn, daemonR = announceWith(t, protocol.Hello{Version: "0.1", Token: "good"}, ann2)
+	d2, err := b.AcceptFrom(conn, "", "203.0.113.7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d2.Close()
+	w = protocol.Welcome{}
+	nextJSON(t, daemonR, protocol.TWelcome, &w)
+	if !w.Upload {
+		t.Fatalf("token sender: welcome %+v, want upload", w)
 	}
 }

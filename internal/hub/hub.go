@@ -122,8 +122,10 @@ type Bridge struct {
 }
 
 // Guests is how a relay treats senders without a token. A guest's
-// account is named for the address it sent from, so the operator can
-// suspend one address without touching the rest.
+// share is live-only: the relay keeps none of its bytes, so a guest
+// can't use the relay as a file host. A guest's account is named for
+// the address it sent from, so the operator can suspend one address
+// without touching the rest.
 type Guests struct {
 	Limits Limits // a guest's caps; zero fields take the relay's
 
@@ -218,6 +220,13 @@ func (b *Bridge) AcceptFrom(conn Conn, linkBase, peer string) (*DaemonConn, erro
 	welcome := protocol.Welcome{ShareID: info.ShareID}
 	if linkBase != "" {
 		welcome.Link = strings.TrimSuffix(linkBase, "/") + "/" + info.ShareID
+	}
+
+	// a guest's share streams live and nothing else: no upload, no
+	// away prefix, no replay cache, so no guest's bytes are ever kept
+	// on the relay
+	if acct.Guest {
+		info.Upload, info.AwayPrefixBytes, info.Cache = false, 0, false
 	}
 
 	// a background upload needs room for the whole file up front; a

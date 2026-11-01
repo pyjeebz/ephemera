@@ -34,7 +34,7 @@ Without `-public-url`, links use the address the sender dialed, which is right f
 
 A relay started with neither `-tokens` nor `-open` refuses to start. `-open` lets anyone share without a token; use it only on a machine nobody else can reach.
 
-`-guests` lets people share without a token too, but as guests: links up to an hour and files up to 1 GB (`-guest-ttl`, `-guest-size-mb`), and ten new shares an hour from one address (`-guest-shares-per-hour`). It works with or without `-tokens`; senders with a token get the full limits. A guest's account is named for its address (`guest-203.0.113.7`, or the /64 for IPv6), so `ephemera suspend guest-203.0.113.7` stops that address and nobody else.
+`-guests` lets people share without a token too, but as guests: live-only (the relay keeps none of a guest's bytes: no background upload, no away prefix, no replay cache, so the link works only while the guest's tab or CLI is running), links up to an hour and files up to 1 GB (`-guest-ttl`, `-guest-size-mb`), and ten new shares an hour from one address (`-guest-shares-per-hour`). It works with or without `-tokens`; senders with a token get uploads and the full limits. A guest's account is named for its address (`guest-203.0.113.7`, or the /64 for IPv6), so `ephemera suspend guest-203.0.113.7` stops that address and nobody else.
 
 People can also get a token without the terminal, by signing in with Google or GitHub on the relay's home page. Each provider needs an OAuth app whose callback is `<public-url>/auth/<provider>/callback`:
 
@@ -101,6 +101,8 @@ The raw bytes are at the link plus `/file`, for `curl`, `ffprobe` or DuckDB. Scr
 {"event":"upload","share_id":"pw_kc…","have":0,"size":52428800}
 {"event":"uploaded","share_id":"pw_kc…","size":52428800,"expires":"2026-10-27T18:04:00Z"}
 ```
+
+For sensitive files (database dumps, crash dumps), share live-only so the relay never holds a copy: `ephemera send -upload=false dump.sql.gz`, or turn on "Don't keep a copy" on the web page. The link then works only while the sender is running, and tools like DuckDB and `curl -r` still read it in place.
 
 To take a link back, run `ephemera revoke <link>` on the machine that shared it (`-json` prints a `revoked` event). The relay checks the link's owner key, which only the sender has, stops serving the link and deletes its copy. The web page has a delete button on each link for the same thing.
 

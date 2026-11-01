@@ -184,7 +184,7 @@ func runShares(shares []daemon.Share, ttls []int64, relay string, out *sendOutpu
 	named := len(shares) > 1
 	for i, sh := range shares {
 		go func(sh daemon.Share, ttl int64) {
-			r := &shareReporter{out: out, sh: sh, named: named, expires: time.Now().Add(time.Duration(ttl) * time.Second)}
+			r := &shareReporter{out: out, sh: sh, named: named, guest: token == "", expires: time.Now().Add(time.Duration(ttl) * time.Second)}
 			cfg := daemon.RunConfig{
 				Dial:      dialFunc(relay),
 				TTLSec:    ttl,
@@ -253,6 +253,7 @@ type shareReporter struct {
 	out     *sendOutput
 	sh      daemon.Share
 	named   bool // several shares (resume): say which file each line is about
+	guest   bool // no token: the relay keeps nothing, so the link is live-only
 	expires time.Time
 
 	mu      sync.Mutex // an old session's uploader can overlap a redial
@@ -304,7 +305,11 @@ func (r *shareReporter) upload(p daemon.UploadProgress) {
 	case p.Refused:
 		if !r.refused {
 			r.refused = true
-			fmt.Fprintf(os.Stderr, "this relay isn't keeping uploads right now%s: the link streams from this machine, so keep it running\n", r.suffix())
+			if r.guest {
+				fmt.Fprintf(os.Stderr, "sharing as a guest%s: the relay keeps no copy, so the link streams from this machine and stops when this does (ephemera login to upload)\n", r.suffix())
+			} else {
+				fmt.Fprintf(os.Stderr, "this relay isn't keeping uploads right now%s: the link streams from this machine, so keep it running\n", r.suffix())
+			}
 			r.out.event("upload_refused", r.sh, nil)
 		}
 		return

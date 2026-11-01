@@ -70,7 +70,7 @@ func TestSenderPolicy(t *testing.T) {
 		t.Errorf("tokens only: guest %+v, want none", p.Guest)
 	}
 	b.Guests = &hub.Guests{Limits: hub.Limits{MaxTTLSec: 3600, MaxSize: 1 << 30}}
-	if p := senderPolicy(b, auth.Chain{}, nil); p.Guest == nil || p.Guest.MaxTTLSec != 3600 || p.Guest.MaxSize != 1<<30 || p.Max.MaxTTLSec != 86400 {
+	if p := senderPolicy(b, auth.Chain{}, nil); p.Guest == nil || p.Guest.MaxTTLSec != 3600 || p.Guest.MaxSize != 1<<30 || !p.Guest.LiveOnly || p.Max.MaxTTLSec != 86400 {
 		t.Errorf("guests: %+v (guest %+v)", p, p.Guest)
 	}
 }
