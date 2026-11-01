@@ -89,8 +89,9 @@ type Limits struct {
 	MaxSize   int64 // largest share, bytes
 }
 
-func (l Limits) maxTTLSec() int64 { return cmp.Or(l.MaxTTLSec, DefaultMaxTTLSec) }
-func (l Limits) maxSize() int64   { return cmp.Or(l.MaxSize, DefaultMaxSize) }
+// TTL and Size are the limits in force, defaults filled in.
+func (l Limits) TTL() int64  { return cmp.Or(l.MaxTTLSec, DefaultMaxTTLSec) }
+func (l Limits) Size() int64 { return cmp.Or(l.MaxSize, DefaultMaxSize) }
 
 // Bridge configures what Accept connects the daemon to. Zero value
 // works: no away store means away frames are refused (the daemon
@@ -113,6 +114,27 @@ type Bridge struct {
 	// its link; empty sends no welcome. AcceptAt overrides it per
 	// connection.
 	PublicURL string
+
+	// Guests, if set, lets senders without a token share under
+	// tighter limits instead of refusing them. Nil: no token, no
+	// share (on a relay with an Authenticator).
+	Guests *Guests
+}
+
+// Guests is how a relay treats senders without a token. A guest's
+// account is named for the address it sent from, so the operator can
+// suspend one address without touching the rest.
+type Guests struct {
+	Limits Limits // a guest's caps; zero fields take the relay's
+
+	// Starts, if set, caps how many new shares one address may start;
+	// redials of a share it already started don't count.
+	Starts Limiter
+}
+
+// Limiter is a per-key allowance, such as ratelimit.Limiter.
+type Limiter interface {
+	Allow(key string) (ok bool, remaining int, resetIn time.Duration)
 }
 
 // Accept takes ownership of a freshly connected daemon socket:
@@ -128,6 +150,13 @@ func (b *Bridge) Accept(conn Conn) (*DaemonConn, error) {
 // AcceptAt is Accept with the link base for this connection, for
 // relays that derive their public address from the request.
 func (b *Bridge) AcceptAt(conn Conn, linkBase string) (*DaemonConn, error) {
+	return b.AcceptFrom(conn, linkBase, "")
+}
+
+// AcceptFrom is AcceptAt for a sender at a known address: peer is the
+// key it is rate limited under (its IP, or its IPv6 /64). Only a
+// sender with a peer may share as a guest.
+func (b *Bridge) AcceptFrom(conn Conn, linkBase, peer string) (*DaemonConn, error) {
 	d := &DaemonConn{
 		bridge:  b,
 		conn:    conn,
@@ -144,6 +173,9 @@ func (b *Bridge) AcceptAt(conn Conn, linkBase string) (*DaemonConn, error) {
 		return nil, err
 	}
 	acct, err := b.authenticate(hello.Token)
+	if errors.Is(err, ErrNoToken) && b.Guests != nil && peer != "" {
+		acct, err = Account{Name: "guest-" + peer, Limits: b.Guests.Limits, Guest: true}, nil
+	}
 	switch {
 	case errors.Is(err, ErrNoToken):
 		return nil, refuse(conn, "", "denied", "this relay needs a sender token: run `ephemera login`", err)
@@ -166,8 +198,18 @@ func (b *Bridge) AcceptAt(conn Conn, linkBase string) (*DaemonConn, error) {
 		conn.Close()
 		return nil, err
 	}
-	if err := acct.Limits.or(b.Limits).check(info); err != nil {
-		return nil, refuse(conn, info.ShareID, "denied", err.(limitError).reason, err)
+	if err := acct.Limits.Or(b.Limits).check(info); err != nil {
+		reason := err.(limitError).reason
+		if acct.Guest {
+			reason += "; sign in for bigger files and longer links"
+		}
+		return nil, refuse(conn, info.ShareID, "denied", reason, err)
+	}
+	if acct.Guest && b.Guests.Starts != nil && b.newShare(info.ShareID) {
+		if ok, _, wait := b.Guests.Starts.Allow(peer); !ok {
+			reason := fmt.Sprintf("guests can only start a few shares an hour; try again in %s, or sign in", wait.Round(time.Minute).String())
+			return nil, refuse(conn, info.ShareID, "denied", reason, ErrOverLimit)
+		}
 	}
 	d.shareID = info.ShareID
 	d.ttlSec = info.TTLSec
@@ -228,6 +270,13 @@ func (b *Bridge) AcceptAt(conn Conn, linkBase string) (*DaemonConn, error) {
 	return d, nil
 }
 
+// newShare reports whether id is a share the relay hasn't seen, as
+// opposed to a redial of one it has.
+func (b *Bridge) newShare(id string) bool {
+	_, _, err := b.Registry.Lookup(id)
+	return errors.Is(err, share.ErrNotFound)
+}
+
 // limitError is an ErrOverLimit with a reason the sender can act on.
 type limitError struct{ reason string }
 
@@ -239,10 +288,10 @@ func (l Limits) check(s protocol.Send) error {
 	switch {
 	case s.TTLSec < 1:
 		return limitError{"ttl must be at least 1s"}
-	case s.TTLSec > l.maxTTLSec():
-		return limitError{fmt.Sprintf("ttl %ds is over this relay's %ds limit", s.TTLSec, l.maxTTLSec())}
-	case s.Size > l.maxSize():
-		return limitError{fmt.Sprintf("%d bytes is over this relay's %d byte limit", s.Size, l.maxSize())}
+	case s.TTLSec > l.TTL():
+		return limitError{fmt.Sprintf("ttl %ds is over this relay's %ds limit", s.TTLSec, l.TTL())}
+	case s.Size > l.Size():
+		return limitError{fmt.Sprintf("%d bytes is over this relay's %d byte limit", s.Size, l.Size())}
 	}
 	return nil
 }

@@ -116,3 +116,25 @@ func isHash(s string) bool {
 	b, err := hex.DecodeString(s)
 	return err == nil && len(b) == sha256.Size
 }
+
+// Chain tries each authenticator in turn and takes the first that
+// accepts the token. An empty chain accepts no token, which with a
+// guest policy means every sender is a guest.
+type Chain []hub.Authenticator
+
+// Authenticate returns the first account that takes the token. A
+// transient error from any authenticator is returned as is, so the
+// sender redials instead of being refused.
+func (c Chain) Authenticate(token string) (hub.Account, error) {
+	if token == "" {
+		return hub.Account{}, hub.ErrNoToken
+	}
+	for _, a := range c {
+		acct, err := a.Authenticate(token)
+		if errors.Is(err, hub.ErrBadToken) {
+			continue
+		}
+		return acct, err
+	}
+	return hub.Account{}, hub.ErrBadToken
+}

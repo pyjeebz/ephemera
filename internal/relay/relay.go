@@ -122,6 +122,25 @@ type ServerConfig struct {
 	// Suspensions is the suspended-accounts list admins edit. Nil
 	// disables suspension.
 	Suspensions *abuse.Suspensions
+
+	// Policy is who may send and how much, as /config tells the web
+	// sender before anything is dropped.
+	Policy SenderPolicy
+}
+
+// SenderPolicy is what the web sender needs to know up front: the
+// limits a guest gets, the limits with a token, and how to sign in
+// for one.
+type SenderPolicy struct {
+	Guest  *Limits  `json:"guest,omitempty"` // nil: a token is needed to share
+	Max    Limits   `json:"max"`
+	SignIn []string `json:"sign_in,omitempty"` // providers, like "google"
+}
+
+// Limits is one kind of sender's caps.
+type Limits struct {
+	MaxTTLSec int64 `json:"max_ttl"`  // seconds
+	MaxSize   int64 `json:"max_size"` // bytes
 }
 
 // Server is the relay HTTP handler.
@@ -147,6 +166,7 @@ func New(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("GET /favicon.svg", asset("favicon.svg", "image/svg+xml"))
 	mux.HandleFunc("GET /fonts/geist.woff2", asset("fonts/geist.woff2", "font/woff2"))
 	mux.HandleFunc("GET /fonts/geist-mono.woff2", asset("fonts/geist-mono.woff2", "font/woff2"))
+	mux.HandleFunc("GET /config", s.handleConfig)
 	mux.HandleFunc("GET /{id}", s.handlePage)
 	mux.HandleFunc("GET /{id}/file", s.handleFile)
 	mux.HandleFunc("GET /{id}/status", s.handleStatus)
@@ -196,13 +216,20 @@ func isFilePath(path string) bool {
 	return ok && id != "" && !strings.Contains(id, "/")
 }
 
-// clientIP is the address a request came from: the ClientIPHeader if
+// Clients finds where a request came from, behind the proxies the
+// relay trusts.
+type Clients struct {
+	TrustedProxies []netip.Prefix
+	Header         string // like Fly-Client-IP; see ServerConfig.ClientIPHeader
+}
+
+// IP is the address a request came from: the Header if
 // it's set and may be read, else its peer, or behind trusted proxies
 // the nearest X-Forwarded-For hop that isn't one of them. The walk goes right to left because each
 // proxy appends the address it saw: the right end was written by our
 // own proxy, the left end is whatever the client claimed. A hop that
 // doesn't parse stops the walk at the proxy that forwarded it.
-func (s *Server) clientIP(r *http.Request) string {
+func (c Clients) IP(r *http.Request) string {
 	peer, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -212,8 +239,8 @@ func (s *Server) clientIP(r *http.Request) string {
 		return host
 	}
 	ip := peer.Addr().Unmap()
-	trusted := s.trustedProxy(ip)
-	if h := s.cfg.ClientIPHeader; h != "" && (trusted || len(s.cfg.TrustedProxies) == 0) {
+	trusted := c.trusted(ip)
+	if h := c.Header; h != "" && (trusted || len(c.TrustedProxies) == 0) {
 		if client, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get(h))); err == nil {
 			return client.Unmap().String()
 		}
@@ -228,19 +255,19 @@ func (s *Server) clientIP(r *http.Request) string {
 			break
 		}
 		ip = hop.Unmap()
-		if !s.trustedProxy(ip) {
+		if !c.trusted(ip) {
 			break
 		}
 	}
 	return ip.String()
 }
 
-// rateKey is the bucket a request is limited under: the client's IPv4
+// Key is the bucket a request is limited under: the client's IPv4
 // address, or the /64 holding its IPv6 one. ISPs hand a subscriber a
 // whole /64 (or more), so a bucket per IPv6 address would let one
 // client rotate through 2^64 fresh buckets.
-func (s *Server) rateKey(r *http.Request) string {
-	ip := s.clientIP(r)
+func (c Clients) Key(r *http.Request) string {
+	ip := c.IP(r)
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
 		return ip
@@ -253,14 +280,20 @@ func (s *Server) rateKey(r *http.Request) string {
 	return p.String()
 }
 
-func (s *Server) trustedProxy(ip netip.Addr) bool {
-	for _, p := range s.cfg.TrustedProxies {
+func (c Clients) trusted(ip netip.Addr) bool {
+	for _, p := range c.TrustedProxies {
 		if p.Contains(ip) {
 			return true
 		}
 	}
 	return false
 }
+
+func (s *Server) clients() Clients {
+	return Clients{TrustedProxies: s.cfg.TrustedProxies, Header: s.cfg.ClientIPHeader}
+}
+
+func (s *Server) rateKey(r *http.Request) string { return s.clients().Key(r) }
 
 // guardAdmin requires the configured bearer token, compared in
 // constant time.
@@ -567,6 +600,12 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sendPage(w, r)
+}
+
+// handleConfig tells the web sender who may send and how much.
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-cache")
+	writeJSON(w, http.StatusOK, s.cfg.Policy)
 }
 
 // stateFor maps a registry result to the receiver page's states:

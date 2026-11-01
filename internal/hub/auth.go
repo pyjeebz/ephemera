@@ -15,6 +15,9 @@ type Account struct {
 	// Limits are this sender's caps. Zero fields fall back to the
 	// Bridge's limits, so tiers only set what differs.
 	Limits Limits
+
+	// Guest: no token; the Bridge's Guests policy let it in.
+	Guest bool
 }
 
 // Authenticator decides which senders may announce on this relay.
@@ -53,8 +56,8 @@ func (b *Bridge) authenticate(token string) (Account, error) {
 	return b.Auth.Authenticate(token)
 }
 
-// or fills l's zero fields from fallback.
-func (l Limits) or(fallback Limits) Limits {
+// Or fills l's zero fields from fallback.
+func (l Limits) Or(fallback Limits) Limits {
 	return Limits{
 		MaxTTLSec: cmp.Or(l.MaxTTLSec, fallback.MaxTTLSec),
 		MaxSize:   cmp.Or(l.MaxSize, fallback.MaxSize),

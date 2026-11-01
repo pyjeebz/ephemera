@@ -49,6 +49,11 @@ type serveFlags struct {
 	publicURL  string // base of the links receivers open
 	proxies    string // trusted reverse proxies, comma-separated
 	ipHeader   string // header the proxy puts the client address in
+
+	guests      bool    // senders without a token share as guests
+	guestTTL    int64   // seconds
+	guestSizeMB int64
+	guestStarts float64 // new guest shares per address per hour
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -72,6 +77,10 @@ func runServe(args []string) error {
 	fs.StringVar(&f.publicURL, "public-url", "", "base URL receivers open links under, e.g. https://ephemera.run (default: the address the sender dialed)")
 	fs.StringVar(&f.proxies, "trusted-proxies", "", "comma-separated IPs or CIDRs of reverse proxies in front of the relay; their X-Forwarded-For gives the client IP for rate limits")
 	fs.StringVar(&f.ipHeader, "client-ip-header", "", "header the proxy in front sets to the client IP, e.g. Fly-Client-IP; read only from -trusted-proxies if set, else from every request")
+	fs.BoolVar(&f.guests, "guests", false, "let senders without a token share as guests, under the -guest-* limits")
+	fs.Int64Var(&f.guestTTL, "guest-ttl", 3600, "longest link lifetime a guest may ask for, in seconds")
+	fs.Int64Var(&f.guestSizeMB, "guest-size-mb", 1024, "largest file a guest may share, in MiB")
+	fs.Float64Var(&f.guestStarts, "guest-shares-per-hour", 10, "new shares one guest address may start an hour")
 	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports, account suspensions and (with -upload-gb) uploaded files here across restarts")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -116,6 +125,13 @@ func runServe(args []string) error {
 		Suspensions: suspensions,
 		PublicURL:   strings.TrimSuffix(f.publicURL, "/"),
 	}
+	if f.guests {
+		bridge.Guests = &hub.Guests{
+			Limits: hub.Limits{MaxTTLSec: min(f.guestTTL, f.maxTTL), MaxSize: min(f.guestSizeMB, f.maxSizeMB) << 20},
+			Starts: ratelimit.New(f.guestStarts/3600, max(f.guestStarts, 1)),
+		}
+	}
+	clients := relay.Clients{TrustedProxies: proxies, Header: f.ipHeader}
 
 	// daemon bridge: one WS connection, one share
 	daemonBridge := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +139,7 @@ func runServe(args []string) error {
 		if err != nil {
 			return
 		}
-		bridge.AcceptAt(wsconn.Wrap(c), linkBase(bridge.PublicURL, r))
+		bridge.AcceptFrom(wsconn.Wrap(c), linkBase(bridge.PublicURL, r), clients.Key(r))
 	})
 
 	cachepkg := cachestore.New(f.cacheMB << 20)
@@ -168,6 +184,8 @@ func runServe(args []string) error {
 		Playback:       views,
 		Senders:        senders,
 		FirstBytes:     playback.NewFirstBytes(1000),
+
+		Policy: senderPolicy(bridge, authn),
 
 		Reports:       reports,
 		ReportLimiter: ratelimit.New(1.0/60, 5), // 5 reports, then 1 a minute, per IP
@@ -314,15 +332,38 @@ func localAddr(addr string) bool {
 // start rather than quietly letting anyone share through it.
 func senderAuth(f serveFlags) (hub.Authenticator, error) {
 	switch {
-	case f.tokens != "" && f.open:
-		return nil, errors.New("-tokens and -open are mutually exclusive")
+	case f.open && (f.tokens != "" || f.guests):
+		return nil, errors.New("-open lets anyone share: it doesn't go with -tokens or -guests")
 	case f.tokens != "":
-		return auth.LoadStatic(f.tokens)
+		static, err := auth.LoadStatic(f.tokens)
+		if err != nil {
+			return nil, err
+		}
+		return auth.Chain{static}, nil
+	case f.guests:
+		return auth.Chain{}, nil // no tokens yet: everyone is a guest
 	case f.open:
 		fmt.Fprintln(os.Stderr, "warning: -open: anyone who can reach this relay can share through it")
 		return nil, nil
 	}
-	return nil, errors.New("relay serve needs -tokens <file> (create tokens with `relay token <name>`) or -open to let anyone share")
+	return nil, errors.New("relay serve needs -tokens <file> (create tokens with `relay token <name>`), -guests, or -open to let anyone share")
+}
+
+// senderPolicy describes the bridge's senders for the web page.
+func senderPolicy(b *hub.Bridge, authn hub.Authenticator) relay.SenderPolicy {
+	limits := func(l hub.Limits) relay.Limits {
+		l = l.Or(b.Limits)
+		return relay.Limits{MaxTTLSec: l.TTL(), MaxSize: l.Size()}
+	}
+	p := relay.SenderPolicy{Max: limits(b.Limits)}
+	switch {
+	case authn == nil: // open relay: everyone shares in full
+		p.Guest = &p.Max
+	case b.Guests != nil:
+		g := limits(b.Guests.Limits)
+		p.Guest = &g
+	}
+	return p
 }
 
 // runToken mints a sender token: the token goes to the sender, the

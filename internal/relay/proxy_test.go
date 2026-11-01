@@ -39,7 +39,7 @@ func TestClientIP(t *testing.T) {
 			r.Header.Add("X-Forwarded-For", v)
 		}
 		s := &Server{cfg: ServerConfig{TrustedProxies: tc.trusted}}
-		if got := s.clientIP(r); got != tc.want {
+		if got := s.clients().IP(r); got != tc.want {
 			t.Errorf("%s: clientIP = %q, want %q", name, got, tc.want)
 		}
 	}
@@ -68,7 +68,7 @@ func TestClientIPHeader(t *testing.T) {
 			r.Header.Set("Fly-Client-IP", tc.header)
 		}
 		s := &Server{cfg: ServerConfig{TrustedProxies: tc.trusted, ClientIPHeader: "Fly-Client-IP"}}
-		if got := s.clientIP(r); got != tc.want {
+		if got := s.clients().IP(r); got != tc.want {
 			t.Errorf("%s: clientIP = %q, want %q", name, got, tc.want)
 		}
 	}

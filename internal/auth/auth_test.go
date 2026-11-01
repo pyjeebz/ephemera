@@ -62,3 +62,36 @@ func TestParseStaticRefuses(t *testing.T) {
 		}
 	}
 }
+
+type downAuth struct{}
+
+func (downAuth) Authenticate(string) (hub.Account, error) {
+	return hub.Account{}, errors.New("accounts service unreachable")
+}
+
+// TestChain: the first authenticator that takes a token wins; one
+// that doesn't know it passes it on; an outage stops the chain
+// rather than reading as a refusal; an empty chain knows no token.
+func TestChain(t *testing.T) {
+	alice, bob := NewToken(), NewToken()
+	first, _ := ParseStatic(strings.NewReader("alice " + Hash(alice) + "\n"))
+	second, _ := ParseStatic(strings.NewReader("bob " + Hash(bob) + "\n"))
+	c := Chain{first, second}
+	for token, want := range map[string]string{alice: "alice", bob: "bob"} {
+		if acct, err := c.Authenticate(token); err != nil || acct.Name != want {
+			t.Errorf("Authenticate(%s's token) = %+v, %v", want, acct, err)
+		}
+	}
+	if _, err := c.Authenticate(""); !errors.Is(err, hub.ErrNoToken) {
+		t.Errorf("empty token: %v, want ErrNoToken", err)
+	}
+	if _, err := c.Authenticate(NewToken()); !errors.Is(err, hub.ErrBadToken) {
+		t.Errorf("unknown token: %v, want ErrBadToken", err)
+	}
+	if _, err := (Chain{downAuth{}, second}).Authenticate(bob); err == nil || errors.Is(err, hub.ErrBadToken) {
+		t.Errorf("outage: %v, want a transient error", err)
+	}
+	if _, err := (Chain{}).Authenticate(alice); !errors.Is(err, hub.ErrBadToken) {
+		t.Errorf("empty chain: %v, want ErrBadToken", err)
+	}
+}

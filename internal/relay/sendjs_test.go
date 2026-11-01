@@ -59,6 +59,29 @@ func TestWebAppRoutes(t *testing.T) {
 	}
 }
 
+// TestConfig: /config tells the web sender the relay's policy.
+func TestConfig(t *testing.T) {
+	ts := httptest.NewServer(New(ServerConfig{
+		Registry: share.NewRegistry(time.Hour),
+		Policy:   SenderPolicy{Guest: &Limits{MaxTTLSec: 3600, MaxSize: 1 << 30}, Max: Limits{MaxTTLSec: 86400, MaxSize: 5 << 30}},
+	}))
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	guest, _ := got["guest"].(map[string]any)
+	max, _ := got["max"].(map[string]any)
+	if guest["max_ttl"] != 3600.0 || guest["max_size"] != float64(1<<30) || max["max_ttl"] != 86400.0 {
+		t.Fatalf("/config = %v", got)
+	}
+}
+
 // TestSendJSSpeaksTheProtocol runs the browser sender's protocol code
 // under Node against the Go implementation: the same share id from
 // the same owner key, Go's frames parsed by JavaScript (split at odd

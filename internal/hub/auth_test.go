@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,4 +183,77 @@ func TestAcceptWelcomesWithLink(t *testing.T) {
 	if err != nil || fr.Type != protocol.TWelcome || json.Unmarshal(fr.JSON, &w) != nil || w.Link != "" {
 		t.Fatalf("without a public URL: first frame %+v (%v), want a welcome with no link", fr, err)
 	}
+}
+
+// countStarts allows the first left calls, then refuses.
+type countStarts struct{ left int }
+
+func (c *countStarts) Allow(string) (bool, int, time.Duration) {
+	c.left--
+	return c.left >= 0, max(c.left, 0), 30 * time.Minute
+}
+
+// TestAcceptGuests: with a guest policy, a sender without a token
+// shares under the guest limits, as an account named for its
+// address; a wrong token is still refused, and so is a guest the
+// relay can't place. New shares count against the address; redials
+// don't.
+func TestAcceptGuests(t *testing.T) {
+	reg := share.NewRegistry(time.Hour)
+	starts := &countStarts{left: 1}
+	b := &Bridge{
+		Registry: reg,
+		Auth:     &fakeAuth{accounts: map[string]Account{"good": {Name: "alice"}}},
+		Guests:   &Guests{Limits: Limits{MaxTTLSec: 3600, MaxSize: 1 << 20}, Starts: starts},
+	}
+	guest := protocol.Hello{Version: "0.1"}
+
+	ann := newAnnounce(3600, 1024)
+	conn, _ := announceWith(t, guest, ann)
+	d, err := b.AcceptFrom(conn, "", "203.0.113.7")
+	if err != nil {
+		t.Fatalf("guest within limits: %v", err)
+	}
+	defer d.Close()
+	if info, _, err := reg.Lookup(ann.ShareID); err != nil || info.Account != "guest-203.0.113.7" {
+		t.Fatalf("guest share account = %q (err %v)", info.Account, err)
+	}
+
+	// a redial of the same share isn't a new start
+	conn, _ = announceWith(t, guest, ann)
+	d2, err := b.AcceptFrom(conn, "", "203.0.113.7")
+	if err != nil {
+		t.Fatalf("guest redial: %v", err)
+	}
+	defer d2.Close()
+
+	// a second new share is over the address's allowance
+	conn, daemonR := announceWith(t, guest, newAnnounce(60, 1024))
+	if _, err := b.AcceptFrom(conn, "", "203.0.113.7"); !errors.Is(err, ErrOverLimit) {
+		t.Fatalf("second guest start: %v, want ErrOverLimit", err)
+	}
+	if e := expectRefusal(t, daemonR, "denied"); !strings.Contains(e.Message, "30m0s") || !strings.Contains(e.Message, "sign in") {
+		t.Errorf("start refusal = %q", e.Message)
+	}
+
+	// over the guest limits: refused, with what signing in gets
+	conn, daemonR = announceWith(t, guest, newAnnounce(7200, 1024))
+	if _, err := b.AcceptFrom(conn, "", "198.51.100.1"); !errors.Is(err, ErrOverLimit) {
+		t.Fatalf("guest over ttl: %v, want ErrOverLimit", err)
+	}
+	if e := expectRefusal(t, daemonR, "denied"); !strings.Contains(e.Message, "sign in") {
+		t.Errorf("limit refusal = %q", e.Message)
+	}
+
+	// no address to name the guest by, or a wrong token: refused
+	conn, daemonR = announceWith(t, guest, newAnnounce(60, 1024))
+	if _, err := b.Accept(conn); !errors.Is(err, ErrNoToken) {
+		t.Fatalf("guest without a peer: %v, want ErrNoToken", err)
+	}
+	expectRefusal(t, daemonR, "denied")
+	conn, daemonR = announceWith(t, protocol.Hello{Version: "0.1", Token: "bad"}, newAnnounce(60, 1024))
+	if _, err := b.AcceptFrom(conn, "", "198.51.100.1"); !errors.Is(err, ErrBadToken) {
+		t.Fatalf("wrong token with guests on: %v, want ErrBadToken", err)
+	}
+	expectRefusal(t, daemonR, "denied")
 }

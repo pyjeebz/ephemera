@@ -34,6 +34,8 @@ Without `-public-url`, links use the address the sender dialed, which is right f
 
 A relay started with neither `-tokens` nor `-open` refuses to start. `-open` lets anyone share without a token; use it only on a machine nobody else can reach.
 
+`-guests` lets people share without a token too, but as guests: links up to an hour and files up to 1 GB (`-guest-ttl`, `-guest-size-mb`), and ten new shares an hour from one address (`-guest-shares-per-hour`). It works with or without `-tokens`; senders with a token get the full limits. A guest's account is named for its address (`guest-203.0.113.7`, or the /64 for IPv6), so `ephemera suspend guest-203.0.113.7` stops that address and nobody else.
+
 Senders are held to the relay's limits: `-max-ttl` (seconds, default 86400) and `-max-size-mb` (default 5120). A share over either is refused, and `ephemera send` exits with the reason.
 
 To keep background uploads, give the relay a data directory and a disk budget:
