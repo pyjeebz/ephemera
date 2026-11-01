@@ -25,7 +25,7 @@
 				<span class="drop-icon"><i data-icon="arrow-up"></i></span>
 				<span>
 					<span class="drop-title" id="drop-title">Drop files here</span>
-					<span class="drop-sub">or click to choose · any type, up to 5 GB</span>
+					<span class="drop-sub">or click to choose · any type, up to <span id="max-size">5 GB</span></span>
 				</span>
 				<input type="file" id="files" multiple class="sr-only">
 			</label>
@@ -39,9 +39,10 @@
 					</div>
 				</div>
 				<div class="drop-tools">
-					<button class="btn btn-ghost btn-sm muted" type="button" data-dialog="token-dialog" id="token-btn"><i data-icon="key-round"></i><span id="token-label">Sender token</span></button>
+					<button class="btn btn-ghost btn-sm muted" type="button" id="account-btn"><i data-icon="key-round"></i><span id="account-label">Sign in</span></button>
 				</div>
 			</div>
+			<p class="guest-note" id="guest-note" hidden>Sharing as a guest: links up to <span id="guest-ttl">1 hour</span>, files up to <span id="guest-size">1 GB</span>. <button class="btn-link" type="button" data-signin>Sign in</button> for more.</p>
 		</div>
 
 		<div class="shares" id="shares-box" hidden>
@@ -86,26 +87,41 @@
 </main>
 <footer class="site-footer"></footer>
 
-<dialog class="dialog" id="token-dialog" aria-labelledby="token-title">
-	<form id="token-form">
-		<div class="dialog-header">
-			<span class="dialog-media"><i data-icon="key-round"></i></span>
-			<h2 class="dialog-title" id="token-title">Sender token</h2>
-			<p class="dialog-description">This relay only accepts files from people with a token. It's asked for once and stays in this browser. Viewers never need one.</p>
-		</div>
-		<div class="field" id="token-new">
-			<label class="label" for="token">Token</label>
-			<input class="input mono" id="token" name="token" type="password" autocomplete="off" placeholder="eph_…">
-		</div>
-		<div class="token-saved" id="token-saved" hidden>
+<dialog class="dialog" id="signin-dialog" aria-labelledby="signin-title">
+	<div class="dialog-header">
+		<span class="dialog-media"><i data-icon="key-round"></i></span>
+		<h2 class="dialog-title" id="signin-title">Sign in</h2>
+		<p class="dialog-description" id="signin-text">Sign in to share on this relay. Viewers never need an account.</p>
+	</div>
+	<div class="signin-buttons" id="signin-buttons"></div>
+	<details class="paste-token" id="paste-token">
+		<summary class="sm muted">Have a sender token? Paste it</summary>
+		<form id="token-form" class="paste-form">
+			<input class="input mono" id="token" name="token" type="password" autocomplete="off" placeholder="eph_…" aria-label="Sender token">
+			<button class="btn btn-outline" type="submit" id="token-save" disabled>Save</button>
+		</form>
+	</details>
+	<button class="btn btn-ghost btn-icon-sm dialog-close" type="button" data-close aria-label="Close"><i data-icon="x"></i></button>
+</dialog>
+
+<dialog class="dialog wide" id="account-dialog" aria-labelledby="account-title">
+	<div class="dialog-header">
+		<span class="dialog-media"><i data-icon="key-round"></i></span>
+		<h2 class="dialog-title" id="account-title">Signed in</h2>
+		<p class="dialog-description" id="account-text"></p>
+	</div>
+	<div class="field">
+		<span class="label">Use it in the terminal</span>
+		<p class="sm muted">Run <span class="mono fg">ephemera login</span> and paste your token when it asks. Keep it secret: it sends files as you.</p>
+		<div class="token-saved">
 			<span class="mono muted" id="token-mask"></span>
-			<button class="btn btn-ghost btn-sm" type="button" id="token-forget">Forget</button>
+			<button class="btn btn-outline btn-sm" type="button" id="token-copy"><i data-icon="copy"></i><span data-label="Copy token">Copy token</span></button>
 		</div>
-		<div class="dialog-footer">
-			<button class="btn" type="submit" id="token-save" disabled>Save token</button>
-			<button class="btn btn-outline" type="button" id="token-done" data-close hidden>Done</button>
-		</div>
-	</form>
+	</div>
+	<div class="dialog-footer">
+		<button class="btn btn-ghost" type="button" id="signout">Sign out</button>
+		<button class="btn btn-outline" type="button" data-close>Done</button>
+	</div>
 	<button class="btn btn-ghost btn-icon-sm dialog-close" type="button" data-close aria-label="Close"><i data-icon="x"></i></button>
 </dialog>
 

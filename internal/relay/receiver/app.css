@@ -543,3 +543,13 @@ svg { display: block; flex-shrink: 0; }
 .row-gap { display: inline-flex; align-items: center; gap: 8px; }
 .s96 { width: 96px; height: 96px; } .s56 { width: 56px; height: 56px; } .s48 { width: 48px; height: 48px; }
 .s40 { width: 40px; height: 40px; } .s32 { width: 32px; height: 32px; } .s24 { width: 24px; height: 24px; } .s16 { width: 16px; height: 16px; }
+
+/* sign-in */
+.signin-buttons { display: grid; gap: 8px; }
+.signin-buttons .btn { height: 36px; width: 100%; }
+.paste-token summary { cursor: pointer; width: fit-content; }
+.paste-token summary:hover { color: var(--foreground); }
+.paste-form { display: flex; gap: 8px; margin-top: 12px; }
+.guest-note { margin: 0; padding: 10px 16px; border-top: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 30%, transparent); font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
+.guest-note .btn-link { font: inherit; font-weight: 500; color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
+.toggle-group input:disabled + span { opacity: .4; cursor: not-allowed; background: transparent; }

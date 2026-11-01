@@ -304,7 +304,9 @@ function badge(kind, text) {
 	return b;
 }
 
-const needsToken = (s) => s.state === "refused" && s.refusedCode === "denied" && /token/.test(s.message);
+// needsToken: the relay turned a share away until its sender signs in
+// (no token, or a guest over the guest limits)
+const needsToken = (s) => s.state === "refused" && s.refusedCode === "denied" && /token|sign in/.test(s.message);
 
 // describe says where a share stands: its badge and one line.
 function describe(s) {
@@ -324,9 +326,10 @@ function describe(s) {
 		return ["stored", "On the relay", `Fully uploaded. You can close this tab; the link works until ${untilText(s.deadline)}.`];
 	case "refused":
 		// the relay's reason names the CLI; say what to do here
-		return ["refused", "Not shared", needsToken(s)
-			? "This relay needs a sender token. Add it and the file is sent at once."
-			: `The relay turned it away: ${s.message}.`];
+		if (!needsToken(s)) return ["refused", "Not shared", `The relay turned it away: ${s.message}.`];
+		return ["refused", "Not shared", /token/.test(s.message)
+			? "This relay needs you to sign in. Sign in and the file is sent at once."
+			: `${s.message[0].toUpperCase() + s.message.slice(1)}.`];
 	case "expired":
 		return ["expired", "Expired", "The link expired and the relay deleted its copy."];
 	}
@@ -347,53 +350,176 @@ const CARD = `<div class="share-life" aria-hidden="true"><span></span></div>
 		<button class="btn btn-outline" type="button"><i data-icon="copy"></i><span data-label="Copy">Copy</span></button>
 		<a class="btn btn-outline" target="_blank" rel="noopener" aria-label="Open link page"><i data-icon="arrow-up-right"></i>Open</a>
 	</div>
-	<div><button class="btn btn-sm" type="button" data-dialog="token-dialog" hidden>Add sender token</button></div>
+	<div><button class="btn btn-sm" type="button" data-signin hidden>Sign in</button></div>
 </div>
 <div class="share-foot"><span><i data-icon="timer"></i><span class="share-until"></span></span><span class="mono num share-left"></span></div>`;
 
 function startPage() {
 	const $ = (s, el = document) => el.querySelector(s);
-	const TOKEN_KEY = "ephemera.token";
+	const TOKEN_KEY = "ephemera.token", ACCOUNT_KEY = "ephemera.account";
 	let token = ui.store.get(TOKEN_KEY);
+	let account = ui.store.get(ACCOUNT_KEY); // set when the token came from signing in here
+	let policy = { max: { max_ttl: 86400, max_size: 5 << 30 } }; // until /config says
 	const shares = [];
 	let wakeLock = null;
 
-	// ---- sender token
-	const tokenDialog = $("#token-dialog"), tokenInput = $("#token"), tokenSave = $("#token-save");
-	function showToken() {
-		$("#token-label").textContent = token ? "Token saved" : "Sender token";
-		const dot = $("#token-btn .dot-ok");
-		if (token && !dot) $("#token-btn").append(Object.assign(document.createElement("span"), { className: "dot-ok" }));
+	// ---- who is sending: a guest, a pasted token, or a signed-in account
+
+	const PROVIDERS = { google: "Google", github: "GitHub" };
+	const durationText = (s) => s >= 3600 ? `${s / 3600} hour${s === 3600 ? "" : "s"}` : `${Math.round(s / 60)} minutes`;
+	const limits = () => (!token && policy.guest) || policy.max;
+	// capText says a size cap the way the relay sets it, in binary units:
+	// 5 GiB reads "5 GB", not "5.37 GB"
+	const capText = (n) => {
+		const gb = n / 2 ** 30;
+		return gb >= 1 ? `${+gb.toFixed(1)} GB` : `${Math.round(n / 2 ** 20)} MB`;
+	};
+	// guests get less than a token would: there's a reason to sign in
+	const guestLimited = () => !!policy.guest && (policy.guest.max_ttl < policy.max.max_ttl || policy.guest.max_size < policy.max.max_size);
+	let ttlPicked = false; // the sender chose a lifetime themselves
+
+	// showSender sets everything that depends on who is sending: the
+	// account button, the guest note, the lifetimes on offer, the size
+	// cap.
+	function showSender() {
+		const btn = $("#account-btn");
+		$("#account-label").textContent = token ? (account ? account.replace(/^[a-z]+:/, "") : "Token saved") : "Sign in";
+		const dot = $(".dot-ok", btn);
+		if (token && !dot) btn.append(Object.assign(document.createElement("span"), { className: "dot-ok" }));
 		if (!token && dot) dot.remove();
-		$("#token-new").hidden = !!token;
-		$("#token-saved").hidden = !token;
-		$("#token-mask").textContent = token ? "•••• •••• " + token.slice(-4) : "";
-		tokenSave.hidden = !!token;
-		$("#token-done").hidden = !token;
+
+		// an open relay takes everyone in full: nothing to sign in for
+		btn.hidden = !token && !!policy.guest && !guestLimited() && !policy.sign_in;
+		const guest = !token && policy.guest;
+		$("#guest-note").hidden = !guest || !guestLimited() || !policy.sign_in;
+		if (guest) {
+			$("#guest-ttl").textContent = durationText(policy.guest.max_ttl);
+			$("#guest-size").textContent = capText(policy.guest.max_size);
+		}
+		$("#max-size").textContent = capText(limits().max_size);
+
+		// lifetimes over the cap can't be picked; unless the sender chose
+		// one, offer the longest that can
+		const radios = [...document.querySelectorAll("input[name=ttl]")];
+		for (const r of radios) r.disabled = Number(r.value) > limits().max_ttl;
+		const picked = $("input[name=ttl]:checked");
+		if (!picked || picked.disabled || !ttlPicked) {
+			const ok = radios.filter((r) => !r.disabled);
+			(ok[ok.length - 1] || radios[0]).checked = true;
+		}
 	}
-	tokenDialog.addEventListener("close", () => { tokenInput.value = ""; tokenSave.disabled = true; });
+
+	function setToken(t, name = "") {
+		token = t;
+		account = t ? name : "";
+		// the account first: another tab reads it when the token lands
+		ui.store.set(ACCOUNT_KEY, account);
+		ui.store.set(TOKEN_KEY, token);
+		showSender();
+		// retry the files the relay turned away until the sender signed in
+		if (token) for (const s of shares) if (needsToken(s)) {
+			s.token = token; s.state = "connecting"; s.message = ""; s.dial(); render(s);
+		}
+	}
+
+	// sign-in dialog: a button per provider, and a field for a token
+	// made with `relay token`
+	const signinDialog = $("#signin-dialog"), tokenInput = $("#token"), tokenSave = $("#token-save");
+	function openSignIn() {
+		const providers = policy.sign_in || [];
+		$("#signin-title").textContent = providers.length ? "Sign in" : "Sender token";
+		$("#signin-text").textContent = guestLimited()
+			? `Guests can share files up to ${capText(policy.guest.max_size)}, with links that last ${durationText(policy.guest.max_ttl)}. Sign in for files up to ${capText(policy.max.max_size)} and links up to ${durationText(policy.max.max_ttl)}. Viewers never need an account.`
+			: providers.length
+				? "This relay shares files from people who've signed in. Viewers never need an account."
+				: "This relay only accepts files from people with a token. It's asked for once and stays in this browser. Viewers never need one.";
+		const box = $("#signin-buttons");
+		box.replaceChildren(...providers.map((p) => {
+			const b = Object.assign(document.createElement("button"), { type: "button", className: "btn btn-outline", textContent: `Continue with ${PROVIDERS[p] || p}` });
+			b.onclick = () => signIn(p);
+			return b;
+		}));
+		box.hidden = !providers.length;
+		$("#paste-token").open = !providers.length;
+		signinDialog.showModal();
+	}
+	signinDialog.addEventListener("close", () => { tokenInput.value = ""; tokenSave.disabled = true; });
 	tokenInput.oninput = () => { tokenSave.disabled = !tokenInput.value.trim(); };
 	$("#token-form").onsubmit = (e) => {
 		e.preventDefault();
 		const v = tokenInput.value.trim();
 		if (!v) return;
-		token = v;
-		ui.store.set(TOKEN_KEY, token);
-		tokenDialog.close();
-		showToken();
+		signinDialog.close();
+		setToken(v);
 		ui.toast("Sender token saved in this browser");
-		// retry the files the relay turned away for want of a token
-		for (const s of shares) if (needsToken(s)) {
-			s.token = token; s.state = "connecting"; s.message = ""; s.dial(); render(s);
+	};
+
+	// signIn opens the provider in a popup, so files streaming from this
+	// tab keep going; the popup lands back on this page, claims the
+	// token and stores it, and the storage event brings it here. With
+	// popups blocked, this tab goes instead.
+	function signIn(provider) {
+		const url = `/auth/${provider}`;
+		const popup = open(url, "ephemera-signin", "popup,width=520,height=680");
+		if (!popup) {
+			if (shares.some(inFlight) && !confirm("Signing in leaves this page, and the files streaming from it stop. Sign in anyway?")) return;
+			location.href = url;
+			return;
 		}
+		signinDialog.close();
+	}
+	addEventListener("storage", (e) => {
+		if (e.key !== TOKEN_KEY) return;
+		const name = ui.store.get(ACCOUNT_KEY);
+		setToken(e.newValue || "", name);
+		if (e.newValue) ui.toast(name ? `Signed in as ${name}` : "Sender token saved");
+	});
+
+	// back from the provider: collect the token the relay parked
+	async function claim() {
+		const tag = location.hash.slice(1);
+		if (!/^(signed-in|signin-failed|signin-busy)$/.test(tag)) return;
+		history.replaceState(null, "", location.pathname + location.search);
+		const done = () => { if (opener) { try { close(); } catch {} } };
+		if (tag === "signin-failed") return ui.toast("Sign-in didn't finish", { description: "Nothing was changed. Try again.", kind: "error" });
+		if (tag === "signin-busy") return ui.toast("Too many sign-ins from here", { description: "Try again in a while.", kind: "error" });
+		try {
+			const resp = await fetch("/auth/claim", { method: "POST" });
+			const body = await resp.json();
+			if (!resp.ok) throw new Error(body.error);
+			setToken(body.token, body.name);
+			ui.toast(`Signed in as ${body.name}`, { description: opener ? "You can close this window." : "" });
+			done();
+		} catch (err) {
+			ui.toast("Sign-in didn't finish", { description: String(err.message || err), kind: "error" });
+		}
+	}
+
+	// account dialog: the token for the CLI, and signing out
+	const accountDialog = $("#account-dialog");
+	function openAccount() {
+		$("#account-title").textContent = account ? "Signed in" : "Sender token";
+		$("#account-text").textContent = account
+			? `As ${account}. Your files can be up to ${capText(policy.max.max_size)}, with links up to ${durationText(policy.max.max_ttl)}.`
+			: "This browser has a sender token saved.";
+		$("#token-mask").textContent = "•••• •••• " + token.slice(-4);
+		$("#signout").textContent = account ? "Sign out" : "Forget token";
+		accountDialog.showModal();
+	}
+	$("#token-copy").onclick = (e) => ui.copy(token, e.currentTarget, "Token copied");
+	$("#signout").onclick = async () => {
+		// a token from signing in here is revoked; a pasted one may be in
+		// use elsewhere (the CLI), so it's only forgotten
+		if (account) fetch("/auth/signout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) }).catch(() => {});
+		accountDialog.close();
+		const was = account;
+		setToken("");
+		ui.toast(was ? "Signed out" : "Token forgotten", { kind: "" });
 	};
-	$("#token-forget").onclick = () => {
-		token = "";
-		ui.store.set(TOKEN_KEY, "");
-		showToken();
-		tokenInput.focus();
-		ui.toast("Token forgotten", { kind: "" });
-	};
+
+	$("#account-btn").onclick = () => (token ? openAccount() : openSignIn());
+	for (const r of document.querySelectorAll("input[name=ttl]")) r.addEventListener("change", () => { ttlPicked = true; });
+	document.addEventListener("click", (e) => { if (e.target.closest("[data-signin]")) openSignIn(); });
 
 	// keep the screen (and so the tab) awake while anything still
 	// depends on it
@@ -452,7 +578,7 @@ function startPage() {
 		$("input", linkRow).value = s.link;
 		$("button", linkRow).dataset.copy = s.link;
 		$("a", linkRow).href = s.link || "#";
-		$("[data-dialog]", card).hidden = !needsToken(s);
+		$("[data-signin]", card).hidden = !needsToken(s) || !!token;
 		$(".share-foot", card).hidden = s.state === "refused" || s.state === "expired";
 		$(".share-until", card).textContent = `Expires at ${untilText(s.deadline)}`;
 		tick(s);
@@ -462,6 +588,14 @@ function startPage() {
 	function add(file) {
 		if (file.size === 0) {
 			ui.toast(`${file.name} is empty`, { description: "Empty files can't be shared.", kind: "error" });
+			return;
+		}
+		if (file.size > limits().max_size) {
+			const more = !token && policy.guest && policy.sign_in && file.size <= policy.max.max_size;
+			ui.toast(`${file.name} is too big`, {
+				description: `${!token && policy.guest ? "Guests can share" : "This relay takes"} files up to ${capText(limits().max_size)}.${more ? " Sign in to share it." : ""}`,
+				kind: "error",
+			});
 			return;
 		}
 		const card = document.createElement("div");
@@ -506,7 +640,9 @@ function startPage() {
 		if (shares.some((s) => s.state === "live" || (s.state === "connecting" && s.link))) e.preventDefault();
 	});
 
-	showToken();
+	showSender();
+	fetch("/config").then((r) => r.json()).then((p) => { policy = p; showSender(); }).catch(() => {});
+	claim();
 }
 
 if (typeof document !== "undefined") startPage();
