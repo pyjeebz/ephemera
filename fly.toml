@@ -20,8 +20,13 @@ primary_region = "yyz"
     -public-url https://ephemera.run \
     -client-ip-header Fly-Client-IP \
     -tokens /etc/ephemera/tokens.txt -guests \
+    -google-client-id 600565320806-510ekgts94bfcp30aoeluiid8pgtp4jj.apps.googleusercontent.com \
+    -github-client-id Ov23liOcqPTlfUOgOdRL \
     -data-dir /data -upload-gb 8 \
     -cache-mb 192 -away-mb 384"""
+
+# sign-in: the client ids above are public; their secrets are Fly
+# secrets EPHEMERA_GOOGLE_SECRET and EPHEMERA_GITHUB_SECRET
 
 [[files]]
   # base64 of the file `relay token` writes (Fly needs secret files
