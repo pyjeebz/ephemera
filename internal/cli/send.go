@@ -9,12 +9,34 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"ephemera.run/ephemera/internal/daemon"
 )
+
+// publicRelay is the relay commands talk to unless told otherwise.
+const publicRelay = "ephemera.run"
+
+// defaultRelay is publicRelay, or EPHEMERA_RELAY when it's set: a host
+// (a bare host means wss://host/daemon) or a full endpoint.
+func defaultRelay() string { return cmp.Or(os.Getenv("EPHEMERA_RELAY"), publicRelay) }
+
+// relayBase turns a relay as senders name it (ephemera.run,
+// wss://host/daemon) into the base URL of its HTTP API.
+func relayBase(relay string) string {
+	switch {
+	case strings.HasPrefix(relay, "wss://"):
+		relay = "https://" + strings.TrimPrefix(relay, "wss://")
+	case strings.HasPrefix(relay, "ws://"):
+		relay = "http://" + strings.TrimPrefix(relay, "ws://")
+	case !strings.Contains(relay, "://"):
+		relay = "https://" + relay
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(relay, "/"), "/daemon")
+}
 
 // stateDir is where active-share records live, so `ephemera resume`
 // can restart them after a reboot or crash.
@@ -78,7 +100,7 @@ func runSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var f sendFlags
-	fs.StringVar(&f.relay, "relay", "ws://localhost:7100/daemon", "relay endpoint (wss://host/daemon; ws:// and tcp:// only to this machine)")
+	fs.StringVar(&f.relay, "relay", defaultRelay(), "relay: a host like ephemera.run, or wss://host/daemon (ws:// and tcp:// only to this machine); default EPHEMERA_RELAY or ephemera.run")
 	fs.Int64Var(&f.ttl, "ttl", 3600, "link lifetime in seconds")
 	fs.BoolVar(&f.cache, "cache", false, "let the relay replay already-watched bytes from RAM while you're offline")
 	fs.BoolVar(&f.upload, "upload", true, "upload the whole file to the relay in the background, so the link keeps working after you go offline (-upload=false: stream from this machine only)")
@@ -120,7 +142,7 @@ const jsonUsage = "print JSON events on stdout, one per line (link, upload, uplo
 func runResume(args []string) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	relay := fs.String("relay", "ws://localhost:7100/daemon", "relay endpoint")
+	relay := fs.String("relay", defaultRelay(), "relay (default EPHEMERA_RELAY or ephemera.run)")
 	asJSON := fs.Bool("json", false, jsonUsage)
 	insecure := fs.Bool("insecure", false, insecureUsage)
 	if err := parse(fs, args); err != nil {

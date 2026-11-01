@@ -115,3 +115,26 @@ func TestSignInServer(t *testing.T) {
 		t.Errorf("policy %+v", p)
 	}
 }
+
+// TestDefaultRelay: commands talk to ephemera.run unless EPHEMERA_RELAY
+// names another relay; the admin API's base follows from either form.
+func TestDefaultRelay(t *testing.T) {
+	t.Setenv("EPHEMERA_RELAY", "")
+	if got := defaultRelay(); got != "ephemera.run" {
+		t.Errorf("default relay %q", got)
+	}
+	t.Setenv("EPHEMERA_RELAY", "ws://localhost:7100/daemon")
+	if got := defaultRelay(); got != "ws://localhost:7100/daemon" {
+		t.Errorf("EPHEMERA_RELAY ignored: %q", got)
+	}
+	for in, want := range map[string]string{
+		"ephemera.run":               "https://ephemera.run",
+		"wss://relay.example/daemon": "https://relay.example",
+		"ws://localhost:7100/daemon": "http://localhost:7100",
+		"http://localhost:7100/":     "http://localhost:7100",
+	} {
+		if got := relayBase(in); got != want {
+			t.Errorf("relayBase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -26,7 +26,7 @@ type adminClient struct {
 // adminFlags registers the flags every admin command shares and
 // returns a constructor to call after parsing.
 func adminFlags(fs *flag.FlagSet) func() (adminClient, error) {
-	relay := fs.String("relay", "http://localhost:7100", "relay base URL")
+	relay := fs.String("relay", relayBase(defaultRelay()), "relay base URL (default from EPHEMERA_RELAY, else https://ephemera.run)")
 	token := fs.String("token", os.Getenv("EPHEMERA_ADMIN_TOKEN"), "admin token (or EPHEMERA_ADMIN_TOKEN)")
 	insecure := fs.Bool("insecure", false, "allow plain http to a relay off this machine (your admin token travels unencrypted)")
 	return func() (adminClient, error) {

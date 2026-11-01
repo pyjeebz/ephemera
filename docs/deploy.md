@@ -110,7 +110,7 @@ From your laptop:
 
 ```bash
 ephemera login                                  # paste the sender token
-ephemera send -relay ephemera.run clip.mp4      # a bare host means wss://ephemera.run/daemon
+ephemera send clip.mp4                          # ephemera.run is the default relay (EPHEMERA_RELAY or -relay to change it; a bare host means wss://host/daemon)
 # prints https://ephemera.run/<id>
 ```
 
