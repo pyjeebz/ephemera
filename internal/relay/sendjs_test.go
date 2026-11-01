@@ -38,6 +38,23 @@ func TestWebAppRoutes(t *testing.T) {
 			t.Errorf("%s: CSP %q", path, csp)
 		}
 	}
+
+	// unchanged since last time: 304, nothing resent
+	resp, err := http.Get(ts.URL + "/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	req, _ := http.NewRequest("GET", ts.URL+"/app.css", nil)
+	req.Header.Set("If-None-Match", resp.Header.Get("ETag"))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get("ETag") == "" || resp.StatusCode != http.StatusNotModified {
+		t.Errorf("revalidating /app.css: %d, ETag %q", resp.StatusCode, resp.Header.Get("ETag"))
+	}
 }
 
 // TestSendJSSpeaksTheProtocol runs the browser sender's protocol code

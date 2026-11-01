@@ -20,8 +20,10 @@
 package relay
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -513,10 +515,13 @@ const appCSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect
 const viewCSP = appCSP + "; media-src 'self'"
 
 // asset serves one embedded file of the relay's web app. Browsers
-// revalidate each time, so a deploy reaches them at once.
+// revalidate each time, so a deploy reaches them at once; the ETag
+// lets an unchanged file answer 304 instead of resending it.
 func asset(name, ctype string) http.HandlerFunc {
+	body, err := receiverFS.ReadFile("receiver/" + name)
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := receiverFS.ReadFile("receiver/" + name)
 		if err != nil {
 			http.Error(w, name+" missing", http.StatusInternalServerError)
 			return
@@ -524,8 +529,13 @@ func asset(name, ctype string) http.HandlerFunc {
 		h := w.Header()
 		h.Set("Content-Type", ctype)
 		h.Set("Cache-Control", "no-cache")
+		h.Set("ETag", etag)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Content-Security-Policy", appCSP)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.Write(body)
 	}
 }
