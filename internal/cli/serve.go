@@ -27,6 +27,7 @@ import (
 	"ephemera.run/ephemera/internal/ratelimit"
 	"ephemera.run/ephemera/internal/relay"
 	"ephemera.run/ephemera/internal/share"
+	"ephemera.run/ephemera/internal/signin"
 	"ephemera.run/ephemera/internal/upload"
 	"ephemera.run/ephemera/internal/wsconn"
 )
@@ -50,10 +51,13 @@ type serveFlags struct {
 	proxies    string // trusted reverse proxies, comma-separated
 	ipHeader   string // header the proxy puts the client address in
 
-	guests      bool    // senders without a token share as guests
-	guestTTL    int64   // seconds
+	guests      bool  // senders without a token share as guests
+	guestTTL    int64 // seconds
 	guestSizeMB int64
 	guestStarts float64 // new guest shares per address per hour
+
+	githubID string // GitHub OAuth app; its secret is in EPHEMERA_GITHUB_SECRET
+	googleID string // Google OAuth client; its secret is in EPHEMERA_GOOGLE_SECRET
 }
 
 // runServe is the relay binary's main: receiver-facing HTTP surface
@@ -81,6 +85,8 @@ func runServe(args []string) error {
 	fs.Int64Var(&f.guestTTL, "guest-ttl", 3600, "longest link lifetime a guest may ask for, in seconds")
 	fs.Int64Var(&f.guestSizeMB, "guest-size-mb", 1024, "largest file a guest may share, in MiB")
 	fs.Float64Var(&f.guestStarts, "guest-shares-per-hour", 10, "new shares one guest address may start an hour")
+	fs.StringVar(&f.githubID, "github-client-id", "", "let people sign in with GitHub for a sender token: the OAuth app's client id (secret in EPHEMERA_GITHUB_SECRET; callback <public-url>/auth/github/callback)")
+	fs.StringVar(&f.googleID, "google-client-id", "", "let people sign in with Google for a sender token: the OAuth client id (secret in EPHEMERA_GOOGLE_SECRET; callback <public-url>/auth/google/callback)")
 	fs.StringVar(&f.dataDir, "data-dir", "", "keep link reports, account suspensions and (with -upload-gb) uploaded files here across restarts")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -99,7 +105,11 @@ func runServe(args []string) error {
 		// raw framed TCP is plaintext: tokens and owner keys in the clear
 		return fmt.Errorf("-tcp %s: the raw TCP listener is plaintext and may only listen on this machine", f.tcp)
 	}
-	authn, err := senderAuth(f)
+	signIn, accounts, err := signInServer(f, proxies)
+	if err != nil {
+		return err
+	}
+	authn, err := senderAuth(f, accounts)
 	if err != nil {
 		return err
 	}
@@ -185,7 +195,7 @@ func runServe(args []string) error {
 		Senders:        senders,
 		FirstBytes:     playback.NewFirstBytes(1000),
 
-		Policy: senderPolicy(bridge, authn),
+		Policy: senderPolicy(bridge, authn, signIn),
 
 		Reports:       reports,
 		ReportLimiter: ratelimit.New(1.0/60, 5), // 5 reports, then 1 a minute, per IP
@@ -195,6 +205,9 @@ func runServe(args []string) error {
 	mux := http.NewServeMux()
 	mux.Handle("/daemon", daemonBridge)
 	mux.Handle("/", surface)
+	if signIn != nil {
+		mux.Handle("/auth/", signIn.Handler())
+	}
 
 	if f.tcp != "" {
 		ln, err := net.Listen("tcp", f.tcp)
@@ -327,35 +340,93 @@ func localAddr(addr string) bool {
 	return err == nil && host != "" && daemon.IsLocalHost(host)
 }
 
-// senderAuth picks the relay's sender authentication. Secure by
-// default: a relay with neither a tokens file nor -open refuses to
-// start rather than quietly letting anyone share through it.
-func senderAuth(f serveFlags) (hub.Authenticator, error) {
-	switch {
-	case f.open && (f.tokens != "" || f.guests):
-		return nil, errors.New("-open lets anyone share: it doesn't go with -tokens or -guests")
-	case f.tokens != "":
+// senderAuth picks the relay's sender authentication: tokens from the
+// tokens file, then those minted by web sign-in (accounts, may be
+// nil). Secure by default: a relay with no way to tell senders apart
+// and no -open refuses to start rather than quietly letting anyone
+// share through it.
+func senderAuth(f serveFlags, accounts *auth.Accounts) (hub.Authenticator, error) {
+	if f.open {
+		if f.tokens != "" || f.guests {
+			return nil, errors.New("-open lets anyone share: it doesn't go with -tokens or -guests")
+		}
+		fmt.Fprintln(os.Stderr, "warning: -open: anyone who can reach this relay can share through it")
+		return nil, nil
+	}
+	chain := auth.Chain{}
+	if f.tokens != "" {
 		static, err := auth.LoadStatic(f.tokens)
 		if err != nil {
 			return nil, err
 		}
-		return auth.Chain{static}, nil
-	case f.guests:
-		return auth.Chain{}, nil // no tokens yet: everyone is a guest
-	case f.open:
-		fmt.Fprintln(os.Stderr, "warning: -open: anyone who can reach this relay can share through it")
-		return nil, nil
+		chain = append(chain, static)
 	}
-	return nil, errors.New("relay serve needs -tokens <file> (create tokens with `relay token <name>`), -guests, or -open to let anyone share")
+	if accounts != nil {
+		chain = append(chain, accounts)
+	}
+	if len(chain) == 0 && !f.guests {
+		return nil, errors.New("relay serve needs -tokens <file> (create tokens with `relay token <name>`), sign-in (-google-client-id, -github-client-id), -guests, or -open to let anyone share")
+	}
+	return chain, nil // empty with -guests: everyone is a guest
+}
+
+// signInServer sets up web sign-in for the providers configured, or
+// returns nil when there are none. Accounts made by signing in live
+// in -data-dir; links to the callback need -public-url.
+func signInServer(f serveFlags, proxies []netip.Prefix) (*signin.Server, *auth.Accounts, error) {
+	var providers []signin.Provider
+	for _, p := range []struct{ name, id, env string }{
+		{"google", f.googleID, "EPHEMERA_GOOGLE_SECRET"},
+		{"github", f.githubID, "EPHEMERA_GITHUB_SECRET"},
+	} {
+		if p.id == "" {
+			continue
+		}
+		secret := os.Getenv(p.env)
+		if secret == "" {
+			return nil, nil, fmt.Errorf("-%s-client-id needs the client secret in %s", p.name, p.env)
+		}
+		if p.name == "google" {
+			providers = append(providers, signin.Google(p.id, secret))
+		} else {
+			providers = append(providers, signin.GitHub(p.id, secret))
+		}
+	}
+	if len(providers) == 0 {
+		return nil, nil, nil
+	}
+	switch {
+	case f.open:
+		return nil, nil, errors.New("-open lets anyone share: there's nothing to sign in for")
+	case f.dataDir == "":
+		return nil, nil, errors.New("sign-in needs -data-dir: accounts are kept there")
+	case f.publicURL == "":
+		return nil, nil, errors.New("sign-in needs -public-url: the providers send people back to it")
+	}
+	accounts, err := auth.OpenAccounts(filepath.Join(f.dataDir, "accounts.json"))
+	if err != nil {
+		return nil, nil, err
+	}
+	clients := relay.Clients{TrustedProxies: proxies, Header: f.ipHeader}
+	return &signin.Server{
+		Providers: providers,
+		Accounts:  accounts,
+		BaseURL:   f.publicURL,
+		Limit:     ratelimit.New(10.0/3600, 10), // 10 sign-ins an hour per address
+		Client:    clients.Key,
+	}, accounts, nil
 }
 
 // senderPolicy describes the bridge's senders for the web page.
-func senderPolicy(b *hub.Bridge, authn hub.Authenticator) relay.SenderPolicy {
+func senderPolicy(b *hub.Bridge, authn hub.Authenticator, signIn *signin.Server) relay.SenderPolicy {
 	limits := func(l hub.Limits) relay.Limits {
 		l = l.Or(b.Limits)
 		return relay.Limits{MaxTTLSec: l.TTL(), MaxSize: l.Size()}
 	}
 	p := relay.SenderPolicy{Max: limits(b.Limits)}
+	if signIn != nil {
+		p.SignIn = signIn.Names()
+	}
 	switch {
 	case authn == nil: // open relay: everyone shares in full
 		p.Guest = &p.Max

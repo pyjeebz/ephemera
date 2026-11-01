@@ -36,6 +36,20 @@ A relay started with neither `-tokens` nor `-open` refuses to start. `-open` let
 
 `-guests` lets people share without a token too, but as guests: links up to an hour and files up to 1 GB (`-guest-ttl`, `-guest-size-mb`), and ten new shares an hour from one address (`-guest-shares-per-hour`). It works with or without `-tokens`; senders with a token get the full limits. A guest's account is named for its address (`guest-203.0.113.7`, or the /64 for IPv6), so `ephemera suspend guest-203.0.113.7` stops that address and nobody else.
 
+People can also get a token without the terminal, by signing in with Google or GitHub on the relay's home page. Each provider needs an OAuth app whose callback is `<public-url>/auth/<provider>/callback`:
+
+- **Google**: in the Google Cloud console, APIs & Services → Credentials → Create OAuth client ID → Web application. Authorised redirect URI `https://ephemera.run/auth/google/callback`. The consent screen only needs the `openid` and `email` scopes.
+- **GitHub**: Settings → Developer settings → OAuth Apps → New OAuth App. Authorization callback URL `https://ephemera.run/auth/github/callback`. It asks for no scopes.
+
+Pass the client ids as flags and the secrets in the environment:
+
+```bash
+EPHEMERA_GOOGLE_SECRET=... EPHEMERA_GITHUB_SECRET=... ./bin/relay serve -public-url https://ephemera.run -data-dir ./relay-data \
+  -google-client-id 1234.apps.googleusercontent.com -github-client-id Iv1.abcd -guests
+```
+
+Sign-in needs `-public-url` (the providers send people back to it) and `-data-dir` (accounts go in `accounts.json` there, holding token hashes, never tokens). Each sign-in mints a new token; an account keeps its five newest. An account is named for the provider and the login or email it first signed in with (`github:octocat`, `google:alice@example.com`), which is the name `ephemera suspend` takes. Ten sign-ins an hour per address.
+
 Senders are held to the relay's limits: `-max-ttl` (seconds, default 86400) and `-max-size-mb` (default 5120). A share over either is refused, and `ephemera send` exits with the reason.
 
 To keep background uploads, give the relay a data directory and a disk budget:
