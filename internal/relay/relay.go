@@ -137,10 +137,16 @@ func New(cfg ServerConfig) http.Handler {
 	s := &Server{cfg: cfg}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleRoot)
-	mux.HandleFunc("GET /send", asset("send.html", "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /send", sendPage)
 	mux.HandleFunc("GET /send.js", asset("send.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /app.css", asset("app.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /ui.js", asset("ui.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /view.js", asset("view.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /brand", asset("brand.html", "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /brand.js", asset("brand.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /favicon.svg", asset("favicon.svg", "image/svg+xml"))
+	mux.HandleFunc("GET /fonts/geist.woff2", asset("fonts/geist.woff2", "font/woff2"))
+	mux.HandleFunc("GET /fonts/geist-mono.woff2", asset("fonts/geist-mono.woff2", "font/woff2"))
 	mux.HandleFunc("GET /{id}", s.handlePage)
 	mux.HandleFunc("GET /{id}/file", s.handleFile)
 	mux.HandleFunc("GET /{id}/status", s.handleStatus)
@@ -507,9 +513,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // appCSP is the content policy for the relay's own pages: their own
-// script and stylesheet only, connections only back to this relay.
-// The browser sender holds a sender token, so nothing else may run.
-const appCSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+// scripts, stylesheet and fonts only, connections only back to this
+// relay. The browser sender holds a sender token, so nothing else may
+// run.
+const appCSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+// iconCSP lets the favicon's own <style> pick its colour for the
+// system theme, and nothing else.
+const iconCSP = "default-src 'none'; style-src 'unsafe-inline'"
 
 // viewCSP is appCSP for the link page, which also plays the file.
 const viewCSP = appCSP + "; media-src 'self'"
@@ -521,6 +532,10 @@ func asset(name, ctype string) http.HandlerFunc {
 	body, err := receiverFS.ReadFile("receiver/" + name)
 	sum := sha256.Sum256(body)
 	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	csp := appCSP
+	if strings.HasPrefix(ctype, "image/svg") {
+		csp = iconCSP
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			http.Error(w, name+" missing", http.StatusInternalServerError)
@@ -531,7 +546,7 @@ func asset(name, ctype string) http.HandlerFunc {
 		h.Set("Cache-Control", "no-cache")
 		h.Set("ETag", etag)
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Content-Security-Policy", appCSP)
+		h.Set("Content-Security-Policy", csp)
 		if r.Header.Get("If-None-Match") == etag {
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -540,6 +555,10 @@ func asset(name, ctype string) http.HandlerFunc {
 	}
 }
 
+// sendPage is the home page: drop a file, get a link. /send serves it
+// too, for links to it from before it moved.
+var sendPage = asset("send.html", "text/html; charset=utf-8")
+
 // handleRoot serves the relay's home page. "GET /" is also the mux's
 // catch-all, so anything else that reaches it is a 404.
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -547,13 +566,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	page, err := receiverFS.ReadFile("receiver/home.html")
-	if err != nil {
-		http.Error(w, "home page missing", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(page)
+	sendPage(w, r)
 }
 
 // stateFor maps a registry result to the receiver page's states:
@@ -598,19 +611,9 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	st := s.lookupState(id)
 
-	switch st.state {
-	case "gone":
-		http.NotFound(w, r)
-		return
-	case "expired":
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusGone)
-		fmt.Fprintln(w, `<!doctype html><title>Expired — Ephemera</title>
-<p>This link has expired. Ephemera links leave no trace.</p>`)
-		return
-	}
-
-	// live / available / offline: serve the receiver app; it polls /status
+	// every state serves the receiver app; it polls /status and shows
+	// what it finds, an expired or unknown link included. The status
+	// code still says which.
 	page, err := receiverFS.ReadFile("receiver/index.html")
 	if err != nil {
 		http.Error(w, "receiver page missing", http.StatusInternalServerError)
@@ -619,6 +622,12 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Security-Policy", viewCSP)
+	switch st.state {
+	case "gone":
+		w.WriteHeader(http.StatusNotFound)
+	case "expired":
+		w.WriteHeader(http.StatusGone)
+	}
 	w.Write(page)
 }
 

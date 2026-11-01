@@ -366,8 +366,8 @@ func serveReads(conn io.ReadWriter, body []byte) {
 	}
 }
 
-// TestRootAndUnknownPaths: / says what the server is; deeper unknown
-// paths 404 rather than falling into the catch-all.
+// TestRootAndUnknownPaths: / is the send page; deeper unknown paths
+// 404 rather than falling into the catch-all.
 func TestRootAndUnknownPaths(t *testing.T) {
 	srv, _ := newTestServer(t, []byte("abc"), true)
 	ts := httptest.NewServer(srv)
@@ -379,7 +379,7 @@ func TestRootAndUnknownPaths(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "Ephemera relay") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "/send.js") {
 		t.Fatalf("GET /: %d %q", resp.StatusCode, body)
 	}
 	for _, path := range []string{"/a/b", "/a/b/c", "/x/file/extra"} {

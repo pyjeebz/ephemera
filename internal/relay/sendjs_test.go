@@ -18,13 +18,15 @@ import (
 	"ephemera.run/ephemera/internal/share"
 )
 
-// TestWebAppRoutes: the browser sender's page, script and stylesheet
+// TestWebAppRoutes: the web app's pages, scripts, stylesheet and fonts
 // are served with their types and a policy that lets nothing else run.
 func TestWebAppRoutes(t *testing.T) {
 	ts := httptest.NewServer(New(ServerConfig{Registry: share.NewRegistry(time.Hour)}))
 	defer ts.Close()
 	for path, ctype := range map[string]string{
-		"/send": "text/html", "/send.js": "text/javascript", "/app.css": "text/css", "/view.js": "text/javascript",
+		"/": "text/html", "/send": "text/html", "/send.js": "text/javascript", "/ui.js": "text/javascript",
+		"/app.css": "text/css", "/view.js": "text/javascript", "/brand": "text/html", "/brand.js": "text/javascript",
+		"/fonts/geist.woff2": "font/woff2", "/fonts/geist-mono.woff2": "font/woff2",
 	} {
 		resp, err := http.Get(ts.URL + path)
 		if err != nil {

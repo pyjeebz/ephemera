@@ -92,7 +92,7 @@ The sender connects to the relay on `127.0.0.1`: plaintext is only allowed to th
 
 ### Or send from a browser
 
-Open `http://192.168.1.42:7100/send` (any relay serves it) and drop a file. The tab does what `ephemera send` does: the link appears at once and streams from the tab while the file uploads, and the page says when the tab can close. On a relay with `-tokens`, the page asks for a sender token once and keeps it in that browser. Browsers only allow the page's crypto on HTTPS or `localhost`, so use a TLS relay (or a tunnel) when testing from another device.
+Open `http://192.168.1.42:7100/` (any relay serves the sender on its home page, and at `/send`) and drop a file. The tab does what `ephemera send` does: the link appears at once and streams from the tab while the file uploads, and the page says when the tab can close. On a relay with `-tokens`, the page asks for a sender token once and keeps it in that browser. Browsers only allow the page's crypto on HTTPS or `localhost`, so use a TLS relay (or a tunnel) when testing from another device.
 
 ## 4. Open the link on another device
 

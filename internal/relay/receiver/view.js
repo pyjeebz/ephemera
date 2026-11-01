@@ -6,15 +6,21 @@
 (() => {
 	const id = location.pathname.split("/").filter(Boolean)[0] || "";
 	const $ = (s) => document.querySelector(s);
-	const nameEl = $("#name"), metaEl = $("#meta"), stateEl = $("#state"), expiryEl = $("#expiry"), heroEl = $("#hero");
-	const actionsEl = $("#actions"), downloadEl = $("#download");
+	const nameEl = $("#name"), metaEl = $("#meta"), badgeEl = $("#badge"), stateEl = $("#state"), stageEl = $("#stage");
+	const downloadEl = $("#download"), copyEl = $("#copy");
 
 	const STREAMABLE = ["video/mp4", "video/webm", "video/quicktime", "audio/mpeg", "audio/mp4", "audio/wav"];
+	// link lifetimes the web sender offers: the time-left bar measures
+	// against the shortest one that covers what's left, since the relay
+	// only knows when a link ends (a redial restarts its clock)
+	const LIFETIMES = [3600, 21600, 86400];
 
-	let hero = ""; // "video" | "file" | ""
+	let stage = "";        // what the stage shows: "player", "replay", "waiting", "watching", "none"
 	let countdownTimer = null;
 	let lastState = "";
 	let pollFast = false;
+	let watching = false;  // "tell me when it's back" was pressed
+	let lifetime = 0;
 
 	function sizeText(n) {
 		if (n < 1e6) return (n / 1e3).toFixed(0) + " KB";
@@ -27,114 +33,196 @@
 		const [kind, sub] = mime.split(";")[0].split("/");
 		if (["video", "audio", "image"].includes(kind)) return `${sub.toUpperCase()} ${kind}`;
 		if (mime === "application/pdf") return "PDF";
+		if (mime === "application/octet-stream") return "File";
 		return mime.split(";")[0];
+	}
+
+	function leftText(s) {
+		const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+		if (h) return `${h}h ${m}m`;
+		if (m) return `${m}m ${Math.floor(s % 60)}s`;
+		return `${Math.floor(s)}s`;
 	}
 
 	function showExpiry(expires) {
 		if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
-		if (!expires) { expiryEl.textContent = ""; return; }
+		$("#life").hidden = !expires;
+		if (!expires) return;
 		const tick = () => {
 			const left = expires - Date.now() / 1000;
-			if (left <= 0) { expiryEl.textContent = ""; poll(); return; }
-			const h = Math.floor(left / 3600), m = Math.floor(left % 3600 / 60), s = Math.floor(left % 60);
-			expiryEl.textContent = `The link expires in ${h ? `${h}h ` : ""}${m}m ${h ? "" : `${s}s`}`.trim() + ". After that, nothing is left.";
+			if (left <= 0) { clearInterval(countdownTimer); countdownTimer = null; poll(); return; }
+			if (!lifetime) lifetime = LIFETIMES.find((t) => t >= left) || left;
+			const pct = Math.round(100 * Math.min(1, left / lifetime));
+			$("#left").textContent = leftText(left);
+			$("#life-pct").textContent = pct + "%";
+			const bar = $("#life .progress");
+			bar.firstElementChild.style.transform = `scaleX(${pct / 100})`;
+			bar.setAttribute("aria-valuenow", pct);
 		};
 		tick();
 		countdownTimer = setInterval(tick, 1000);
 	}
 
-	function setActions(st, show) {
-		actionsEl.hidden = !show;
-		if (!show) return;
-		downloadEl.href = `/${id}/file`;
-		downloadEl.download = st.name || id;
+	function badge(st) {
+		const b = document.createElement("span");
+		if (st.state === "live") {
+			b.className = "badge badge-live";
+			b.append(Object.assign(document.createElement("span"), { className: "dot" }), "Live");
+		} else if (st.state === "available") {
+			b.className = "badge badge-secondary";
+			b.append(ui.icon("check"), "Ready");
+		} else {
+			b.className = "badge badge-warning";
+			b.append(ui.icon("wifi-off"), "Sender offline");
+		}
+		return b;
 	}
 
-	function player() {
-		const v = document.createElement("video");
+	function canDownload(st, on) {
+		downloadEl.setAttribute("aria-disabled", String(!on));
+		if (on) {
+			downloadEl.href = `/${id}/file`;
+			downloadEl.download = st.name || id;
+		} else {
+			downloadEl.removeAttribute("href");
+		}
+	}
+
+	function player(mime) {
+		const v = document.createElement(mime.startsWith("audio/") ? "audio" : "video");
 		v.controls = true;
 		v.playsInline = true;
+		v.preload = "metadata";
 		watch(v);
 		v.src = `/${id}/file`;
 		return v;
 	}
 
+	// empty fills the stage with a message: an icon, a title, a line
+	// and maybe a button.
+	function empty(iconName, title, text, button) {
+		const box = Object.assign(document.createElement("div"), { className: "empty" });
+		const head = Object.assign(document.createElement("div"), { className: "empty-header" });
+		const media = Object.assign(document.createElement("div"), { className: "empty-media" });
+		media.append(ui.icon(iconName));
+		head.append(media,
+			Object.assign(document.createElement("div"), { className: "empty-title", textContent: title }),
+			Object.assign(document.createElement("div"), { className: "empty-description", textContent: text }));
+		box.append(head);
+		if (button) box.append(button);
+		return box;
+	}
+
+	function button(iconName, text, cls = "btn") {
+		const b = Object.assign(document.createElement("button"), { type: "button", className: cls });
+		b.append(ui.icon(iconName), text);
+		return b;
+	}
+
+	// setStage swaps what the stage shows, but only when that changes:
+	// a playing video survives every poll.
+	function setStage(kind, make) {
+		if (stage === kind) return;
+		stage = kind;
+		stageEl.replaceChildren(make());
+	}
+
 	function render(st) {
+		if (st.state === "expired" || st.state === "gone") return gone(st.state);
 		if (st.name) {
 			nameEl.textContent = st.name;
 			document.title = `${st.name} · Ephemera`;
 			metaEl.textContent = [sizeText(st.size), typeText(st.mime)].filter(Boolean).join(" · ");
 		}
-		stateEl.className = "state";
-		switch (st.state) {
-		case "live":
-		case "available": {
+		badgeEl.replaceChildren(badge(st));
+		showExpiry(st.expires);
+		const playable = STREAMABLE.includes(st.mime);
+
+		if (st.state === "live" || st.state === "available") {
 			if (st.state === "available") {
-				stateEl.className = "state ok";
-				stateEl.textContent = "Ready. The whole file is here, even if the sender goes offline.";
+				stateEl.textContent = "The whole file is here, even if the sender goes offline.";
 			} else {
 				const pct = st.upload && st.size ? Math.floor(100 * (st.uploaded || 0) / st.size) : -1;
 				stateEl.textContent = "Streaming live from the sender's device" + (pct >= 0 ? ` · ${pct}% uploaded` : "") + ".";
 			}
-			showExpiry(st.expires);
-			setActions(st, true);
-			if (!hero && STREAMABLE.includes(st.mime)) {
-				hero = "video";
-				const v = player();
-				v.onerror = () => { hero = "file"; heroEl.replaceChildren(); };
-				heroEl.replaceChildren(v);
-			} else if (!hero) {
-				hero = "file"; // not playable here: the download button is the way in
+			canDownload(st, true);
+			if (watching) {
+				watching = false;
+				ui.toast("The sender is back", { description: "The file streams again." });
 			}
-			break;
-		}
-		case "offline":
-			hero = "";
-			heroEl.replaceChildren();
-			setActions(st, false);
-			showExpiry(st.expires);
-			stateEl.className = "state warn";
-			if (st.replay) {
-				stateEl.textContent = "The sender is offline, but the parts already watched replay from memory.";
-				const a = Object.assign(document.createElement("a"), { className: "btn", href: `/${id}/file`, textContent: "Replay what's cached" });
-				a.download = (st.name || id) + " (replay)";
-				heroEl.replaceChildren(a);
-			} else if (st.prefix > 0) {
-				stateEl.textContent = `The sender is offline, but the first ${sizeText(st.prefix)} is here. Start watching; the rest streams when they're back.`;
-				if (STREAMABLE.includes(st.mime)) heroEl.replaceChildren(player());
+			if (playable && stage !== "none") {
+				setStage("player", () => {
+					const v = player(st.mime);
+					// the browser can't play it after all: offer the download
+					v.onerror = () => { stage = ""; setStage("none", noPreview); };
+					return v;
+				});
 			} else {
-				stateEl.textContent = "This link streams from the sender's device, and they're offline. It comes back when they do.";
-				const btn = Object.assign(document.createElement("button"), { type: "button", textContent: "Tell me when it's back" });
-				btn.onclick = () => {
-					btn.textContent = "Watching for it. Leave this tab open.";
-					btn.disabled = true;
-					pollFast = true;
-				};
-				heroEl.replaceChildren(btn);
+				setStage("none", noPreview);
 			}
-			break;
-		case "expired":
-			hero = "";
-			heroEl.replaceChildren();
-			setActions(st, false);
-			showExpiry(0);
-			metaEl.textContent = "";
-			stateEl.textContent = "This link has expired. Ephemera links leave nothing behind.";
-			break;
-		default:
-			hero = "";
-			heroEl.replaceChildren();
-			setActions(st, false);
-			showExpiry(0);
-			nameEl.textContent = "Link not found";
-			stateEl.textContent = "This link doesn't exist. Check it was copied whole.";
+			return;
+		}
+
+		// offline
+		canDownload(st, false);
+		if (st.replay) {
+			stateEl.textContent = "The sender is offline, but the parts already watched replay from memory.";
+			if (stage === "player") return; // already replaying
+			setStage("replay", () => {
+				const b = button("play", "Replay what's cached");
+				b.onclick = () => {
+					if (playable) { stage = ""; setStage("player", () => player(st.mime)); return; }
+					const a = Object.assign(document.createElement("a"), { href: `/${id}/file`, download: (st.name || id) + " (replay)" });
+					a.click();
+				};
+				return empty("rotate-ccw", "Replay what was watched", "Only the parts someone already played are cached.", b);
+			});
+		} else if (st.prefix > 0) {
+			stateEl.textContent = `The first ${sizeText(st.prefix)} is here. Start watching; the rest streams when they're back.`;
+			if (playable) setStage("player", () => player(st.mime));
+			else waiting();
+		} else {
+			stateEl.textContent = "This link streams from the sender's device, and they're offline. It comes back when they do.";
+			waiting();
 		}
 	}
 
-	$("#copy").onclick = async (e) => {
-		try { await navigator.clipboard.writeText(location.href); e.target.textContent = "Copied"; }
-		catch { e.target.textContent = location.href; }
-	};
+	function noPreview() {
+		return empty("download", "No preview for this type", "Download it to open on your device.");
+	}
+
+	function waiting() {
+		setStage(watching ? "watching" : "waiting", () => {
+			const b = button("bell", watching ? "Watching for it…" : "Tell me when it's back", watching ? "btn btn-outline" : "btn");
+			b.disabled = watching;
+			b.onclick = () => {
+				watching = true;
+				pollFast = true;
+				b.replaceChildren(ui.icon("bell"), "Watching for it…");
+				b.className = "btn btn-outline";
+				b.disabled = true;
+				stage = "watching";
+			};
+			return empty("wifi-off", "Waiting for the sender", "Leave this tab open and it picks up as soon as they reconnect.", b);
+		});
+	}
+
+	// gone swaps the page for the expired or not-found message.
+	function gone(state) {
+		const expired = state === "expired";
+		if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+		pbVideo?.pause();
+		$("#link").hidden = true;
+		$("#gone").hidden = false;
+		$("#gone-icon").replaceChildren(ui.icon(expired ? "hourglass" : "file-question"));
+		$("#gone-title").textContent = expired ? "This link has expired" : "Link not found";
+		$("#gone-text").textContent = expired
+			? "Ephemera links leave nothing behind. Ask the sender for a fresh one."
+			: "This link doesn't exist. Check it was copied whole.";
+		document.title = expired ? "Link expired · Ephemera" : "Link not found · Ephemera";
+	}
+
+	copyEl.onclick = () => ui.copy(location.href, copyEl);
 
 	// Playback report: how watching went on this page, sent to the
 	// relay when the page is hidden or closed. Numbers only: how long
@@ -201,12 +289,19 @@
 	});
 
 	// reporting: offered once the link exists (live or offline)
-	const reportEl = $("#report"), reportForm = $("#report-form"), reportMsg = $("#report-msg");
+	const reportBtn = $("#report-btn"), reportDialog = $("#report-dialog"), reportForm = $("#report-form");
+	const reportMsg = $("#report-msg"), reportSend = $("#report-send");
+	reportForm.reason.onchange = () => { reportSend.disabled = !reportForm.reason.value; };
+	reportDialog.addEventListener("close", () => {
+		reportForm.reset();
+		reportSend.disabled = true;
+		reportMsg.hidden = true;
+	});
 	reportForm.onsubmit = async (e) => {
 		e.preventDefault();
 		const data = new FormData(reportForm);
-		const btn = reportForm.querySelector("button");
-		btn.disabled = true;
+		const fail = (text) => { reportMsg.textContent = text; reportMsg.hidden = false; reportSend.disabled = false; };
+		reportSend.disabled = true;
 		try {
 			const resp = await fetch(`/${id}/report`, {
 				method: "POST",
@@ -214,32 +309,28 @@
 				body: JSON.stringify({ reason: data.get("reason"), note: data.get("note") }),
 			});
 			if (resp.ok) {
-				reportForm.replaceChildren(Object.assign(document.createElement("p"), {
-					textContent: "Thanks. The relay operator will review this link.",
-				}));
+				reportDialog.close();
+				ui.toast("Report sent", { description: "The relay operator will review this link." });
 				return;
 			}
 			const body = await resp.json().catch(() => ({}));
-			reportMsg.textContent = resp.status === 429
-				? "Too many reports from here. Try again later."
-				: (body.error || "The report didn't go through.");
+			fail(resp.status === 429 ? "Too many reports from here. Try again later." : (body.error || "The report didn't go through."));
 		} catch {
-			reportMsg.textContent = "The report didn't go through. Check your connection.";
+			fail("The report didn't go through. Check your connection.");
 		}
-		btn.disabled = false;
 	};
 
 	// poll reports whether to keep polling: not once the link is gone
 	async function poll() {
 		try {
 			const resp = await fetch(`/${id}/status`);
-			if (resp.status === 410) { reportEl.hidden = true; render({ state: "expired" }); return false; }
-			if (resp.status === 404) { reportEl.hidden = true; render({ state: "gone" }); return false; }
+			if (resp.status === 410) { render({ state: "expired" }); return false; }
+			if (resp.status === 404) { render({ state: "gone" }); return false; }
 			const wasOffline = lastState === "offline";
 			const st = await resp.json();
 			lastState = st.state;
 			render(st);
-			reportEl.hidden = false;
+			reportBtn.hidden = false;
 			if (wasOffline && st.state !== "offline") pollFast = false; // back: normal cadence
 			return true;
 		} catch {

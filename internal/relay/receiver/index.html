@@ -5,42 +5,86 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>Ephemera</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/app.css">
+<script src="/ui.js"></script>
 </head>
 <body>
-<main>
-	<p class="eyebrow">Shared with Ephemera</p>
-	<h1 id="name">Loading…</h1>
-	<p class="muted" id="meta"></p>
-	<div class="hero" id="hero"></div>
-	<div class="row" id="actions" hidden>
-		<a class="btn primary" id="download" download>Download</a>
-		<button type="button" id="copy">Copy link</button>
+<header class="site-header"></header>
+<main class="page-link" id="link">
+	<div class="link-head">
+		<div>
+			<h1 id="name">Loading…</h1>
+			<p class="mono xs muted" id="meta"></p>
+		</div>
+		<span id="badge"></span>
 	</div>
-	<p class="state" id="state">Connecting…</p>
-	<p class="muted" id="expiry"></p>
 
-	<details class="report" id="report" hidden>
-		<summary>Report this link</summary>
-		<form id="report-form">
-			<label>What's wrong with it?
-				<select name="reason" required>
-					<option value="">Choose a reason</option>
-					<option value="illegal">Illegal content (including child sexual abuse)</option>
-					<option value="copyright">Copyright infringement</option>
-					<option value="malware">Malware or phishing</option>
-					<option value="harassment">Harassment or abuse</option>
-					<option value="other">Something else</option>
-				</select>
-			</label>
-			<label>Anything the relay operator should know? (optional)
-				<textarea name="note" rows="3" maxlength="1000"></textarea>
-			</label>
-			<button type="submit">Send report</button>
-			<p id="report-msg" role="status"></p>
-		</form>
-	</details>
+	<div class="stage" id="stage"></div>
+
+	<div class="link-actions">
+		<a class="btn" id="download" aria-disabled="true"><i data-icon="download"></i>Download</a>
+		<button class="btn btn-outline" type="button" id="copy"><i data-icon="copy"></i><span data-label="Copy link">Copy link</span></button>
+		<p id="state" role="status">Connecting…</p>
+	</div>
+
+	<div class="link-life" id="life" hidden>
+		<div>
+			<span>Expires in <span class="mono fg num" id="left"></span>. After that, nothing is left.</span>
+			<span class="mono" id="life-pct"></span>
+		</div>
+		<div class="progress" role="progressbar" aria-label="Time left on this link" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+	</div>
+
+	<div class="link-foot">
+		<a class="btn btn-link" href="/">What is Ephemera?</a>
+		<button class="btn btn-ghost btn-sm muted" type="button" id="report-btn" data-dialog="report-dialog" hidden><i data-icon="flag"></i>Report</button>
+	</div>
 </main>
+
+<main class="page-gone" id="gone" hidden>
+	<div class="empty">
+		<div class="empty-header">
+			<div class="empty-media" id="gone-icon"></div>
+			<div class="empty-title" id="gone-title"></div>
+			<div class="empty-description" id="gone-text"></div>
+		</div>
+		<a class="btn btn-outline" href="/">Share a file of your own</a>
+	</div>
+</main>
+<footer class="site-footer"></footer>
+
+<dialog class="dialog" id="report-dialog" aria-labelledby="report-title">
+	<form id="report-form">
+		<div class="dialog-header">
+			<h2 class="dialog-title" id="report-title">Report this link</h2>
+			<p class="dialog-description">The operator of this relay reviews reports. Nothing about you is sent with it.</p>
+		</div>
+		<div class="field">
+			<label class="label" for="reason">Reason</label>
+			<select class="select" id="reason" name="reason" required>
+				<option value="">Choose a reason</option>
+				<option value="illegal">Illegal content (including child sexual abuse)</option>
+				<option value="copyright">Copyright infringement</option>
+				<option value="malware">Malware or phishing</option>
+				<option value="harassment">Harassment or abuse</option>
+				<option value="other">Something else</option>
+			</select>
+		</div>
+		<div class="field">
+			<label class="label" for="note">Details <span class="muted" id="note-hint">(optional)</span></label>
+			<textarea class="textarea" id="note" name="note" rows="3" maxlength="1000"></textarea>
+		</div>
+		<p class="sm" id="report-msg" role="alert" hidden></p>
+		<div class="dialog-footer">
+			<button class="btn btn-outline" type="button" data-close>Cancel</button>
+			<button class="btn btn-destructive" type="submit" id="report-send" disabled>Send report</button>
+		</div>
+	</form>
+	<button class="btn btn-ghost btn-icon-sm dialog-close" type="button" data-close aria-label="Close"><i data-icon="x"></i></button>
+</dialog>
+
 <script src="/view.js"></script>
 </body>
 </html>

@@ -94,7 +94,8 @@ class Share {
 	constructor(file, ttlSec, token, onChange) {
 		this.file = file;
 		this.token = token;
-		this.deadline = Date.now() + ttlSec * 1000;
+		this.createdAt = Date.now();
+		this.deadline = this.createdAt + ttlSec * 1000;
 		this.onChange = onChange;
 		this.state = "connecting"; // connecting|live|uploaded|refused|expired
 		this.link = "";
@@ -256,135 +257,256 @@ function sizeText(n) {
 	return (n / 1e9).toFixed(2) + " GB";
 }
 
+function typeText(mime) {
+	if (!mime) return "";
+	const [kind, sub] = mime.split(";")[0].split("/");
+	if (["video", "audio", "image"].includes(kind)) return `${sub.toUpperCase()} ${kind}`;
+	if (mime === "application/pdf") return "PDF";
+	if (mime === "application/octet-stream") return "File";
+	return mime.split(";")[0];
+}
+
 function untilText(t) {
 	return new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+function leftText(ms) {
+	if (ms <= 0) return "0s";
+	const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+	if (h) return `${h}h ${m}m`;
+	if (m) return `${m}m ${s % 60}s`;
+	return `${s}s`;
+}
+
+function iconFor(mime) {
+	if (mime.startsWith("video/")) return "file-video";
+	if (mime.startsWith("audio/")) return "file-audio";
+	if (mime === "application/pdf" || mime.startsWith("text/")) return "file-text";
+	if (/zip|tar|diskimage|compressed|gzip|7z|rar/.test(mime)) return "file-archive";
+	return "file";
+}
+
+// badge is the status pill on a share card.
+function badge(kind, text) {
+	const b = document.createElement("span");
+	const look = {
+		connecting: ["badge badge-outline muted", "loader"],
+		live: ["badge badge-live"],
+		stored: ["badge badge-secondary", "check"],
+		warning: ["badge badge-warning", "triangle-alert"],
+		refused: ["badge badge-destructive", "circle-slash"],
+		expired: ["badge badge-outline muted", "hourglass"],
+	}[kind];
+	b.className = look[0];
+	if (look[1]) b.append(ui.icon(look[1], kind === "connecting" ? "spin" : ""));
+	if (kind === "live") b.append(Object.assign(document.createElement("span"), { className: "dot" }));
+	b.append(text);
+	return b;
+}
+
+const needsToken = (s) => s.state === "refused" && s.refusedCode === "denied" && /token/.test(s.message);
+
+// describe says where a share stands: its badge and one line.
+function describe(s) {
+	switch (s.state) {
+	case "connecting":
+		return s.link
+			? ["connecting", "Reconnecting", "Reconnecting… the link is offline until this tab is back."]
+			: ["connecting", "Connecting", "Reaching the relay…"];
+	case "live":
+		if (s.uploading) {
+			const pct = Math.floor(100 * s.acked / s.file.size);
+			return ["live", `Live · ${pct}%`, `Streaming from this tab while it uploads${s.rate ? ` at ${sizeText(s.rate)}/s` : ""}. Keep the tab open until it's up.`];
+		}
+		return ["warning", "Live only",
+			`${s.message ? s.message[0].toUpperCase() + s.message.slice(1) : "This relay isn't keeping uploads right now"}. The link streams from this tab, so keep it open until ${untilText(s.deadline)}.`];
+	case "uploaded":
+		return ["stored", "On the relay", `Fully uploaded. You can close this tab; the link works until ${untilText(s.deadline)}.`];
+	case "refused":
+		// the relay's reason names the CLI; say what to do here
+		return ["refused", "Not shared", needsToken(s)
+			? "This relay needs a sender token. Add it and the file is sent at once."
+			: `The relay turned it away: ${s.message}.`];
+	case "expired":
+		return ["expired", "Expired", "The link expired and the relay deleted its copy."];
+	}
+}
+
+const CARD = `<div class="share-life" aria-hidden="true"><span></span></div>
+<div class="share-body">
+	<div class="share-top">
+		<div class="share-icon"></div>
+		<div class="share-what"><div class="share-name"></div><div class="mono xs muted share-meta"></div></div>
+		<span class="share-badge"></span>
+	</div>
+	<p class="sm share-line"></p>
+	<div class="progress" role="progressbar" aria-label="Uploaded" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
+	<div class="share-skeleton" aria-hidden="true" hidden></div>
+	<div class="share-link" hidden>
+		<input class="input mono" readonly aria-label="Link">
+		<button class="btn btn-outline" type="button"><i data-icon="copy"></i><span data-label="Copy">Copy</span></button>
+		<a class="btn btn-outline" target="_blank" rel="noopener" aria-label="Open link page"><i data-icon="arrow-up-right"></i>Open</a>
+	</div>
+	<div><button class="btn btn-sm" type="button" data-dialog="token-dialog" hidden>Add sender token</button></div>
+</div>
+<div class="share-foot"><span><i data-icon="timer"></i><span class="share-until"></span></span><span class="mono num share-left"></span></div>`;
+
 function startPage() {
-	const $ = (s) => document.querySelector(s);
+	const $ = (s, el = document) => el.querySelector(s);
 	const TOKEN_KEY = "ephemera.token";
-	const storage = {
-		get() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } },
-		set(v) { try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); } catch {} },
-	};
-	let token = storage.get();
+	let token = ui.store.get(TOKEN_KEY);
 	const shares = [];
 	let wakeLock = null;
 
-	function showWho() {
-		const who = $("#who");
-		who.replaceChildren();
-		if (!token) return;
-		who.append("Sender token saved · ");
-		const forget = Object.assign(document.createElement("a"), { href: "#", textContent: "forget it" });
-		forget.onclick = (e) => { e.preventDefault(); token = ""; storage.set(""); showWho(); };
-		who.append(forget);
+	// ---- sender token
+	const tokenDialog = $("#token-dialog"), tokenInput = $("#token"), tokenSave = $("#token-save");
+	function showToken() {
+		$("#token-label").textContent = token ? "Token saved" : "Sender token";
+		const dot = $("#token-btn .dot-ok");
+		if (token && !dot) $("#token-btn").append(Object.assign(document.createElement("span"), { className: "dot-ok" }));
+		if (!token && dot) dot.remove();
+		$("#token-new").hidden = !!token;
+		$("#token-saved").hidden = !token;
+		$("#token-mask").textContent = token ? "•••• •••• " + token.slice(-4) : "";
+		tokenSave.hidden = !!token;
+		$("#token-done").hidden = !token;
 	}
-
+	tokenDialog.addEventListener("close", () => { tokenInput.value = ""; tokenSave.disabled = true; });
+	tokenInput.oninput = () => { tokenSave.disabled = !tokenInput.value.trim(); };
 	$("#token-form").onsubmit = (e) => {
 		e.preventDefault();
-		token = new FormData(e.target).get("token").trim();
-		storage.set(token);
-		$("#token").hidden = true;
-		showWho();
+		const v = tokenInput.value.trim();
+		if (!v) return;
+		token = v;
+		ui.store.set(TOKEN_KEY, token);
+		tokenDialog.close();
+		showToken();
+		ui.toast("Sender token saved in this browser");
 		// retry the files the relay turned away for want of a token
-		for (const s of shares) if (s.state === "refused" && s.refusedCode === "denied" && /token/.test(s.message)) {
-			s.token = token; s.state = "connecting"; s.message = ""; s.dial();
+		for (const s of shares) if (needsToken(s)) {
+			s.token = token; s.state = "connecting"; s.message = ""; s.dial(); render(s);
 		}
+	};
+	$("#token-forget").onclick = () => {
+		token = "";
+		ui.store.set(TOKEN_KEY, "");
+		showToken();
+		tokenInput.focus();
+		ui.toast("Token forgotten", { kind: "" });
 	};
 
 	// keep the screen (and so the tab) awake while anything still
 	// depends on it
-	async function holdAwake() {
-		const busy = shares.some((s) => s.state === "live" || s.state === "connecting");
+	async function holdAwake(busy) {
 		try {
 			if (busy && !wakeLock && navigator.wakeLock) wakeLock = await navigator.wakeLock.request("screen");
 			if (!busy && wakeLock) { await wakeLock.release(); wakeLock = null; }
 		} catch {}
 	}
 
+	const inFlight = (s) => s.state === "live" || s.state === "connecting";
+	const clearable = (s) => s.state === "uploaded" || s.state === "refused" || s.state === "expired";
+
+	// showList sets the list's heading and the header mark from all shares.
+	function showList() {
+		const busy = shares.filter(inFlight).length;
+		$("#shares-box").hidden = shares.length === 0;
+		$("#shares-note").textContent = busy ? "Keep this tab open while files are live" : "Your links";
+		$("#clear").hidden = !shares.some(clearable);
+		ui.fly(busy);
+		holdAwake(busy > 0);
+	}
+
+	// tick drains each card's lifetime bar and counts down; a share
+	// whose time is up has expired on the relay too.
+	function tick(s) {
+		const now = Date.now();
+		if (now >= s.deadline && s.state !== "refused" && s.state !== "expired") {
+			s.set("expired");
+			s.ws?.close();
+			return;
+		}
+		const total = s.deadline - s.createdAt;
+		const life = s.state === "expired" ? 0 : Math.max(0, Math.min(1, (s.deadline - now) / total));
+		$(".share-life > span", s.card).style.transform = `scaleX(${life})`;
+		$(".share-left", s.card).textContent = `${leftText(s.deadline - now)} left`;
+	}
+
 	function render(s) {
 		const card = s.card;
-		card.querySelector(".name").textContent = `${s.file.name} · ${sizeText(s.file.size)}`;
-		const state = card.querySelector(".state");
-		const bar = card.querySelector("progress");
-		const linkRow = card.querySelector(".link");
-		state.className = "state";
-		bar.hidden = true;
-		switch (s.state) {
-		case "connecting":
-			state.textContent = s.link ? "Reconnecting… the link is offline until this tab is back." : "Connecting to the relay…";
-			break;
-		case "live":
-			if (s.uploading) {
-				const pct = Math.floor(100 * s.acked / s.file.size);
-				state.textContent = `Live from this tab · ${pct}% uploaded${s.rate ? ` at ${sizeText(s.rate)}/s` : ""}. Keep the tab open until it's up.`;
-				bar.hidden = false;
-				bar.value = s.acked;
-				bar.max = s.file.size;
-			} else {
-				state.className = "state warn";
-				state.textContent = `${s.message ? s.message[0].toUpperCase() + s.message.slice(1) : "This relay isn't keeping uploads right now"}: the link streams from this tab, so keep it open until ${untilText(s.deadline)}.`;
-			}
-			break;
-		case "uploaded":
-			state.className = "state ok";
-			state.textContent = `Uploaded. You can close this tab; the link works until ${untilText(s.deadline)}.`;
-			break;
-		case "refused":
-			state.className = "state bad";
-			if (/token/.test(s.message)) {
-				// the relay's reason names the CLI; say what to do here
-				state.textContent = "Not shared yet: this relay needs a valid sender token. Paste it above and the file is sent at once.";
-				$("#token").hidden = false;
-			} else {
-				state.textContent = `Not shared: ${s.message}.`;
-			}
-			break;
-		case "expired":
-			state.textContent = "The link expired.";
-			break;
+		const [kind, label, line] = describe(s);
+		$(".share-badge", card).replaceChildren(badge(kind, label));
+		$(".share-line", card).textContent = line;
+		card.classList.toggle("dim", s.state === "expired");
+
+		const bar = $(".progress", card);
+		bar.hidden = !(s.state === "live" && s.uploading);
+		if (!bar.hidden) {
+			const pct = Math.floor(100 * s.acked / s.file.size);
+			bar.firstElementChild.style.transform = `scaleX(${s.acked / s.file.size})`;
+			bar.setAttribute("aria-valuenow", pct);
 		}
+		$(".share-skeleton", card).hidden = !(s.state === "connecting" && !s.link);
+		const linkRow = $(".share-link", card);
 		linkRow.hidden = !s.link || s.state === "refused" || s.state === "expired";
-		card.querySelector("input").value = s.link;
-		card.querySelector("a.btn").href = s.link || "#";
-		holdAwake();
+		$("input", linkRow).value = s.link;
+		$("button", linkRow).dataset.copy = s.link;
+		$("a", linkRow).href = s.link || "#";
+		$("[data-dialog]", card).hidden = !needsToken(s);
+		$(".share-foot", card).hidden = s.state === "refused" || s.state === "expired";
+		$(".share-until", card).textContent = `Expires at ${untilText(s.deadline)}`;
+		tick(s);
+		showList();
 	}
 
 	function add(file) {
-		const card = document.createElement("div");
-		card.className = "card";
-		card.innerHTML = `<div class="name"></div><div class="state"></div><progress hidden></progress>
-			<div class="row link" hidden><input readonly aria-label="Link"><button type="button">Copy</button><a class="btn" target="_blank" rel="noopener">Open</a></div>`;
-		card.querySelector("button").onclick = async (e) => {
-			try { await navigator.clipboard.writeText(card.querySelector("input").value); e.target.textContent = "Copied"; }
-			catch { card.querySelector("input").select(); }
-		};
-		$("#shares").prepend(card);
 		if (file.size === 0) {
-			card.querySelector(".name").textContent = file.name;
-			card.querySelector(".state").textContent = "Empty files can't be shared.";
+			ui.toast(`${file.name} is empty`, { description: "Empty files can't be shared.", kind: "error" });
 			return;
 		}
-		const s = new Share(file, Number($("#ttl").value), token, render);
+		const card = document.createElement("div");
+		card.className = "card share";
+		card.innerHTML = CARD;
+		for (const el of card.querySelectorAll("i[data-icon]")) el.replaceWith(ui.icon(el.dataset.icon));
+		$(".share-icon", card).append(ui.icon(iconFor(file.type)));
+		$(".share-name", card).textContent = file.name;
+		$(".share-meta", card).textContent = [sizeText(file.size), typeText(file.type)].filter(Boolean).join(" · ");
+		$("input", card).onfocus = (e) => e.target.select();
+		$("#shares").prepend(card);
+
+		const ttl = Number($("input[name=ttl]:checked").value);
+		const s = new Share(file, ttl, token, render);
 		s.card = card;
 		shares.push(s);
 		render(s);
 		s.start().catch((err) => { s.message = String(err.message || err); s.set("refused"); });
 	}
 
-	const input = $("#files"), drop = $("#drop");
+	setInterval(() => { for (const s of shares) tick(s); }, 1000);
+
+	$("#clear").onclick = () => {
+		for (let i = shares.length - 1; i >= 0; i--) {
+			if (clearable(shares[i])) { shares[i].card.remove(); shares.splice(i, 1); }
+		}
+		showList();
+	};
+
+	const input = $("#files"), drop = $("#drop"), dropTitle = $("#drop-title");
+	const over = (on) => {
+		drop.classList.toggle("over", on);
+		dropTitle.textContent = on ? "Let go to get a link" : "Drop files here";
+	};
 	input.onchange = () => { for (const f of input.files) add(f); input.value = ""; };
-	drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
-	drop.ondragleave = () => drop.classList.remove("over");
-	drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); for (const f of e.dataTransfer.files) add(f); };
+	drop.ondragover = (e) => { e.preventDefault(); over(true); };
+	drop.ondragleave = (e) => { if (!drop.contains(e.relatedTarget)) over(false); };
+	drop.ondrop = (e) => { e.preventDefault(); over(false); for (const f of e.dataTransfer.files) add(f); };
 
 	// closing the tab before the upload ends takes the link offline
 	addEventListener("beforeunload", (e) => {
 		if (shares.some((s) => s.state === "live" || (s.state === "connecting" && s.link))) e.preventDefault();
 	});
 
-	showWho();
+	showToken();
 }
 
 if (typeof document !== "undefined") startPage();

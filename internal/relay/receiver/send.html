@@ -3,41 +3,112 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Send a file · Ephemera</title>
+<title>Ephemera · Share a file before it's uploaded</title>
+<meta name="description" content="Drop a file and get a link at once. It streams from your device while it uploads, and the link expires after 1, 6 or 24 hours.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/app.css">
+<script src="/ui.js"></script>
 </head>
 <body>
-<main>
-	<h1>Send a file</h1>
-	<p class="lede">The link works the moment you drop the file. It streams from this tab while the file uploads; once it's up, you can close the tab.</p>
+<header class="site-header"></header>
+<main class="page-send">
+	<section class="hero">
+		<div class="hero-text">
+			<span class="badge badge-outline muted normal">No upload wait · Links expire</span>
+			<h1>Share a file before it's uploaded.</h1>
+			<p>The link works the moment you drop the file. It streams from your device, then leaves nothing behind.</p>
+		</div>
 
-	<section id="token" hidden>
-		<p>This relay needs a sender token. It stays in this browser.</p>
-		<form id="token-form" class="row">
-			<input type="password" name="token" placeholder="eph_…" autocomplete="off" required>
-			<button class="primary">Save</button>
-		</form>
+		<div class="dropzone">
+			<label class="drop" id="drop">
+				<span class="drop-icon"><i data-icon="arrow-up"></i></span>
+				<span>
+					<span class="drop-title" id="drop-title">Drop files here</span>
+					<span class="drop-sub">or click to choose · any type, up to 5 GB</span>
+				</span>
+				<input type="file" id="files" multiple class="sr-only">
+			</label>
+			<div class="drop-bar">
+				<div class="ttl" role="radiogroup" aria-labelledby="ttl-label">
+					<span class="xs muted" id="ttl-label">Link lasts</span>
+					<div class="toggle-group">
+						<label><input type="radio" name="ttl" value="3600" aria-label="1 hour"><span>1h</span></label>
+						<label><input type="radio" name="ttl" value="21600" aria-label="6 hours"><span>6h</span></label>
+						<label><input type="radio" name="ttl" value="86400" aria-label="24 hours" checked><span>24h</span></label>
+					</div>
+				</div>
+				<div class="drop-tools">
+					<button class="btn btn-ghost btn-sm muted" type="button" data-dialog="token-dialog" id="token-btn"><i data-icon="key-round"></i><span id="token-label">Sender token</span></button>
+				</div>
+			</div>
+		</div>
+
+		<div class="shares" id="shares-box" hidden>
+			<div class="shares-head">
+				<span class="xs muted" id="shares-note">Your links</span>
+				<button class="btn btn-ghost btn-xs muted" type="button" id="clear">Clear</button>
+			</div>
+			<div class="shares" id="shares"></div>
+		</div>
 	</section>
 
-	<label class="drop" id="drop">
-		<strong>Drop files here</strong>
-		<span class="muted">or click to choose</span>
-		<input type="file" id="files" multiple hidden>
-	</label>
+	<section class="how" id="how">
+		<div class="how-head">
+			<p class="eyebrow">How it works</p>
+			<h2>A link that streams, then disappears.</h2>
+		</div>
 
-	<div class="row">
-		<label>Link lasts
-			<select id="ttl">
-				<option value="3600">1 hour</option>
-				<option value="21600">6 hours</option>
-				<option value="86400" selected>24 hours</option>
-			</select>
-		</label>
-		<span class="muted" id="who"></span>
-	</div>
+		<div class="flow" aria-hidden="true">
+			<div class="flow-node"><span><i data-icon="laptop"></i></span><div><div class="sm medium">Your device</div><div class="xs muted">the file stays here</div></div></div>
+			<div class="flow-wire"><span class="flow-dot"></span><span class="flow-dot"></span></div>
+			<div class="flow-node"><span><i data-icon="server"></i></span><div><div class="sm medium">Relay</div><div class="xs muted">passes bytes along</div></div></div>
+			<div class="flow-wire late"><span class="flow-dot"></span><span class="flow-dot"></span></div>
+			<div class="flow-node"><span><i data-icon="monitor-play"></i></span><div><div class="sm medium">Viewer</div><div class="xs muted">watches instantly</div></div></div>
+		</div>
 
-	<div id="shares"></div>
+		<div class="steps">
+			<div><span class="mono xs muted">01</span><span class="medium">Drop</span><p>You get a link the instant you drop a file. Nothing has to finish uploading first.</p></div>
+			<div><span class="mono xs muted">02</span><span class="medium">Stream</span><p>Viewers pull only the parts they watch, straight from your device, while the file uploads in the background.</p></div>
+			<div><span class="mono xs muted">03</span><span class="medium">Vanish</span><p>After 1, 6 or 24 hours the link expires and the relay deletes everything it held.</p></div>
+		</div>
+
+		<hr class="separator">
+
+		<div class="cli-row">
+			<div>
+				<span class="medium">Prefer the terminal?</span>
+				<p class="sm muted">The same relay, the same links. The link prints on stdout and exit codes tell scripts what happened.</p>
+			</div>
+			<div data-cli></div>
+		</div>
+	</section>
 </main>
+<footer class="site-footer"></footer>
+
+<dialog class="dialog" id="token-dialog" aria-labelledby="token-title">
+	<form id="token-form">
+		<div class="dialog-header">
+			<span class="dialog-media"><i data-icon="key-round"></i></span>
+			<h2 class="dialog-title" id="token-title">Sender token</h2>
+			<p class="dialog-description">This relay only accepts files from people with a token. It's asked for once and stays in this browser. Viewers never need one.</p>
+		</div>
+		<div class="field" id="token-new">
+			<label class="label" for="token">Token</label>
+			<input class="input mono" id="token" name="token" type="password" autocomplete="off" placeholder="eph_…">
+		</div>
+		<div class="token-saved" id="token-saved" hidden>
+			<span class="mono muted" id="token-mask"></span>
+			<button class="btn btn-ghost btn-sm" type="button" id="token-forget">Forget</button>
+		</div>
+		<div class="dialog-footer">
+			<button class="btn" type="submit" id="token-save" disabled>Save token</button>
+			<button class="btn btn-outline" type="button" id="token-done" data-close hidden>Done</button>
+		</div>
+	</form>
+	<button class="btn btn-ghost btn-icon-sm dialog-close" type="button" data-close aria-label="Close"><i data-icon="x"></i></button>
+</dialog>
+
 <script src="/send.js"></script>
 </body>
 </html>

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The mayfly · Ephemera</title>
+<meta name="description" content="Ephemera's mark: a mayfly, which lives about a day, as long as the longest link.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/app.css">
+<script src="/ui.js"></script>
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page-brand">
+	<section class="intro">
+		<div class="intro-text">
+			<p class="eyebrow">Brand</p>
+			<h1>The mayfly.</h1>
+			<p>Mayflies, <i>Ephemeroptera</i>, live for about a day. An Ephemera link lives for at most one.</p>
+		</div>
+
+		<div class="card">
+			<div class="specimen"><i data-mark="regular" id="specimen"></i></div>
+			<div class="specimen-bar">
+				<p class="sm muted" id="specimen-note">In flight: a file is being transferred.</p>
+				<label class="sm medium row-gap">Transferring
+					<button class="switch" type="button" role="switch" aria-checked="true" id="flying" aria-label="Transferring"></button>
+				</label>
+			</div>
+		</div>
+
+		<div class="steps">
+			<div><span class="mono xs muted">01</span><span class="medium">Wing</span><p>Swept back from a narrow root. It beats only while bytes move.</p></div>
+			<div><span class="mono xs muted">02</span><span class="medium">Tails</span><p>Two long filaments trail behind it, like the stream that follows a link.</p></div>
+			<div><span class="mono xs muted">03</span><span class="medium">Legs</span><p>Perched when idle. In flight they tuck away, so even a still frame shows motion.</p></div>
+		</div>
+	</section>
+
+	<hr class="separator">
+
+	<section>
+		<div>
+			<p class="eyebrow">Sizes</p>
+			<p class="sm muted">From 24px down, a heavier cut drops the legs and thickens every line so the silhouette survives.</p>
+		</div>
+		<div class="sizes">
+			<div><i data-mark="regular" class="s96"></i><span class="mono xs muted">96</span></div>
+			<div><i data-mark="regular" class="s48"></i><span class="mono xs muted">48</span></div>
+			<div><i data-mark="regular" class="s32"></i><span class="mono xs muted">32</span></div>
+			<div><i data-mark="heavy" class="s24"></i><span class="mono xs muted">24</span></div>
+			<div><i data-mark="heavy" class="s16"></i><span class="mono xs muted">16</span></div>
+		</div>
+	</section>
+
+	<section>
+		<p class="eyebrow">Lockups</p>
+		<div class="lockups">
+			<div class="lockup theme-light"><span class="mono xs muted">light</span><span class="wordmark"><i data-mark="medium"></i>ephemera</span><span></span></div>
+			<div class="lockup theme-dark"><span class="mono xs muted">dark</span><span class="wordmark"><i data-mark="medium"></i>ephemera</span><span></span></div>
+		</div>
+	</section>
+
+	<section>
+		<div>
+			<p class="eyebrow">App icon</p>
+			<p class="sm muted">One colour, no accent. It follows the system theme.</p>
+		</div>
+		<div class="app-icons">
+			<span class="app-icon-lg"><i data-mark="regular" class="s56"></i></span>
+			<span class="app-icon-md"><i data-mark="regular" class="s40"></i></span>
+			<span class="app-icon-sm"><i data-mark="heavy" class="s24"></i></span>
+			<a class="btn btn-outline" href="/favicon.svg" download="ephemera-mark.svg"><i data-icon="download"></i>Download SVG</a>
+		</div>
+	</section>
+</main>
+<footer class="site-footer"></footer>
+<script src="/brand.js"></script>
+</body>
+</html>
