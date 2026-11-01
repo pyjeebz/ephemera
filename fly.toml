@@ -19,7 +19,7 @@ primary_region = "yyz"
   app = """serve -addr :8080 \
     -public-url https://ephemera.run \
     -client-ip-header Fly-Client-IP \
-    -tokens /etc/ephemera/tokens.txt \
+    -tokens /etc/ephemera/tokens.txt -guests \
     -data-dir /data -upload-gb 8 \
     -cache-mb 192 -away-mb 384"""
 
