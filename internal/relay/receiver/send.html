@@ -81,6 +81,23 @@
 			<div><span class="mono xs muted">03</span><span class="medium">Vanish</span><p>After 1, 6 or 24 hours the link expires and the relay deletes everything it held.</p></div>
 		</div>
 
+		<div class="inspect" id="inspect">
+			<div>
+				<span class="medium">Inspect it where it sits.</span>
+				<p class="sm muted">Tools that read parts of a file, like DuckDB, ffprobe and <span class="mono nowrap">curl -r</span>, fetch only the bytes they need, straight from the sender's disk. Nothing is copied first. A 178 MB Parquet file on a laptop: <span class="fg">count(*)</span> over 4 million rows took 0.05 s, because DuckDB only read the footer.</p>
+			</div>
+			<div class="terminal">
+				<div class="terminal-bar"><span class="xs muted">DuckDB</span>
+					<button class="btn btn-ghost btn-icon-xs" type="button" aria-label="Copy query" data-copy="SELECT count(*) FROM read_parquet('https://ephemera.run/b2A4qT9xZ1/file');" data-toast="Query copied"><i data-icon="copy"></i></button></div>
+				<pre><span class="prompt">D </span><span class="cmd">SELECT count(*)</span>
+  <span class="cmd">FROM read_parquet('https://ephemera.run/b2A4qT9xZ1/file');</span>
+4000000
+Run Time: 0.05 s    <span class="link">read: the footer, not 178 MB</span>
+<span class="prompt">$ </span><span class="cmd">ffprobe https://ephemera.run/k3Jx9qTzR2/file</span>
+Duration: 01:12:09.04, bitrate: 4210 kb/s</pre>
+			</div>
+		</div>
+
 		<hr class="separator">
 
 		<div class="cli-row">

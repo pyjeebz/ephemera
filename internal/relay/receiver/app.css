@@ -564,3 +564,6 @@ svg { display: block; flex-shrink: 0; }
 .switch-input:focus-visible + .switch { box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
 .switch-input:disabled + .switch { opacity: .6; }
 .nocopy[data-tip]::after { white-space: normal; width: 260px; }
+.inspect { display: grid; gap: 16px; }
+.inspect p { margin-top: 8px; max-width: 60ch; }
+.nowrap { white-space: nowrap; }
