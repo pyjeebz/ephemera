@@ -1,0 +1,30 @@
+// Package sandbox defines how a host agent runs sandboxes. The host agent
+// talks only to Backend, so the container backend used to build ephemera and
+// the Firecracker backend it ships with are interchangeable.
+package sandbox
+
+import (
+	"context"
+	"io"
+
+	"github.com/pyjeebz/ephemera/internal/api"
+)
+
+// Workdir is where the worktree is unpacked and commands run.
+const Workdir = "/workspace"
+
+// Backend creates, uses and destroys sandboxes. Implementations must be safe
+// for concurrent use across different sandbox ids.
+type Backend interface {
+	// Create starts an empty sandbox. The spec has been validated and has
+	// an image.
+	Create(ctx context.Context, id string, spec api.Spec) error
+	// CopyIn unpacks a sanitized tar stream into Workdir.
+	CopyIn(ctx context.Context, id string, tarStream io.Reader) error
+	// Exec runs a command in Workdir and returns its exit code. An error
+	// means the command could not be run or was cut short.
+	Exec(ctx context.Context, id string, req api.ExecRequest, stdout, stderr io.Writer) (int, error)
+	// Destroy stops the sandbox and deletes everything it held. Destroying
+	// a sandbox that does not exist is not an error.
+	Destroy(ctx context.Context, id string) error
+}
