@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -30,6 +31,7 @@ const usage = `ephemera runs commands in short-lived, locked-down sandboxes.
 
 Usage:
   ephemera run [flags] -- <command> [args...]
+  ephemera dev [flags] [-p PORT]... -- <dev server command>
   ephemera ls [--json]
   ephemera rm <sandbox-id>...
   ephemera version
@@ -38,7 +40,7 @@ Environment:
   EPHEMERA_SERVER   central server URL (default http://127.0.0.1:7700)
   EPHEMERA_TOKEN    API token
 
-Run "ephemera run -h" for run's flags.
+Run "ephemera run -h" or "ephemera dev -h" for their flags.
 `
 
 func main() {
@@ -60,6 +62,8 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "run":
 		return cmdRun(ctx, c, args[1:], stdout, stderr)
+	case "dev":
+		return cmdDev(ctx, c, args[1:], stdout, stderr)
 	case "ls":
 		return cmdLs(ctx, c, args[1:], stdout, stderr)
 	case "rm":
@@ -88,65 +92,94 @@ type stringList []string
 func (s *stringList) String() string     { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
-func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	var (
-		spec    api.Spec
-		include stringList
-		env     stringList
-		dir     string
-		jsonOut bool
-		openNet bool
-	)
-	fs.StringVar(&spec.Image, "image", "", "sandbox image (default: the host's default)")
-	fs.Float64Var(&spec.CPUs, "cpus", 0, "CPU limit, e.g. 2 or 0.5 (default: no limit)")
-	fs.IntVar(&spec.MemoryMB, "memory", 0, "memory limit in MB (default: no limit)")
-	fs.BoolVar(&openNet, "net", false, "allow outbound network access (blocked by default)")
-	fs.Var(&include, "include", "send an ignored file anyway, e.g. .env.local (repeatable)")
-	fs.Var(&env, "env", "set an environment variable, KEY=VALUE (repeatable)")
-	fs.StringVar(&dir, "dir", ".", "worktree to sync")
-	fs.BoolVar(&jsonOut, "json", false, "print newline-delimited JSON events instead of raw output")
+// sandboxFlags are the flags run and dev share.
+type sandboxFlags struct {
+	spec    api.Spec
+	include stringList
+	env     stringList
+	dir     string
+	jsonOut bool
+	openNet bool
+}
+
+func (f *sandboxFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&f.spec.Image, "image", "", "sandbox image (default: the host's default)")
+	fs.Float64Var(&f.spec.CPUs, "cpus", 0, "CPU limit, e.g. 2 or 0.5 (default: no limit)")
+	fs.IntVar(&f.spec.MemoryMB, "memory", 0, "memory limit in MB (default: no limit)")
+	fs.BoolVar(&f.openNet, "net", false, "allow outbound network access (blocked by default)")
+	fs.Var(&f.include, "include", "send an ignored file anyway, e.g. .env.local (repeatable)")
+	fs.Var(&f.env, "env", "set an environment variable, KEY=VALUE (repeatable)")
+	fs.StringVar(&f.dir, "dir", ".", "worktree to sync")
+	fs.BoolVar(&f.jsonOut, "json", false, "print newline-delimited JSON events instead of raw output")
+}
+
+func (f *sandboxFlags) check() error {
+	if f.openNet {
+		f.spec.Network = api.NetworkOpen
+	}
+	for _, kv := range f.env {
+		if !strings.Contains(kv, "=") {
+			return fmt.Errorf("--env %q must be KEY=VALUE", kv)
+		}
+	}
+	return nil
+}
+
+// jsonEvents writes JSON events to w, one goroutine at a time.
+type jsonEvents struct {
+	mu  sync.Mutex
+	enc *json.Encoder
+}
+
+func (j *jsonEvents) emit(ev string, f map[string]any) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	f["event"] = ev
+	j.enc.Encode(f)
+}
+
+func parseCommand(name string, fs *flag.FlagSet, args []string, stderr io.Writer) ([]string, bool) {
 	fs.Usage = func() {
-		fmt.Fprint(stderr, "Usage: ephemera run [flags] -- <command> [args...]\n\nFlags:\n")
+		fmt.Fprintf(stderr, "Usage: ephemera %s [flags] -- <command> [args...]\n\nFlags:\n", name)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return nil, false
 	}
-	argv := fs.Args()
-	if len(argv) == 0 {
+	if len(fs.Args()) == 0 {
 		fs.Usage()
+		return nil, false
+	}
+	return fs.Args(), true
+}
+
+func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var f sandboxFlags
+	f.register(fs)
+	argv, ok := parseCommand("run", fs, args, stderr)
+	if !ok {
 		return 2
 	}
-	if openNet {
-		spec.Network = api.NetworkOpen
-	}
-	for _, kv := range env {
-		if !strings.Contains(kv, "=") {
-			fmt.Fprintf(stderr, "ephemera: --env %q must be KEY=VALUE\n", kv)
-			return 2
-		}
+	if err := f.check(); err != nil {
+		fmt.Fprintln(stderr, "ephemera:", err)
+		return 2
 	}
 
 	opts := client.RunOptions{
-		Dir:     dir,
-		Include: include,
-		Spec:    spec,
-		Exec:    api.ExecRequest{Argv: argv, Env: env},
+		Dir:     f.dir,
+		Include: f.include,
+		Spec:    f.spec,
+		Exec:    api.ExecRequest{Argv: argv, Env: f.env},
 		Stdout:  stdout,
 		Stderr:  stderr,
 	}
-	var events *json.Encoder
-	if jsonOut {
-		events = json.NewEncoder(stdout)
-		emit := func(ev string, f map[string]any) {
-			f["event"] = ev
-			events.Encode(f)
-		}
-		opts.Events = emit
-		opts.Stdout = eventWriter{emit: emit, stream: "stdout"}
-		opts.Stderr = eventWriter{emit: emit, stream: "stderr"}
+	events := &jsonEvents{enc: json.NewEncoder(stdout)}
+	if f.jsonOut {
+		opts.Events = events.emit
+		opts.Stdout = eventWriter{emit: events.emit, stream: "stdout"}
+		opts.Stderr = eventWriter{emit: events.emit, stream: "stderr"}
 	}
 
 	res, err := c.Run(ctx, opts)
@@ -154,18 +187,109 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		if errors.Is(err, context.Canceled) {
 			err = errors.New("interrupted; the sandbox was destroyed")
 		}
-		if jsonOut {
-			events.Encode(map[string]any{"event": "error", "error": err.Error()})
+		if f.jsonOut {
+			events.emit("error", map[string]any{"error": err.Error()})
 		} else {
 			fmt.Fprintln(stderr, "ephemera:", err)
 		}
 		return exitFailure
 	}
-	if jsonOut {
-		events.Encode(map[string]any{"event": "exit", "code": res.ExitCode,
+	if f.jsonOut {
+		events.emit("exit", map[string]any{"code": res.ExitCode,
 			"duration_ms": res.Duration.Milliseconds(), "sandbox": res.SandboxID})
 	}
 	return res.ExitCode
+}
+
+func plural(n any, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", word)
+	}
+	return fmt.Sprintf("%v %ss", n, word)
+}
+
+// exitInterrupted is returned when ephemera dev is stopped with Ctrl-C.
+const exitInterrupted = 130
+
+func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("dev", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var f sandboxFlags
+	f.register(fs)
+	var ports stringList
+	fs.Var(&ports, "p", "forward a port to localhost: PORT or LOCAL:SANDBOX (repeatable)")
+	argv, ok := parseCommand("dev", fs, args, stderr)
+	if !ok {
+		return 2
+	}
+	if err := f.check(); err != nil {
+		fmt.Fprintln(stderr, "ephemera:", err)
+		return 2
+	}
+	opts := client.DevOptions{
+		Dir:     f.dir,
+		Include: f.include,
+		Spec:    f.spec,
+		Exec:    api.ExecRequest{Argv: argv, Env: f.env},
+		Stdout:  stdout,
+		Stderr:  stderr,
+	}
+	for _, p := range ports {
+		pm, err := client.ParsePort(p)
+		if err != nil {
+			fmt.Fprintln(stderr, "ephemera:", err)
+			return 2
+		}
+		opts.Ports = append(opts.Ports, pm)
+	}
+
+	events := &jsonEvents{enc: json.NewEncoder(stdout)}
+	if f.jsonOut {
+		opts.Events = events.emit
+		opts.Stdout = eventWriter{emit: events.emit, stream: "stdout"}
+		opts.Stderr = eventWriter{emit: events.emit, stream: "stderr"}
+	} else {
+		opts.Events = func(ev string, m map[string]any) {
+			switch ev {
+			case "sandbox":
+				fmt.Fprintf(stderr, "ephemera: sandbox %s on %s\n", m["id"], m["host"])
+			case "synced":
+				if m["initial"] == true {
+					fmt.Fprintf(stderr, "ephemera: synced %s; watching for changes\n", plural(m["files"], "file"))
+				} else {
+					fmt.Fprintf(stderr, "ephemera: synced %d changed, %d deleted\n", m["files"], m["deleted"])
+				}
+			case "forwarding":
+				fmt.Fprintf(stderr, "ephemera: http://%s -> sandbox port %d\n", m["local"], m["port"])
+			case "sync_error", "port_error":
+				fmt.Fprintf(stderr, "ephemera: %s\n", m["error"])
+			case "destroyed":
+				fmt.Fprintf(stderr, "ephemera: sandbox %s destroyed\n", m["id"])
+			}
+		}
+	}
+
+	code, err := c.Dev(ctx, opts)
+	if errors.Is(err, context.Canceled) {
+		if f.jsonOut {
+			events.emit("stopped", map[string]any{})
+		}
+		return exitInterrupted
+	}
+	if err != nil {
+		if f.jsonOut {
+			events.emit("error", map[string]any{"error": err.Error()})
+		} else {
+			fmt.Fprintln(stderr, "ephemera:", err)
+		}
+		return exitFailure
+	}
+	if f.jsonOut {
+		events.emit("exit", map[string]any{"code": code})
+	} else {
+		fmt.Fprintf(stderr, "ephemera: dev command exited with code %d\n", code)
+	}
+	return code
 }
 
 // eventWriter turns command output into JSON events.

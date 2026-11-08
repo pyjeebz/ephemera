@@ -29,7 +29,8 @@ unless you pass `--include`.
 
 ## Try it locally
 
-Needs Go 1.24+ and Docker.
+Needs Go 1.24+ and Docker on Linux. The host agent runs as root, so it can
+reach ports inside sandboxes.
 
 ```sh
 go build -o bin/ ./cmd/...
@@ -41,7 +42,19 @@ bin/ephemera-host &
 bin/ephemera run -- sh -c 'ls && uname -a'
 ```
 
-Useful flags for `ephemera run`:
+For a dev server, use `ephemera dev`. It keeps the sandbox running, forwards
+ports to your machine, and sends only the files you change, so hot reload
+works as usual:
+
+```sh
+bin/ephemera dev -p 3000 --net -- sh -c 'npm install && npm run dev'
+```
+
+Then open http://localhost:3000. Ctrl-C stops the dev server and destroys
+the sandbox. Ports work even when the server listens only on the sandbox's
+own `127.0.0.1`.
+
+Flags for `run` and `dev`:
 
 | Flag | Meaning |
 | --- | --- |
@@ -50,6 +63,7 @@ Useful flags for `ephemera run`:
 | `--env KEY=VALUE` | Set an environment variable |
 | `--image`, `--cpus`, `--memory` | Sandbox image and limits |
 | `--json` | Newline-delimited JSON events, for agents and scripts |
+| `-p PORT`, `-p LOCAL:SANDBOX` | `dev` only: forward a port to localhost |
 
 `ephemera run` exits with the command's exit code, or 125 if ephemera itself
 failed. `ephemera ls` and `ephemera rm` list and remove sandboxes.

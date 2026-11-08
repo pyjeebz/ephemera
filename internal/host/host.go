@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +57,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("POST /v1/sandboxes", s.create)
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/files", s.files)
+	mux.HandleFunc("POST /v1/sandboxes/{id}/files/delete", s.deleteFiles)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.exec)
+	mux.HandleFunc("GET /v1/sandboxes/{id}/ports/{port}", s.port)
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.destroy)
 	return mux
 }
@@ -198,6 +202,114 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sw.Exit(code)
+}
+
+func (s *Server) deleteFiles(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sandboxAuth(w, r, false)
+	if !ok {
+		return
+	}
+	var req api.DeleteFilesRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<20)).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "bad request: %v", err)
+		return
+	}
+	for _, p := range req.Paths {
+		if err := worktree.CheckPath(p); err != nil {
+			WriteError(w, http.StatusBadRequest, "%v", err)
+			return
+		}
+	}
+	const batch = 200
+	for len(req.Paths) > 0 {
+		n := min(len(req.Paths), batch)
+		var out strings.Builder
+		argv := append([]string{"rm", "-f", "--"}, req.Paths[:n]...)
+		code, err := s.Backend.Exec(r.Context(), id, api.ExecRequest{Argv: argv}, &out, &out)
+		if err == nil && code != 0 {
+			err = fmt.Errorf("rm exited %d: %s", code, strings.TrimSpace(out.String()))
+		}
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "delete: %v", err)
+			return
+		}
+		req.Paths = req.Paths[n:]
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// port connects the client to a TCP port inside the sandbox. The request is
+// an HTTP Upgrade; after the 101 response the connection carries raw bytes
+// both ways.
+func (s *Server) port(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sandboxAuth(w, r, false)
+	if !ok {
+		return
+	}
+	port, err := strconv.Atoi(r.PathValue("port"))
+	if err != nil || port < 1 || port > 65535 {
+		WriteError(w, http.StatusBadRequest, "invalid port")
+		return
+	}
+	if !strings.EqualFold(r.Header.Get("Upgrade"), api.PortUpgrade) {
+		WriteError(w, http.StatusUpgradeRequired, "Upgrade: %s required", api.PortUpgrade)
+		return
+	}
+	dctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	upstream, err := s.Backend.Dial(dctx, id, port)
+	if err != nil {
+		WriteError(w, http.StatusBadGateway, "nothing is listening on port %d in the sandbox: %v", port, err)
+		return
+	}
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		upstream.Close()
+		WriteError(w, http.StatusInternalServerError, "connection cannot be upgraded")
+		return
+	}
+	client, buf, err := hj.Hijack()
+	if err != nil {
+		upstream.Close()
+		return
+	}
+	fmt.Fprintf(buf, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: %s\r\n\r\n", api.PortUpgrade)
+	if err := buf.Flush(); err != nil {
+		client.Close()
+		upstream.Close()
+		return
+	}
+	// Bytes the client sent right after the request are already buffered.
+	if n := buf.Reader.Buffered(); n > 0 {
+		pending, _ := buf.Reader.Peek(n)
+		if _, err := upstream.Write(pending); err != nil {
+			client.Close()
+			upstream.Close()
+			return
+		}
+	}
+	Pipe(client, upstream)
+}
+
+// Pipe copies between two connections until both directions are done,
+// passing on half-closes, then closes both.
+func Pipe(a, b net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	cp := func(dst, src net.Conn) {
+		defer wg.Done()
+		io.Copy(dst, src)
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
+		} else {
+			dst.Close()
+		}
+	}
+	go cp(a, b)
+	go cp(b, a)
+	wg.Wait()
+	a.Close()
+	b.Close()
 }
 
 func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {

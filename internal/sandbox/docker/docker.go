@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -98,6 +99,20 @@ func (b *Backend) Exec(ctx context.Context, id string, req api.ExecRequest, stdo
 		return 0, fmt.Errorf("docker exec: %w", err)
 	}
 	return 0, nil
+}
+
+// Dial connects to a port on the container's own localhost by entering its
+// network namespace, which works even with networking turned off.
+func (b *Backend) Dial(ctx context.Context, id string, port int) (net.Conn, error) {
+	out, err := exec.CommandContext(ctx, b.bin(), "inspect", "--format", "{{.State.Pid}}", container(id)).Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker inspect: %w", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid <= 0 {
+		return nil, fmt.Errorf("sandbox %s is not running", id)
+	}
+	return dialInNetns(ctx, pid, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 }
 
 // Destroy removes the container and its filesystem.

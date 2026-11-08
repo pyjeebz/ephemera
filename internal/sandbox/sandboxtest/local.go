@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,6 +115,14 @@ func (l *Local) Exec(ctx context.Context, id string, req api.ExecRequest, stdout
 		return 0, ctx.Err()
 	}
 	return 0, err
+}
+
+// Dial connects to the port on this machine's localhost.
+func (l *Local) Dial(ctx context.Context, id string, port int) (net.Conn, error) {
+	if _, err := l.dir(id); err != nil {
+		return nil, err
+	}
+	return (&net.Dialer{}).DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", port))
 }
 
 func (l *Local) Destroy(_ context.Context, id string) error {

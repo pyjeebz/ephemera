@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,10 +226,8 @@ func TestDockerBackend(t *testing.T) {
 		t.Skip("docker not available")
 	}
 	const image = "alpine:3.20"
-	if exec.Command("docker", "image", "inspect", image).Run() != nil {
-		if out, err := exec.Command("docker", "pull", "-q", image).CombinedOutput(); err != nil {
-			t.Skipf("cannot pull %s: %v\n%s", image, err, out)
-		}
+	if err := ensureImage(image); err != nil {
+		t.Skip(err)
 	}
 	s := newStack(t, &docker.Backend{}, image)
 	dir := worktree(t, map[string]string{
@@ -252,8 +251,24 @@ func TestDockerBackend(t *testing.T) {
 	if want := "hello from docker\noffline\n"; stdout.String() != want {
 		t.Errorf("stdout = %q, want %q (network must be off by default)", stdout.String(), want)
 	}
-	out, _ := exec.Command("docker", "ps", "-aq", "--filter", "label=ephemera.sandbox="+res.SandboxID).Output()
-	if len(bytes.TrimSpace(out)) != 0 {
+	if strings.TrimSpace(dockerPS(res.SandboxID)) != "" {
 		t.Errorf("container for %s still exists", res.SandboxID)
 	}
+}
+
+// ensureImage pulls image unless it is already present.
+func ensureImage(image string) error {
+	if exec.Command("docker", "image", "inspect", image).Run() == nil {
+		return nil
+	}
+	if out, err := exec.Command("docker", "pull", "-q", image).CombinedOutput(); err != nil {
+		return fmt.Errorf("cannot pull %s: %v\n%s", image, err, out)
+	}
+	return nil
+}
+
+// dockerPS lists containers belonging to a sandbox.
+func dockerPS(id string) string {
+	out, _ := exec.Command("docker", "ps", "-aq", "--filter", "label=ephemera.sandbox="+id).Output()
+	return string(out)
 }

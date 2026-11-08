@@ -5,6 +5,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,6 +119,57 @@ func (c *Client) Upload(ctx context.Context, sb *api.Sandbox, dir string, files 
 	}
 	resp.Body.Close()
 	return nil
+}
+
+// DeleteFiles removes files from the sandbox's workspace.
+func (c *Client) DeleteFiles(ctx context.Context, sb *api.Sandbox, paths []string) error {
+	resp, err := c.do(ctx, http.MethodPost, sb.HostURL+"/v1/sandboxes/"+sb.ID+"/files/delete", sb.Token,
+		jsonBody(api.DeleteFilesRequest{Paths: paths}), "application/json")
+	if err != nil {
+		return fmt.Errorf("delete files: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// upgradeTransport speaks HTTP/1.1 only, since connection upgrades do not
+// exist in HTTP/2.
+var upgradeTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ForceAttemptHTTP2 = false
+	t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	return t
+}()
+
+// DialPort opens a raw TCP connection to a port inside the sandbox,
+// through its host.
+func (c *Client) DialPort(ctx context.Context, sb *api.Sandbox, port int) (io.ReadWriteCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/sandboxes/%s/ports/%d", sb.HostURL, sb.ID, port), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+sb.Token)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", api.PortUpgrade)
+	resp, err := (&http.Client{Transport: upgradeTransport}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		defer resp.Body.Close()
+		var e api.Error
+		json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&e)
+		if e.Error == "" {
+			e.Error = resp.Status
+		}
+		return nil, &StatusError{Code: resp.StatusCode, Msg: e.Error}
+	}
+	rwc, ok := resp.Body.(io.ReadWriteCloser)
+	if !ok {
+		resp.Body.Close()
+		return nil, errors.New("port: connection was not upgraded")
+	}
+	return rwc, nil
 }
 
 // ErrStreamCut means the command's output stopped without an exit code.

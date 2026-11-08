@@ -149,3 +149,40 @@ func TestSanitizeRejectsUnsafeEntries(t *testing.T) {
 		t.Error("over the size cap: want error")
 	}
 }
+
+func TestScanAndDiff(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.txt", "a")
+	write(t, dir, "b.txt", "b")
+	before, err := Scan(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "a.txt", "changed and longer")
+	write(t, dir, "c.txt", "new")
+	os.Remove(filepath.Join(dir, "b.txt"))
+	after, err := Scan(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, removed := Diff(before, after)
+	if !reflect.DeepEqual(changed, []string{"a.txt", "c.txt"}) || !reflect.DeepEqual(removed, []string{"b.txt"}) {
+		t.Errorf("Diff = %v, %v", changed, removed)
+	}
+	if c, r := Diff(after, after); len(c)+len(r) != 0 {
+		t.Errorf("no change: Diff = %v, %v", c, r)
+	}
+}
+
+func TestCheckPath(t *testing.T) {
+	for _, ok := range []string{"a", "a/b.txt", ".env.local"} {
+		if err := CheckPath(ok); err != nil {
+			t.Errorf("CheckPath(%q) = %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", ".", "/etc/x", "../x", "a/../../x", "a//b", "a/./b", "a\\b"} {
+		if CheckPath(bad) == nil {
+			t.Errorf("CheckPath(%q): want error", bad)
+		}
+	}
+}

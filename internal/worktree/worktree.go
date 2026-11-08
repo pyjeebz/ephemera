@@ -210,6 +210,79 @@ func checkName(name string) error {
 	return nil
 }
 
+// CheckPath reports whether name is a safe relative path inside the
+// workspace.
+func CheckPath(name string) error {
+	if err := checkName(name); err != nil {
+		return err
+	}
+	if c := path.Clean(name); c == "." || c != name {
+		return fmt.Errorf("worktree: path %q is not clean", name)
+	}
+	return nil
+}
+
+// FileState is what change detection compares.
+type FileState struct {
+	Size    int64
+	ModTime int64 // UnixNano
+	Mode    fs.FileMode
+	Link    string
+}
+
+// Snapshot maps each file to send to its state.
+type Snapshot map[string]FileState
+
+// Scan lists the files to send, as Files does, with their current state.
+func Scan(dir string, include []string) (Snapshot, error) {
+	files, err := Files(dir, include)
+	if err != nil {
+		return nil, err
+	}
+	snap := make(Snapshot, len(files))
+	for _, f := range files {
+		full := filepath.Join(dir, filepath.FromSlash(f))
+		info, err := os.Lstat(full)
+		if err != nil {
+			continue // removed while scanning; the next scan sees it gone
+		}
+		st := FileState{Size: info.Size(), ModTime: info.ModTime().UnixNano(), Mode: info.Mode()}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			st.Link, _ = os.Readlink(full)
+		}
+		snap[f] = st
+	}
+	return snap, nil
+}
+
+// Diff returns the files that are new or changed in next, and the files
+// that are gone, both sorted.
+func Diff(prev, next Snapshot) (changed, removed []string) {
+	for f, st := range next {
+		if old, ok := prev[f]; !ok || old != st {
+			changed = append(changed, f)
+		}
+	}
+	for f := range prev {
+		if _, ok := next[f]; !ok {
+			removed = append(removed, f)
+		}
+	}
+	sort.Strings(changed)
+	sort.Strings(removed)
+	return changed, removed
+}
+
+// Files returns the snapshot's paths, sorted.
+func (s Snapshot) Files() []string {
+	out := make([]string, 0, len(s))
+	for f := range s {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func escapes(p string) bool {
 	p = path.Clean(p)
 	return p == ".." || strings.HasPrefix(p, "../")

@@ -72,6 +72,16 @@ type ExecRequest struct {
 	Env  []string `json:"env,omitempty"`
 }
 
+// DeleteFilesRequest removes files from a sandbox's workspace, for files
+// deleted on the laptop during ephemera dev.
+type DeleteFilesRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// PortUpgrade is the HTTP Upgrade protocol name for a raw TCP connection to
+// a port inside a sandbox.
+const PortUpgrade = "ephemera-tcp"
+
 // RegisterHostRequest is a host's registration and heartbeat.
 type RegisterHostRequest struct {
 	Name     string `json:"name"`
