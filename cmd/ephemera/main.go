@@ -19,6 +19,7 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/client"
+	"github.com/pyjeebz/ephemera/internal/config"
 )
 
 var version = "dev"
@@ -34,20 +35,23 @@ Usage:
   ephemera dev [flags] [-p PORT]... -- <dev server command>
   ephemera ls [--json]
   ephemera rm <sandbox-id>...
+  ephemera login [--server URL]
+  ephemera logout
   ephemera version
 
-Environment:
+Environment (overrides the saved login):
   EPHEMERA_SERVER   central server URL (default http://127.0.0.1:7700)
   EPHEMERA_TOKEN    API token
+  EPHEMERA_CONFIG   where the login is saved
 
 Run "ephemera run -h" or "ephemera dev -h" for their flags.
 `
 
 func main() {
-	os.Exit(realMain(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(realMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-func realMain(args []string, stdout, stderr io.Writer) int {
+func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -55,11 +59,16 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	c := &client.Client{
-		Server: envOr("EPHEMERA_SERVER", "http://127.0.0.1:7700"),
-		Token:  os.Getenv("EPHEMERA_TOKEN"),
+	server, token, err := config.Resolve()
+	if err != nil {
+		fmt.Fprintln(stderr, "ephemera: reading saved login:", err)
 	}
+	c := &client.Client{Server: server, Token: token}
 	switch args[0] {
+	case "login":
+		return cmdLogin(ctx, args[1:], stdin, stdout, stderr)
+	case "logout":
+		return cmdLogout(stdout, stderr)
 	case "run":
 		return cmdRun(ctx, c, args[1:], stdout, stderr)
 	case "dev":
@@ -78,13 +87,6 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ephemera: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }
 
 type stringList []string

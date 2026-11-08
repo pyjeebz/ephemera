@@ -5,6 +5,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -354,37 +356,51 @@ func (s *Server) DestroyAll(ctx context.Context) error {
 }
 
 // Register announces the host to the central server, then repeats every
-// interval as a heartbeat until ctx is done.
-func Register(ctx context.Context, client *http.Client, serverURL, secret string, req api.RegisterHostRequest, interval time.Duration, log *slog.Logger) {
-	body, _ := json.Marshal(req)
-	send := func() error {
-		hr, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(serverURL, "/")+"/v1/hosts", strings.NewReader(string(body)))
+// interval as a heartbeat until ctx is done. Each heartbeat lists this
+// host's sandboxes; any the central server has no record of are destroyed.
+func (s *Server) Register(ctx context.Context, client *http.Client, serverURL, secret string, req api.RegisterHostRequest, interval time.Duration) {
+	send := func() (api.RegisterHostResponse, error) {
+		var out api.RegisterHostResponse
+		req.Sandboxes = s.ids()
+		body, _ := json.Marshal(req)
+		hr, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(serverURL, "/")+"/v1/hosts", bytes.NewReader(body))
 		if err != nil {
-			return err
+			return out, err
 		}
 		hr.Header.Set("Authorization", "Bearer "+secret)
 		hr.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(hr)
 		if err != nil {
-			return err
+			return out, err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode/100 != 2 {
 			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(msg)))
+			return out, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(msg)))
 		}
-		return nil
+		if resp.StatusCode == http.StatusOK {
+			err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
+		}
+		return out, err
 	}
 	registered := false
 	for {
-		err := send()
+		resp, err := send()
 		switch {
 		case err != nil && ctx.Err() == nil:
-			log.Warn("registration failed", "server", serverURL, "err", err)
+			s.log().Warn("registration failed", "server", serverURL, "err", err)
 			registered = false
 		case err == nil && !registered:
-			log.Info("registered with central server", "server", serverURL, "name", req.Name)
+			s.log().Info("registered with central server", "server", serverURL, "name", req.Name)
 			registered = true
+		}
+		for _, id := range resp.Destroy {
+			s.log().Warn("central server has no record of sandbox; destroying it", "sandbox", id)
+			if err := s.Backend.Destroy(ctx, id); err != nil {
+				s.log().Error("destroy unknown sandbox", "sandbox", id, "err", err)
+				continue
+			}
+			s.forget(id)
 		}
 		select {
 		case <-ctx.Done():
@@ -392,4 +408,15 @@ func Register(ctx context.Context, client *http.Client, serverURL, secret string
 		case <-time.After(interval):
 		}
 	}
+}
+
+func (s *Server) ids() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]string, 0, len(s.sandboxes))
+	for id := range s.sandboxes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }

@@ -2,8 +2,10 @@
 // which sandboxes run where. It handles ids and states only: files, command
 // output and secrets go straight between the CLI and the host.
 //
-// State is kept in memory for now; a restart forgets running sandboxes, and
-// their hosts destroy them when they in turn restart.
+// The sandbox list is saved to StatePath so a restart keeps track of
+// running sandboxes. Every host heartbeat lists what the host really runs:
+// records the host no longer has are dropped, and sandboxes the central
+// server does not know about are destroyed.
 package control
 
 import (
@@ -11,11 +13,14 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -30,8 +35,9 @@ const HostTimeout = 45 * time.Second
 
 // Server serves the central API.
 type Server struct {
-	UserToken  string // bearer token for CLI requests
+	Tokens     Tokens // API tokens for CLI requests
 	HostSecret string // shared with every host
+	StatePath  string // where the sandbox list is saved; empty keeps it in memory
 	Client     *http.Client
 	Log        *slog.Logger
 	Now        func() time.Time
@@ -39,6 +45,68 @@ type Server struct {
 	mu        sync.Mutex
 	hosts     map[string]*hostState
 	sandboxes map[string]*api.Sandbox
+
+	saveMu sync.Mutex
+}
+
+// createGrace is how long a new sandbox may be missing from its host's
+// heartbeat before its record is dropped: the host may still be creating it.
+const createGrace = 2 * time.Minute
+
+type stateFile struct {
+	Sandboxes []api.Sandbox `json:"sandboxes"`
+}
+
+// Load reads the saved sandbox list, if there is one.
+func (s *Server) Load() error {
+	if s.StatePath == "" {
+		return nil
+	}
+	b, err := os.ReadFile(s.StatePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var st stateFile
+	if err := json.Unmarshal(b, &st); err != nil {
+		return fmt.Errorf("%s: %w", s.StatePath, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sandboxes = make(map[string]*api.Sandbox, len(st.Sandboxes))
+	for i := range st.Sandboxes {
+		sb := st.Sandboxes[i]
+		sb.Token = ""
+		s.sandboxes[sb.ID] = &sb
+	}
+	return nil
+}
+
+// save writes the sandbox list. Sandbox tokens are never written.
+func (s *Server) save() {
+	if s.StatePath == "" {
+		return
+	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	st := stateFile{Sandboxes: make([]api.Sandbox, 0, len(s.sandboxes))}
+	for _, sb := range s.sandboxes {
+		c := *sb
+		c.Token = ""
+		st.Sandboxes = append(st.Sandboxes, c)
+	}
+	s.mu.Unlock()
+	sort.Slice(st.Sandboxes, func(i, j int) bool { return st.Sandboxes[i].ID < st.Sandboxes[j].ID })
+	err := os.MkdirAll(filepath.Dir(s.StatePath), 0o700)
+	if err == nil {
+		err = writeJSONAtomic(s.StatePath, st, 0o600)
+	}
+	if err != nil {
+		s.log().Error("save state", "path", s.StatePath, "err", err)
+	}
 }
 
 type hostState struct {
@@ -51,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("POST /v1/hosts", s.register)
+	mux.HandleFunc("GET /v1/whoami", s.user(s.whoami))
 	mux.HandleFunc("POST /v1/sandboxes", s.user(s.create))
 	mux.HandleFunc("GET /v1/sandboxes", s.user(s.list))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.user(s.destroy))
@@ -83,14 +152,27 @@ func tokenOK(r *http.Request, want string) bool {
 	return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
+type ctxKey struct{}
+
 func (s *Server) user(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !tokenOK(r, s.UserToken) {
-			host.WriteError(w, http.StatusUnauthorized, "invalid token")
+		tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		var name string
+		ok := false
+		if s.Tokens != nil && tok != "" {
+			name, ok = s.Tokens.Check(tok)
+		}
+		if !ok {
+			host.WriteError(w, http.StatusUnauthorized, "invalid token; run ephemera login")
 			return
 		}
-		h(w, r)
+		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, name)))
 	}
+}
+
+func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
+	name, _ := r.Context().Value(ctxKey{}).(string)
+	writeJSON(w, http.StatusOK, api.WhoAmI{Name: name})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -114,13 +196,44 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		host.WriteError(w, http.StatusBadRequest, "name and an http(s) url are required")
 		return
 	}
+	reported := make(map[string]bool, len(req.Sandboxes))
+	for _, id := range req.Sandboxes {
+		reported[id] = true
+	}
+	var resp api.RegisterHostResponse
+	changed := false
 	s.mu.Lock()
 	if s.hosts == nil {
 		s.hosts = map[string]*hostState{}
 	}
 	s.hosts[req.Name] = &hostState{RegisterHostRequest: req, lastSeen: s.now()}
+	for _, id := range req.Sandboxes {
+		if sb, ok := s.sandboxes[id]; !ok || sb.Host != req.Name {
+			resp.Destroy = append(resp.Destroy, id)
+		}
+	}
+	for id, sb := range s.sandboxes {
+		if sb.Host == req.Name && !reported[id] && s.now().Sub(sb.CreatedAt) > createGrace {
+			delete(s.sandboxes, id)
+			changed = true
+			s.log().Info("sandbox gone from its host; record dropped", "sandbox", id, "host", req.Name)
+		}
+	}
 	s.mu.Unlock()
-	w.WriteHeader(http.StatusNoContent)
+	if changed {
+		s.save()
+	}
+	for _, id := range resp.Destroy {
+		s.log().Warn("host runs a sandbox with no record; destroying it", "sandbox", id, "host", req.Name)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) hostLive(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, ok := s.hosts[name]
+	return ok && s.now().Sub(h.lastSeen) <= HostTimeout
 }
 
 // pick chooses the live host with the fewest sandboxes and free capacity.
@@ -208,11 +321,13 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}
 	// Count it against the host before the slow call, so concurrent
 	// creates spread out.
+	rec := *sb
+	rec.Token = ""
 	s.mu.Lock()
 	if s.sandboxes == nil {
 		s.sandboxes = map[string]*api.Sandbox{}
 	}
-	s.sandboxes[sb.ID] = sb
+	s.sandboxes[sb.ID] = &rec
 	s.mu.Unlock()
 
 	err = s.hostCall(r.Context(), http.MethodPost, sb.HostURL+"/v1/sandboxes",
@@ -225,6 +340,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		host.WriteError(w, http.StatusBadGateway, "host %s: %v", h.Name, err)
 		return
 	}
+	s.save()
 	s.log().Info("sandbox placed", "sandbox", sb.ID, "host", h.Name)
 	writeJSON(w, http.StatusCreated, sb)
 }
@@ -252,12 +368,18 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.hostCall(r.Context(), http.MethodDelete, sb.HostURL+"/v1/sandboxes/"+id, nil); err != nil {
-		host.WriteError(w, http.StatusBadGateway, "host %s: %v", sb.Host, err)
-		return
+		if s.hostLive(sb.Host) {
+			host.WriteError(w, http.StatusBadGateway, "host %s: %v", sb.Host, err)
+			return
+		}
+		// The host is offline. Drop the record; when the host comes back,
+		// its heartbeat lists the sandbox and it is told to destroy it.
+		s.log().Warn("host offline; dropping sandbox record", "sandbox", id, "host", sb.Host)
 	}
 	s.mu.Lock()
 	delete(s.sandboxes, id)
 	s.mu.Unlock()
+	s.save()
 	s.log().Info("sandbox destroyed", "sandbox", id, "host", sb.Host)
 	w.WriteHeader(http.StatusNoContent)
 }

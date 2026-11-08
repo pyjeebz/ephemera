@@ -50,8 +50,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go host.Register(ctx, &http.Client{Timeout: 10 * time.Second}, *server, secret,
-		api.RegisterHostRequest{Name: *name, URL: *advertise, Capacity: *capacity}, 15*time.Second, log)
+	go srv.Register(ctx, &http.Client{Timeout: 10 * time.Second}, *server, secret,
+		api.RegisterHostRequest{Name: *name, URL: *advertise, Capacity: *capacity}, 15*time.Second)
 	cleaned := make(chan struct{})
 	go func() {
 		defer close(cleaned)

@@ -82,11 +82,26 @@ type DeleteFilesRequest struct {
 // a port inside a sandbox.
 const PortUpgrade = "ephemera-tcp"
 
-// RegisterHostRequest is a host's registration and heartbeat.
+// RegisterHostRequest is a host's registration and heartbeat. Sandboxes
+// lists the sandboxes the host is running, so the central server can
+// reconcile its records with reality.
 type RegisterHostRequest struct {
-	Name     string `json:"name"`
-	URL      string `json:"url"`
-	Capacity int    `json:"capacity"`
+	Name      string   `json:"name"`
+	URL       string   `json:"url"`
+	Capacity  int      `json:"capacity"`
+	Sandboxes []string `json:"sandboxes"`
+}
+
+// RegisterHostResponse tells a host which of its sandboxes the central
+// server does not know about. The host destroys them: nothing may run that
+// no one can see or stop.
+type RegisterHostResponse struct {
+	Destroy []string `json:"destroy,omitempty"`
+}
+
+// WhoAmI describes the caller's token.
+type WhoAmI struct {
+	Name string `json:"name"`
 }
 
 // Error is the body of every non-2xx JSON response.

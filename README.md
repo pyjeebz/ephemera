@@ -34,13 +34,28 @@ reach ports inside sandboxes.
 
 ```sh
 go build -o bin/ ./cmd/...
-export EPHEMERA_TOKEN=dev-token EPHEMERA_HOST_SECRET=dev-secret
+export EPHEMERA_HOST_SECRET=dev-secret   # shared by the server and its hosts
 
+bin/ephemera-server token create my-laptop > token.txt
 bin/ephemera-server &
 bin/ephemera-host &
 
+bin/ephemera login < token.txt && rm token.txt
 bin/ephemera run -- sh -c 'ls && uname -a'
 ```
+
+`ephemera login` checks the token and saves it, readable only by you, in
+your user config directory. `ephemera logout` removes it. The variables
+`EPHEMERA_SERVER` and `EPHEMERA_TOKEN` override the saved login, which is
+handy in CI.
+
+The central server keeps its API tokens (stored only as hashes) and its list
+of running sandboxes in a state directory: `/var/lib/ephemera` as root,
+otherwise your user config directory, or `--state DIR`. Manage tokens with
+`ephemera-server token create|ls|revoke`; the running server picks up
+changes. Each host reports its sandboxes every 15 seconds, and any sandbox
+the central server has no record of is destroyed, so nothing keeps running
+unseen.
 
 For a dev server, use `ephemera dev`. It keeps the sandbox running, forwards
 ports to your machine, and sends only the files you change, so hot reload
@@ -85,7 +100,8 @@ cmd/ephemera          CLI
 cmd/ephemera-server   central server
 cmd/ephemera-host     host agent
 internal/api          shared types
-internal/client       CLI side: central server and host calls, run
+internal/client       CLI side: central server and host calls, run, dev
+internal/config       saved CLI login
 internal/control      central server
 internal/host         host agent API
 internal/sandbox      backend interface, Docker backend, test backend

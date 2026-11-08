@@ -87,6 +87,17 @@ func (c *Client) Create(ctx context.Context, spec api.Spec) (*api.Sandbox, error
 	return &sb, nil
 }
 
+// WhoAmI checks the token and returns its name.
+func (c *Client) WhoAmI(ctx context.Context) (api.WhoAmI, error) {
+	var w api.WhoAmI
+	resp, err := c.do(ctx, http.MethodGet, c.server()+"/v1/whoami", c.Token, nil, "")
+	if err != nil {
+		return w, err
+	}
+	defer resp.Body.Close()
+	return w, json.NewDecoder(resp.Body).Decode(&w)
+}
+
 // List returns the sandboxes the central server knows about.
 func (c *Client) List(ctx context.Context) ([]api.Sandbox, error) {
 	resp, err := c.do(ctx, http.MethodGet, c.server()+"/v1/sandboxes", c.Token, nil, "")

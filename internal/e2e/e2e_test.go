@@ -38,7 +38,7 @@ type stack struct {
 
 func newStack(t *testing.T, be sandbox.Backend, image string) *stack {
 	t.Helper()
-	cs := &control.Server{UserToken: userToken, HostSecret: hostSecret, Log: discardLog()}
+	cs := &control.Server{Tokens: control.StaticToken{Name: "test", Token: userToken}, HostSecret: hostSecret, Log: discardLog()}
 	cts := httptest.NewServer(cs.Handler())
 	t.Cleanup(cts.Close)
 
@@ -49,8 +49,8 @@ func newStack(t *testing.T, be sandbox.Backend, image string) *stack {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go host.Register(ctx, http.DefaultClient, cts.URL, hostSecret,
-		api.RegisterHostRequest{Name: "test-host", URL: hts.URL, Capacity: 10}, 50*time.Millisecond, discardLog())
+	go hs.Register(ctx, http.DefaultClient, cts.URL, hostSecret,
+		api.RegisterHostRequest{Name: "test-host", URL: hts.URL, Capacity: 10}, 50*time.Millisecond)
 
 	c := &client.Client{Server: cts.URL, Token: userToken}
 	// Wait for the host to register.
