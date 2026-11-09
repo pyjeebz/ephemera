@@ -83,6 +83,34 @@ Flags for `run` and `dev`:
 `ephemera run` exits with the command's exit code, or 125 if ephemera itself
 failed. `ephemera ls` and `ephemera rm` list and remove sandboxes.
 
+## Setting up a host
+
+A host is any x86_64 Linux machine with KVM (Ubuntu 24.04). On a fresh
+machine:
+
+```sh
+sudo deploy/host/bootstrap.sh --hostname my-host
+```
+
+It checks for KVM, installs Firecracker and Go, creates an `ephemera` user,
+and joins Tailscale with SSH. Add `--lock-public-ssh` on a server with a
+public IP once Tailscale works, and `--idle-shutdown 30` on a cloud test
+server to power it off after 30 idle minutes
+(`deploy/host/idle-shutdown.sh status` shows why it is awake).
+
+The microVM image is built on the host:
+
+```sh
+sudo deploy/guest/build-image.sh /var/lib/ephemera/image
+```
+
+It writes a kernel and a root filesystem whose init is the ephemera guest
+agent (`cmd/ephemera-guest`). The microVM tests use it:
+
+```sh
+EPHEMERA_GUEST_IMAGE=/var/lib/ephemera/image sudo -E go test ./internal/sandbox/firecracker/
+```
+
 ## Development
 
 ```sh
@@ -99,12 +127,16 @@ available and skip that part otherwise.
 cmd/ephemera          CLI
 cmd/ephemera-server   central server
 cmd/ephemera-host     host agent
+cmd/ephemera-guest    agent inside each microVM (its init)
 internal/api          shared types
 internal/client       CLI side: central server and host calls, run, dev
 internal/config       saved CLI login
 internal/control      central server
+internal/guest        guest agent API (inside the microVM)
 internal/host         host agent API
-internal/sandbox      backend interface, Docker backend, test backend
+internal/sandbox      backend interface; Docker, Firecracker and test backends
 internal/stream       output framing (stdout, stderr, exit code)
 internal/worktree     which files to send, tar packing, upload checks
+deploy/guest          microVM image build
+deploy/host           host setup and idle shutdown scripts
 ```
