@@ -17,6 +17,7 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/record"
 	"github.com/pyjeebz/ephemera/internal/sandbox"
 	"github.com/pyjeebz/ephemera/internal/sandbox/docker"
 	"github.com/pyjeebz/ephemera/internal/sandbox/firecracker"
@@ -38,6 +39,8 @@ func main() {
 		snapshots = flag.Bool("snapshots", true, "start sandboxes from a snapshot of a booted VM (firecracker backend)")
 		tmplDir   = flag.String("template-dir", "/var/lib/ephemera/templates", "where the snapshot goes; same filesystem as -jail-dir (firecracker backend)")
 		capacity  = flag.Int("capacity", 20, "maximum sandboxes on this host")
+		keyFile   = flag.String("key-file", "/var/lib/ephemera/host.key", "Ed25519 key that signs sandbox records; created if missing")
+		maxLife   = flag.Duration("max-lifetime", 24*time.Hour, "destroy any sandbox this long after it was created (0: no limit)")
 	)
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -53,7 +56,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	srv := &host.Server{Backend: be, Secret: secret, DefaultImage: *image, Log: log}
+	key, err := record.LoadOrCreateKey(*keyFile)
+	if err != nil {
+		log.Error("signing key", "err", err)
+		os.Exit(2)
+	}
+	srv := &host.Server{Backend: be, Secret: secret, DefaultImage: *image, Log: log,
+		Name: *name, BackendName: *backend, Key: key, MaxLifetime: *maxLife}
+	log.Info("records are signed with this host's key", "public_key", record.PublicKey(key))
 	hs := &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

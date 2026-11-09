@@ -7,6 +7,7 @@ package host
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/egress"
+	"github.com/pyjeebz/ephemera/internal/record"
 	"github.com/pyjeebz/ephemera/internal/sandbox"
 	"github.com/pyjeebz/ephemera/internal/stream"
 	"github.com/pyjeebz/ephemera/internal/worktree"
@@ -37,6 +39,14 @@ type Server struct {
 	Secret       string // shared with the central server
 	DefaultImage string
 	Log          *slog.Logger
+	// Name and BackendName go into records.
+	Name        string
+	BackendName string
+	// Key signs each sandbox's record when it is destroyed.
+	Key ed25519.PrivateKey
+	// MaxLifetime destroys any sandbox this long after it was created.
+	// A sandbox may ask for less, never more. 0 means no limit.
+	MaxLifetime time.Duration
 
 	mu        sync.Mutex
 	sandboxes map[string]*entry
@@ -45,6 +55,25 @@ type Server struct {
 type entry struct {
 	token   string
 	created time.Time
+	rec     api.Record
+	expiry  *time.Timer
+	// ending is set once the sandbox is being destroyed; final holds the
+	// signed record of a sandbox that expired, until it is collected.
+	ending bool
+	final  *api.SignedRecord
+}
+
+// keepExpired is how long the record of an expired sandbox waits to be
+// collected by a DELETE.
+const keepExpired = time.Hour
+
+// note adds to a sandbox's record.
+func (s *Server) note(id string, f func(*api.Record)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.sandboxes[id]; ok && !e.ending {
+		f(&e.rec)
+	}
 }
 
 // Live returns the number of sandboxes on this host.
@@ -101,10 +130,13 @@ func (s *Server) sandboxAuth(w http.ResponseWriter, r *http.Request, allowSecret
 	tok := bearer(r)
 	s.mu.Lock()
 	e, ok := s.sandboxes[id]
+	expired := ok && e.final != nil
 	s.mu.Unlock()
 	switch {
 	case allowSecret && equal(tok, s.Secret):
 		return id, true
+	case ok && equal(tok, e.token) && expired && !allowSecret:
+		WriteError(w, http.StatusGone, "sandbox %s reached its maximum lifetime and was destroyed", id)
 	case ok && equal(tok, e.token):
 		return id, true
 	case !ok:
@@ -151,7 +183,11 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusConflict, "sandbox %s already exists", req.ID)
 		return
 	}
-	s.sandboxes[req.ID] = &entry{token: req.Token, created: time.Now()}
+	now := time.Now()
+	s.sandboxes[req.ID] = &entry{token: req.Token, created: now, rec: api.Record{
+		Version: 1, Sandbox: req.ID, Host: s.Name, Backend: s.BackendName, Spec: req.Spec, Created: now.UTC(),
+		Execs: []api.ExecRecord{}, Syncs: []api.SyncRecord{}, Connections: []api.Connection{},
+	}}
 	s.mu.Unlock()
 
 	if err := s.Backend.Create(r.Context(), req.ID, req.Spec); err != nil {
@@ -161,8 +197,27 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "create sandbox: %v", err)
 		return
 	}
+	if life := s.lifetime(req.Spec); life > 0 {
+		id := req.ID
+		t := time.AfterFunc(life, func() { s.expire(id) })
+		s.mu.Lock()
+		if e, ok := s.sandboxes[id]; ok {
+			e.expiry = t
+		}
+		s.mu.Unlock()
+	}
 	s.log().Info("sandbox created", "sandbox", req.ID, "image", req.Spec.Image, "network", req.Spec.Network)
 	w.WriteHeader(http.StatusCreated)
+}
+
+// lifetime is how long a sandbox may live: the host's limit, or less if
+// the sandbox asked for less.
+func (s *Server) lifetime(spec api.Spec) time.Duration {
+	life := s.MaxLifetime
+	if asked := time.Duration(spec.MaxLifetimeSeconds) * time.Second; asked > 0 && (life == 0 || asked < life) {
+		life = asked
+	}
+	return life
 }
 
 func (s *Server) files(w http.ResponseWriter, r *http.Request) {
@@ -172,8 +227,11 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 	}
 	pr, pw := io.Pipe()
 	sanitized := make(chan error, 1)
+	var nfiles int
+	var nbytes int64
 	go func() {
-		err := worktree.Sanitize(pw, r.Body, MaxUpload)
+		var err error
+		nfiles, nbytes, err = worktree.SanitizeCount(pw, r.Body, MaxUpload)
 		pw.CloseWithError(err)
 		sanitized <- err
 	}()
@@ -186,6 +244,9 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "upload: %v", err)
 		return
 	}
+	s.note(id, func(rec *api.Record) {
+		rec.Syncs = append(rec.Syncs, api.SyncRecord{Time: time.Now().UTC(), Files: nfiles, Bytes: nbytes})
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -203,14 +264,38 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "argv is required")
 		return
 	}
+	if req.TimeoutSeconds < 0 {
+		WriteError(w, http.StatusBadRequest, "timeout cannot be negative")
+		return
+	}
 	w.Header().Set("Content-Type", stream.ContentType)
 	w.WriteHeader(http.StatusOK)
 	sw := stream.NewWriter(w)
-	code, err := s.Backend.Exec(r.Context(), id, req, sw.To(stream.Stdout), sw.To(stream.Stderr))
+	ctx := r.Context()
+	if req.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+	started := time.Now()
+	code, err := s.Backend.Exec(ctx, id, req, sw.To(stream.Stdout), sw.To(stream.Stderr))
+	er := api.ExecRecord{Argv: req.Argv, Started: started.UTC(), DurationMS: time.Since(started).Milliseconds(), ExitCode: code}
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && r.Context().Err() == nil {
+		// The command's own timeout, not the client going away.
+		msg := fmt.Sprintf("ephemera: the command timed out after %ds and was stopped\n", req.TimeoutSeconds)
+		sw.Frame(stream.Stderr, []byte(msg))
+		er.ExitCode, er.Error = api.ExitTimedOut, "timed out"
+		s.note(id, func(rec *api.Record) { rec.Execs = append(rec.Execs, er) })
+		sw.Exit(api.ExitTimedOut)
+		return
+	}
 	if err != nil {
+		er.Error = err.Error()
+		s.note(id, func(rec *api.Record) { rec.Execs = append(rec.Execs, er) })
 		sw.Fail(err.Error())
 		return
 	}
+	s.note(id, func(rec *api.Record) { rec.Execs = append(rec.Execs, er) })
 	sw.Exit(code)
 }
 
@@ -243,6 +328,9 @@ func (s *Server) deleteFiles(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusInternalServerError, "delete: %v", err)
 			return
 		}
+		s.note(id, func(rec *api.Record) {
+			rec.Syncs = append(rec.Syncs, api.SyncRecord{Time: time.Now().UTC(), Deleted: n})
+		})
 		req.Paths = req.Paths[n:]
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -342,19 +430,95 @@ func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
+// destroy destroys the sandbox and answers with its signed record. For a
+// sandbox that already expired, it hands over the record kept for it.
 func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sandboxAuth(w, r, true)
 	if !ok {
 		return
 	}
-	if err := s.Backend.Destroy(r.Context(), id); err != nil {
+	s.mu.Lock()
+	e := s.sandboxes[id]
+	if e != nil && e.final != nil {
+		final := e.final
+		delete(s.sandboxes, id)
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, final)
+		return
+	}
+	s.mu.Unlock()
+	sr, err := s.finish(r.Context(), id, "destroyed")
+	if err != nil {
 		s.log().Error("destroy failed", "sandbox", id, "err", err)
 		WriteError(w, http.StatusInternalServerError, "destroy: %v", err)
 		return
 	}
 	s.forget(id)
 	s.log().Info("sandbox destroyed", "sandbox", id)
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, sr)
+}
+
+// finish destroys a sandbox and returns its signed record. Only the first
+// caller does the work; the record is complete once the backend confirms
+// everything is gone.
+func (s *Server) finish(ctx context.Context, id, how string) (*api.SignedRecord, error) {
+	s.mu.Lock()
+	e, ok := s.sandboxes[id]
+	if !ok || e.ending {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("sandbox %s is already being destroyed", id)
+	}
+	e.ending = true
+	if e.expiry != nil {
+		e.expiry.Stop()
+	}
+	rec := e.rec
+	s.mu.Unlock()
+
+	// The connection log lives with the sandbox: read it first.
+	if nl, ok := s.Backend.(sandbox.NetworkLogger); ok {
+		if conns, err := nl.Connections(id, 0); err == nil {
+			rec.Connections = conns
+		}
+	}
+	if err := s.Backend.Destroy(ctx, id); err != nil {
+		s.mu.Lock()
+		e.ending = false
+		s.mu.Unlock()
+		return nil, err
+	}
+	rec.Destroyed, rec.Ended, rec.DiskDeleted = time.Now().UTC(), how, true
+	if s.Key == nil {
+		return nil, errors.New("host has no signing key")
+	}
+	sr, err := record.Sign(s.Key, rec)
+	if err != nil {
+		return nil, err
+	}
+	return &sr, nil
+}
+
+// expire destroys a sandbox that reached its maximum lifetime, and keeps
+// its record for a while so the CLI can still collect it.
+func (s *Server) expire(id string) {
+	sr, err := s.finish(context.Background(), id, "expired")
+	if err != nil {
+		s.log().Error("expire", "sandbox", id, "err", err)
+		return
+	}
+	s.mu.Lock()
+	if e, ok := s.sandboxes[id]; ok {
+		e.final = sr
+	}
+	s.mu.Unlock()
+	s.log().Info("sandbox expired", "sandbox", id)
+	time.AfterFunc(keepExpired, func() { s.forget(id) })
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
 }
 
 func (s *Server) forget(id string) {
@@ -390,6 +554,9 @@ func (s *Server) Register(ctx context.Context, client *http.Client, serverURL, s
 	send := func() (api.RegisterHostResponse, error) {
 		var out api.RegisterHostResponse
 		req.Sandboxes = s.ids()
+		if s.Key != nil {
+			req.PublicKey = record.PublicKey(s.Key)
+		}
 		body, _ := json.Marshal(req)
 		hr, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(serverURL, "/")+"/v1/hosts", bytes.NewReader(body))
 		if err != nil {

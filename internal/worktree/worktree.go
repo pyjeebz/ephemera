@@ -165,6 +165,13 @@ func WriteTar(w io.Writer, dir string, files []string) error {
 // point outside it, and entry types other than files, directories and
 // symlinks. It also caps the unpacked size.
 func Sanitize(dst io.Writer, src io.Reader, maxBytes int64) error {
+	_, _, err := SanitizeCount(dst, src, maxBytes)
+	return err
+}
+
+// SanitizeCount is Sanitize, also reporting the regular files and bytes
+// it passed on.
+func SanitizeCount(dst io.Writer, src io.Reader, maxBytes int64) (files int, size int64, err error) {
 	tr := tar.NewReader(src)
 	tw := tar.NewWriter(dst)
 	var total int64
@@ -174,33 +181,36 @@ func Sanitize(dst io.Writer, src io.Reader, maxBytes int64) error {
 			break
 		}
 		if err != nil {
-			return err
+			return files, total, err
 		}
 		if err := checkName(hdr.Name); err != nil {
-			return err
+			return files, total, err
 		}
 		switch hdr.Typeflag {
 		case tar.TypeReg, tar.TypeDir:
 		case tar.TypeSymlink:
 			if path.IsAbs(hdr.Linkname) || escapes(path.Join(path.Dir(hdr.Name), hdr.Linkname)) {
-				return fmt.Errorf("worktree: symlink %s points outside the workspace", hdr.Name)
+				return files, total, fmt.Errorf("worktree: symlink %s points outside the workspace", hdr.Name)
 			}
 		default:
-			return fmt.Errorf("worktree: %s has unsupported type %q", hdr.Name, hdr.Typeflag)
+			return files, total, fmt.Errorf("worktree: %s has unsupported type %q", hdr.Name, hdr.Typeflag)
 		}
 		total += hdr.Size
 		if total > maxBytes {
-			return fmt.Errorf("worktree: upload is larger than %d bytes", maxBytes)
+			return files, total, fmt.Errorf("worktree: upload is larger than %d bytes", maxBytes)
 		}
 		hdr.Uid, hdr.Gid, hdr.Uname, hdr.Gname = 0, 0, "", ""
 		if err := tw.WriteHeader(hdr); err != nil {
-			return err
+			return files, total, err
+		}
+		if hdr.Typeflag == tar.TypeReg {
+			files++
 		}
 		if _, err := io.Copy(tw, tr); err != nil {
-			return err
+			return files, total, err
 		}
 	}
-	return tw.Close()
+	return files, total, tw.Close()
 }
 
 func checkName(name string) error {

@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("POST /v1/hosts", s.register)
 	mux.HandleFunc("GET /v1/whoami", s.user(s.whoami))
+	mux.HandleFunc("GET /v1/hosts", s.user(s.hostList))
 	mux.HandleFunc("POST /v1/sandboxes", s.user(s.create))
 	mux.HandleFunc("GET /v1/sandboxes", s.user(s.list))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.user(s.destroy))
@@ -267,17 +268,23 @@ func (s *Server) pick() (*hostState, error) {
 }
 
 func (s *Server) hostCall(ctx context.Context, method, url string, body any) error {
+	_, err := s.hostCallBody(ctx, method, url, body)
+	return err
+}
+
+// hostCallBody is hostCall, returning the response body.
+func (s *Server) hostCallBody(ctx context.Context, method, url string, body any) ([]byte, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		rd = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, rd)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+s.HostSecret)
 	if body != nil {
@@ -285,15 +292,15 @@ func (s *Server) hostCall(ctx context.Context, method, url string, body any) err
 	}
 	resp, err := s.client().Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		var e api.Error
 		json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&e)
-		return fmt.Errorf("%s: %s", resp.Status, e.Error)
+		return nil, fmt.Errorf("%s: %s", resp.Status, e.Error)
 	}
-	return nil
+	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +374,10 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 		host.WriteError(w, http.StatusNotFound, "sandbox %s not found", id)
 		return
 	}
-	if err := s.hostCall(r.Context(), http.MethodDelete, sb.HostURL+"/v1/sandboxes/"+id, nil); err != nil {
+	// The host answers with the sandbox's signed record. It is passed on
+	// to the caller and not kept here.
+	rec, err := s.hostCallBody(r.Context(), http.MethodDelete, sb.HostURL+"/v1/sandboxes/"+id, nil)
+	if err != nil {
 		if s.hostLive(sb.Host) {
 			host.WriteError(w, http.StatusBadGateway, "host %s: %v", sb.Host, err)
 			return
@@ -381,5 +391,23 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	s.save()
 	s.log().Info("sandbox destroyed", "sandbox", id, "host", sb.Host)
-	w.WriteHeader(http.StatusNoContent)
+	if len(rec) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(rec)
+}
+
+// hosts lists the hosts with their public keys, so records can be checked.
+func (s *Server) hostList(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	out := make([]api.Host, 0, len(s.hosts))
+	for _, h := range s.hosts {
+		out = append(out, api.Host{Name: h.Name, PublicKey: h.PublicKey, LastSeen: h.lastSeen.UTC()})
+	}
+	s.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	writeJSON(w, http.StatusOK, out)
 }

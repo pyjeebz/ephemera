@@ -112,3 +112,16 @@ func Remove() error {
 	}
 	return nil
 }
+
+// RecordsDir is where sandbox records are saved: $EPHEMERA_RECORDS, or
+// ephemera/records in the user's config directory.
+func RecordsDir() (string, error) {
+	if d := os.Getenv("EPHEMERA_RECORDS"); d != "" {
+		return d, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "ephemera", "records"), nil
+}

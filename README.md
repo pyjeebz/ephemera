@@ -106,6 +106,52 @@ container ordinary networking and `--allow` is not available.
 `ephemera run` exits with the command's exit code, or 125 if ephemera itself
 failed. `ephemera ls` and `ephemera rm` list and remove sandboxes.
 
+### Records
+
+When a sandbox is destroyed, its host signs a record of what happened in
+it: every command with its exit code and duration, every file sync, every
+network connection allowed or blocked, and that its disk was deleted. It
+holds no output, file contents or environment values. The CLI saves it in
+your config directory (`EPHEMERA_RECORDS` or `--record FILE` to choose):
+
+```sh
+bin/ephemera verify ~/.config/ephemera/records/sbx_6abe91d8a77dfffa.json
+```
+
+`verify` checks the signature and that the signing key is the one the
+central server has for that host, then prints the record. Any change to a
+record makes it fail. Each host keeps its key in `--key-file`
+(`/var/lib/ephemera/host.key`), created on first start.
+
+### Time limits
+
+`ephemera run --timeout 10m` stops the command after ten minutes with exit
+code 124. `ephemera dev --timeout 2h` destroys the sandbox after two hours.
+Every host also has a maximum lifetime for any sandbox, `--max-lifetime`
+(24 hours by default), so a forgotten sandbox cannot run forever.
+
+### Coding agents (MCP)
+
+`ephemera mcp` serves ephemera to a coding agent over the Model Context
+Protocol, so the agent runs commands in sandboxes instead of on your
+machine. For Claude Code:
+
+```sh
+claude mcp add ephemera -- ephemera mcp
+```
+
+Other agents take the same command in their MCP settings:
+
+```json
+{ "mcpServers": { "ephemera": { "command": "ephemera", "args": ["mcp"] } } }
+```
+
+It offers `run_command` (a shell command in a fresh sandbox, with
+optional `allow`, `network_open`, `timeout_seconds`, `include` and `env`;
+it returns the exit code, output, a network summary naming blocked hosts,
+and the record's path), `list_sandboxes`, `destroy_sandbox` and
+`verify_record`.
+
 ## Setting up a host
 
 A host is any x86_64 Linux machine with KVM (Ubuntu 24.04). On a fresh
@@ -190,6 +236,8 @@ internal/control      central server
 internal/egress       per-sandbox egress proxy: allow lists, address checks, log
 internal/guest        guest agent API (inside the microVM)
 internal/host         host agent API
+internal/mcp          MCP server for coding agents
+internal/record       signing and checking sandbox records
 internal/sandbox      backend interface; Docker, Firecracker and test backends
 internal/stream       output framing (stdout, stderr, exit code)
 internal/worktree     which files to send, tar packing, upload checks

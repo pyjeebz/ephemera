@@ -109,14 +109,33 @@ func (c *Client) List(ctx context.Context) ([]api.Sandbox, error) {
 	return out, json.NewDecoder(resp.Body).Decode(&out)
 }
 
-// Destroy asks the central server to destroy a sandbox.
-func (c *Client) Destroy(ctx context.Context, id string) error {
+// Destroy asks the central server to destroy a sandbox and returns the
+// record its host signed, or nil if the host sent none.
+func (c *Client) Destroy(ctx context.Context, id string) (*api.SignedRecord, error) {
 	resp, err := c.do(ctx, http.MethodDelete, c.server()+"/v1/sandboxes/"+id, c.Token, nil, "")
 	if err != nil {
-		return fmt.Errorf("destroy %s: %w", id, err)
+		return nil, fmt.Errorf("destroy %s: %w", id, err)
 	}
-	resp.Body.Close()
-	return nil
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+	var sr api.SignedRecord
+	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+		return nil, fmt.Errorf("destroy %s: reading the record: %w", id, err)
+	}
+	return &sr, nil
+}
+
+// Hosts lists the hosts the central server knows, with their public keys.
+func (c *Client) Hosts(ctx context.Context) ([]api.Host, error) {
+	resp, err := c.do(ctx, http.MethodGet, c.server()+"/v1/hosts", c.Token, nil, "")
+	if err != nil {
+		return nil, fmt.Errorf("hosts: %w", err)
+	}
+	defer resp.Body.Close()
+	var out []api.Host
+	return out, json.NewDecoder(resp.Body).Decode(&out)
 }
 
 // Upload sends the worktree files straight to the sandbox's host.

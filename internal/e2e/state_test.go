@@ -53,7 +53,7 @@ func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 	ctx := context.Background()
 	state := filepath.Join(t.TempDir(), "sandboxes.json")
 	be := &sandboxtest.Local{Root: t.TempDir()}
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog()}
+	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 	defer hts.Close()
 
@@ -82,7 +82,7 @@ func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 		t.Fatalf("known sandbox was destroyed after restart")
 	}
 	// And it can still be destroyed through the new server.
-	if err := c2.Destroy(ctx, sb.ID); err != nil {
+	if _, err := c2.Destroy(ctx, sb.ID); err != nil {
 		t.Fatal(err)
 	}
 	if be.Live() != 0 {
@@ -105,7 +105,7 @@ func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 func TestRecordDroppedWhenHostLostSandbox(t *testing.T) {
 	ctx := context.Background()
 	be := &sandboxtest.Local{Root: t.TempDir()}
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog()}
+	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 	defer hts.Close()
 
@@ -135,7 +135,7 @@ func TestRecordDroppedWhenHostLostSandbox(t *testing.T) {
 func TestDestroyWhenHostOffline(t *testing.T) {
 	ctx := context.Background()
 	be := &sandboxtest.Local{Root: t.TempDir()}
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog()}
+	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 
 	clock := newClock()
@@ -149,7 +149,7 @@ func TestDestroyWhenHostOffline(t *testing.T) {
 
 	hts.Close() // the host goes away
 	clock.advance(time.Minute)
-	if err := c.Destroy(ctx, sb.ID); err != nil {
+	if _, err := c.Destroy(ctx, sb.ID); err != nil {
 		t.Fatalf("destroy with the host offline: %v", err)
 	}
 	if list, _ := c.List(ctx); len(list) != 0 {

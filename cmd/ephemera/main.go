@@ -35,6 +35,8 @@ Usage:
   ephemera dev [flags] [-p PORT]... -- <dev server command>
   ephemera ls [--json]
   ephemera rm <sandbox-id>...
+  ephemera verify <record.json>
+  ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
   ephemera logout
   ephemera version
@@ -65,6 +67,10 @@ func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	c := &client.Client{Server: server, Token: token}
 	switch args[0] {
+	case "mcp":
+		return cmdMCP(ctx, c, args[1:], stdin, stdout, stderr)
+	case "verify":
+		return cmdVerify(ctx, c, args[1:], stdout, stderr)
 	case "login":
 		return cmdLogin(ctx, args[1:], stdin, stdout, stderr)
 	case "logout":
@@ -103,6 +109,8 @@ type sandboxFlags struct {
 	dir     string
 	jsonOut bool
 	openNet bool
+	timeout time.Duration
+	record  string
 }
 
 func (f *sandboxFlags) register(fs *flag.FlagSet) {
@@ -115,6 +123,8 @@ func (f *sandboxFlags) register(fs *flag.FlagSet) {
 	fs.Var(&f.env, "env", "set an environment variable, KEY=VALUE (repeatable)")
 	fs.StringVar(&f.dir, "dir", ".", "worktree to sync")
 	fs.BoolVar(&f.jsonOut, "json", false, "print newline-delimited JSON events instead of raw output")
+	fs.DurationVar(&f.timeout, "timeout", 0, "run: stop the command after this long (exit code 124); dev: destroy the sandbox after this long. e.g. 10m")
+	fs.StringVar(&f.record, "record", "", "save the sandbox's signed record here (default: the records directory)")
 }
 
 func (f *sandboxFlags) check() error {
@@ -127,6 +137,9 @@ func (f *sandboxFlags) check() error {
 	if len(f.allow) > 0 {
 		f.spec.Network = api.NetworkAllow
 		f.spec.Allow = f.allow
+	}
+	if f.timeout < 0 {
+		return fmt.Errorf("--timeout cannot be negative")
 	}
 	for _, kv := range f.env {
 		if !strings.Contains(kv, "=") {
@@ -186,6 +199,11 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		Stdout:  stdout,
 		Stderr:  stderr,
 	}
+	if f.timeout > 0 {
+		opts.Exec.TimeoutSeconds = int((f.timeout + time.Second - 1) / time.Second)
+		// The sandbox itself goes soon after, even if the CLI does not.
+		opts.Spec.MaxLifetimeSeconds = opts.Exec.TimeoutSeconds + 300
+	}
 	events := &jsonEvents{enc: json.NewEncoder(stdout)}
 	if f.jsonOut {
 		opts.Events = events.emit
@@ -205,11 +223,27 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		}
 		return exitFailure
 	}
+	recPath := ""
+	if res.Record != nil {
+		if p, err := saveRecord(res.Record, f.record); err != nil {
+			fmt.Fprintln(stderr, "ephemera: saving the record:", err)
+		} else {
+			recPath = p
+		}
+	}
 	if f.jsonOut {
-		events.emit("exit", map[string]any{"code": res.ExitCode,
-			"duration_ms": res.Duration.Milliseconds(), "sandbox": res.SandboxID})
-	} else if len(res.Connections) > 0 {
-		printNetworkSummary(stderr, res.Connections)
+		ev := map[string]any{"code": res.ExitCode, "duration_ms": res.Duration.Milliseconds(), "sandbox": res.SandboxID}
+		if recPath != "" {
+			ev["record"] = recPath
+		}
+		events.emit("exit", ev)
+	} else {
+		if len(res.Connections) > 0 {
+			printNetworkSummary(stderr, res.Connections)
+		}
+		if recPath != "" {
+			fmt.Fprintf(stderr, "ephemera: signed record saved to %s\n", recPath)
+		}
 	}
 	return res.ExitCode
 }
@@ -247,6 +281,17 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		Stdout:  stdout,
 		Stderr:  stderr,
 	}
+	if f.timeout > 0 {
+		opts.Spec.MaxLifetimeSeconds = int((f.timeout + time.Second - 1) / time.Second)
+	}
+	recPath := ""
+	opts.OnRecord = func(sr *api.SignedRecord) {
+		if p, err := saveRecord(sr, f.record); err == nil {
+			recPath = p
+		} else {
+			fmt.Fprintln(stderr, "ephemera: saving the record:", err)
+		}
+	}
 	for _, p := range ports {
 		pm, err := client.ParsePort(p)
 		if err != nil {
@@ -282,6 +327,9 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 				fmt.Fprintf(stderr, "ephemera: %s\n", m["error"])
 			case "destroyed":
 				fmt.Fprintf(stderr, "ephemera: sandbox %s destroyed\n", m["id"])
+				if recPath != "" {
+					fmt.Fprintf(stderr, "ephemera: signed record saved to %s\n", recPath)
+				}
 			}
 		}
 	}
@@ -376,7 +424,7 @@ func cmdRm(ctx context.Context, c *client.Client, ids []string, stderr io.Writer
 	}
 	code := 0
 	for _, id := range ids {
-		if err := c.Destroy(ctx, id); err != nil {
+		if _, err := c.Destroy(ctx, id); err != nil {
 			fmt.Fprintln(stderr, "ephemera:", err)
 			code = exitFailure
 		}

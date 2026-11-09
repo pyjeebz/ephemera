@@ -30,7 +30,8 @@ type RunResult struct {
 	Files       int
 	ExitCode    int
 	Duration    time.Duration
-	Connections []api.Connection // outbound connection attempts
+	Connections []api.Connection  // outbound connection attempts
+	Record      *api.SignedRecord // signed by the host when it destroyed the sandbox
 }
 
 // Run creates a sandbox, syncs the worktree, runs one command, and destroys
@@ -58,7 +59,9 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (res RunResult, err erro
 		// Always clean up, even when ctx was cancelled by Ctrl-C.
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if derr := c.Destroy(dctx, sb.ID); derr != nil {
+		rec, derr := c.Destroy(dctx, sb.ID)
+		res.Record = rec
+		if derr != nil {
 			if err == nil {
 				err = derr
 			} else {

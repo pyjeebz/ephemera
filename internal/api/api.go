@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -26,6 +27,9 @@ type Spec struct {
 	// Allow lists the hosts a sandbox in "allow" mode may reach:
 	// "example.com", "*.example.com", optionally with ":port".
 	Allow []string `json:"allow,omitempty"`
+	// MaxLifetimeSeconds destroys the sandbox this long after it was
+	// created, whatever it is doing. 0 means the host's limit.
+	MaxLifetimeSeconds int `json:"max_lifetime_seconds,omitempty"`
 }
 
 // Validate checks a spec and fills in defaults that do not depend on the host.
@@ -48,6 +52,9 @@ func (s *Spec) Validate() error {
 	}
 	if len(s.Allow) > 200 {
 		return fmt.Errorf("at most 200 allowed hosts")
+	}
+	if s.MaxLifetimeSeconds < 0 {
+		return fmt.Errorf("max lifetime cannot be negative")
 	}
 	if s.CPUs < 0 || s.CPUs > 64 {
 		return fmt.Errorf("cpus must be between 0 and 64")
@@ -101,6 +108,67 @@ type HostCreateRequest struct {
 type ExecRequest struct {
 	Argv []string `json:"argv"`
 	Env  []string `json:"env,omitempty"`
+	// TimeoutSeconds stops the command after this long, with exit code
+	// 124 like timeout(1). 0 means no limit.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
+
+// ExitTimedOut is the exit code of a command stopped by its timeout.
+const ExitTimedOut = 124
+
+// Record is what happened in a sandbox, written and signed by its host
+// when the sandbox is destroyed. It holds no command output, environment
+// values or file contents.
+type Record struct {
+	Version   int       `json:"version"` // 1
+	Sandbox   string    `json:"sandbox"`
+	Host      string    `json:"host"`
+	Backend   string    `json:"backend"`
+	Spec      Spec      `json:"spec"`
+	Created   time.Time `json:"created"`
+	Destroyed time.Time `json:"destroyed"`
+	// Why the sandbox ended: "destroyed" (asked to) or "expired" (it
+	// reached its maximum lifetime).
+	Ended       string       `json:"ended"`
+	Execs       []ExecRecord `json:"execs"`
+	Syncs       []SyncRecord `json:"syncs"`
+	Connections []Connection `json:"connections"`
+	// DiskDeleted is the host's statement that everything the sandbox
+	// stored was deleted with it.
+	DiskDeleted bool `json:"disk_deleted"`
+	// HostKey is the host's Ed25519 public key, base64.
+	HostKey string `json:"host_key"`
+}
+
+// ExecRecord is one command a sandbox ran. Its environment is not kept.
+type ExecRecord struct {
+	Argv       []string  `json:"argv"`
+	Started    time.Time `json:"started"`
+	DurationMS int64     `json:"duration_ms"`
+	ExitCode   int       `json:"exit_code"`
+	Error      string    `json:"error,omitempty"`
+}
+
+// SyncRecord is one upload or deletion of files.
+type SyncRecord struct {
+	Time    time.Time `json:"time"`
+	Files   int       `json:"files,omitempty"`
+	Bytes   int64     `json:"bytes,omitempty"`
+	Deleted int       `json:"deleted,omitempty"`
+}
+
+// SignedRecord is a record with its host's signature. The signature covers
+// the record's bytes exactly as they appear here.
+type SignedRecord struct {
+	Record    json.RawMessage `json:"record"`
+	Signature string          `json:"signature"` // Ed25519, base64
+}
+
+// Host is a host as the central server knows it.
+type Host struct {
+	Name      string    `json:"name"`
+	PublicKey string    `json:"public_key"`
+	LastSeen  time.Time `json:"last_seen"`
 }
 
 // DeleteFilesRequest removes files from a sandbox's workspace, for files
@@ -121,6 +189,8 @@ type RegisterHostRequest struct {
 	URL       string   `json:"url"`
 	Capacity  int      `json:"capacity"`
 	Sandboxes []string `json:"sandboxes"`
+	// PublicKey is the host's Ed25519 key for signing records, base64.
+	PublicKey string `json:"public_key,omitempty"`
 }
 
 // RegisterHostResponse tells a host which of its sandboxes the central

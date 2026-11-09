@@ -42,7 +42,7 @@ func newStack(t *testing.T, be sandbox.Backend, image string) *stack {
 	cts := httptest.NewServer(cs.Handler())
 	t.Cleanup(cts.Close)
 
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: image, Log: discardLog()}
+	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: image, Log: discardLog(), Name: "test-host", BackendName: "test", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 	t.Cleanup(hts.Close)
 	t.Cleanup(func() { hs.DestroyAll(context.Background()) })
