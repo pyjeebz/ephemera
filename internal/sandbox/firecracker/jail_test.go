@@ -73,7 +73,8 @@ func TestJailedVM(t *testing.T) {
 	}
 	t.Logf("firecracker sees / as: %v", names)
 	allowed := map[string]bool{"vmlinux": true, "rootfs.ext4": true, "scratch.ext4": true, "vm.json": true,
-		"vsock.sock": true, "firecracker": true, "firecracker.pid": true, "dev": true, "run": true}
+		"vsock.sock": true, "api.sock": true, "snap.mem": true, "snap.vmstate": true,
+		"firecracker": true, "firecracker.pid": true, "dev": true, "run": true}
 	for _, n := range names {
 		if !allowed[n] {
 			t.Errorf("unexpected %q visible in the jail", n)
