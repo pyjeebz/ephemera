@@ -44,6 +44,9 @@ func main() {
 		keyFile   = flag.String("key-file", "/var/lib/ephemera/host.key", "Ed25519 key that signs sandbox records; created if missing")
 		maxLife   = flag.Duration("max-lifetime", 24*time.Hour, "destroy any sandbox this long after it was created (0: no limit)")
 	)
+	if len(os.Args) > 1 && os.Args[1] == "bench" {
+		os.Exit(benchMain(os.Args[2:]))
+	}
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 

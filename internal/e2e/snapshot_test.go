@@ -1,18 +1,13 @@
 package e2e
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -122,100 +117,4 @@ func TestFirecrackerProjectSnapshot(t *testing.T) {
 	if ev5["loaded"] != false || !strings.Contains(fmt.Sprint(ev5["reason"]), "did not decrypt") {
 		t.Errorf("tampered snapshot: %v", ev5)
 	}
-}
-
-// lineTimer records when each output line arrives.
-type lineTimer struct {
-	mu    sync.Mutex
-	buf   bytes.Buffer
-	delay []time.Duration
-}
-
-func (l *lineTimer) Write(p []byte) (int, error) {
-	now := time.Now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.buf.Write(p)
-	for {
-		line, err := l.buf.ReadString('\n')
-		if err != nil {
-			l.buf.WriteString(line)
-			return len(p), nil
-		}
-		if ns, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64); err == nil {
-			l.delay = append(l.delay, now.Sub(time.Unix(0, ns)))
-		}
-	}
-}
-
-func percentile(d []time.Duration, p float64) time.Duration {
-	s := append([]time.Duration(nil), d...)
-	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
-	return s[int(float64(len(s)-1)*p)]
-}
-
-// TestOutputLatency measures how fast output reaches the CLI: each line
-// carries the guest's clock when it was printed (the guest's clock is set
-// from the host's on restore; here both run on one machine). Run with
-// EPHEMERA_BENCH=1.
-func TestOutputLatency(t *testing.T) {
-	if os.Getenv("EPHEMERA_BENCH") != "1" {
-		t.Skip("set EPHEMERA_BENCH=1")
-	}
-	be := firecrackerBackend(t)
-	s := newStack(t, be, "unused")
-	ctx := context.Background()
-	sb, err := s.client.Create(ctx, api.Spec{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.client.Destroy(ctx, sb.ID)
-
-	// Lines printed at two different gaps: if delivery waited for the next
-	// line, the latency would follow the gap.
-	for _, gap := range []string{"0.01", "0.05"} {
-		lt := &lineTimer{}
-		script := "import time,sys\nfor _ in range(150):\n    sys.stdout.write('%d\\n' % time.time_ns()); sys.stdout.flush(); time.sleep(" + gap + ")\n"
-		if _, err := s.client.Exec(ctx, sb, api.ExecRequest{Argv: []string{"python3", "-c", script}}, lt, io.Discard); err != nil {
-			t.Fatal(err)
-		}
-		// Delay relative to the fastest line: a constant clock offset
-		// between guest and host cancels out, leaving the variation.
-		min := percentile(lt.delay, 0)
-		var extra []time.Duration
-		for _, d := range lt.delay {
-			extra = append(extra, d-min)
-		}
-		t.Logf("a line every %ss, %d lines: each line's delay beyond the fastest: p50 %v, p90 %v, p99 %v, max %v", gap, len(lt.delay),
-			percentile(extra, 0.5).Round(10*time.Microsecond), percentile(extra, 0.9).Round(10*time.Microsecond),
-			percentile(extra, 0.99).Round(10*time.Microsecond), percentile(extra, 1).Round(10*time.Microsecond))
-	}
-	// The guest's clock against the host's, to read the figures above.
-	var probe bytes.Buffer
-	before := time.Now()
-	s.client.Exec(ctx, sb, api.ExecRequest{Argv: []string{"python3", "-c", "import time; print(time.time_ns())"}}, &probe, io.Discard)
-	after := time.Now()
-	if ns, err := strconv.ParseInt(strings.TrimSpace(probe.String()), 10, 64); err == nil {
-		mid := before.Add(after.Sub(before) / 2)
-		t.Logf("guest clock minus host clock: about %v (round trip %v)", time.Unix(0, ns).Sub(mid).Round(100*time.Microsecond), after.Sub(before).Round(100*time.Microsecond))
-	}
-
-	// Time from asking to run a command to its first byte of output.
-	var first []time.Duration
-	for i := 0; i < 30; i++ {
-		pr, pw := io.Pipe()
-		start := time.Now()
-		got := make(chan time.Duration, 1)
-		go func() {
-			bufio.NewReader(pr).ReadByte()
-			got <- time.Since(start)
-			io.Copy(io.Discard, pr)
-		}()
-		s.client.Exec(ctx, sb, api.ExecRequest{Argv: []string{"echo", "hi"}}, pw, io.Discard)
-		pw.Close()
-		first = append(first, <-got)
-	}
-	t.Logf("command start to first output byte (echo, 30 runs): p50 %v, p90 %v, max %v",
-		percentile(first, 0.5).Round(10*time.Microsecond), percentile(first, 0.9).Round(10*time.Microsecond),
-		percentile(first, 1).Round(10*time.Microsecond))
 }

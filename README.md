@@ -262,6 +262,21 @@ EPHEMERA_GUEST_IMAGE=/var/lib/ephemera/image go test ./internal/sandbox/firecrac
 Run them as root, with `EPHEMERA_JAILED=1` for the end-to-end tests, to
 test with the jailer.
 
+### Benchmarks
+
+```sh
+sudo bin/ephemera-host bench --compare bench-old.json
+```
+
+Measures the host with the real backend, host agent, central server and
+client: cold boot, snapshot restore, `ephemera run` end to end, output
+latency, a setup snapshot's save and load, and `--density` (20) sandboxes
+started at once with their memory. It takes a few minutes, prints a table
+and writes the results, with the commit, machine and settings, to
+`bench-<commit>-<time>.json`. `--compare` shows each result's change from
+an earlier report. Stop the host agent first, so the two don't compete
+for the machine.
+
 ## Development
 
 ```sh
@@ -280,6 +295,7 @@ cmd/ephemera-server   central server
 cmd/ephemera-host     host agent
 cmd/ephemera-guest    agent inside each microVM (its init)
 internal/api          shared types
+internal/bench        host benchmarks (ephemera-host bench)
 internal/client       CLI side: central server and host calls, run, dev
 internal/config       saved CLI login
 internal/control      central server

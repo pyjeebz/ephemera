@@ -152,6 +152,16 @@ func (b *Backend) vm(id string) (*VM, error) {
 	return vm, nil
 }
 
+// PID is the process ID of the sandbox's Firecracker process, for
+// measuring its memory.
+func (b *Backend) PID(id string) (int, bool) {
+	vm, err := b.vm(id)
+	if err != nil {
+		return 0, false
+	}
+	return vm.PID(), true
+}
+
 func (b *Backend) dir(id string) string { return filepath.Join(b.StateDir, id) }
 
 // Create boots a microVM with its own scratch disk. The spec's image is
