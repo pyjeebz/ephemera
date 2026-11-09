@@ -99,6 +99,7 @@ type sandboxFlags struct {
 	spec    api.Spec
 	include stringList
 	env     stringList
+	allow   stringList
 	dir     string
 	jsonOut bool
 	openNet bool
@@ -108,7 +109,8 @@ func (f *sandboxFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.spec.Image, "image", "", "sandbox image (default: the host's default)")
 	fs.Float64Var(&f.spec.CPUs, "cpus", 0, "CPU limit, e.g. 2 or 0.5 (default: no limit)")
 	fs.IntVar(&f.spec.MemoryMB, "memory", 0, "memory limit in MB (default: no limit)")
-	fs.BoolVar(&f.openNet, "net", false, "allow outbound network access (blocked by default)")
+	fs.BoolVar(&f.openNet, "net", false, "allow outbound access to any public host (blocked by default; still logged)")
+	fs.Var(&f.allow, "allow", "allow outbound access to a host: example.com, *.example.com, host:port (repeatable)")
 	fs.Var(&f.include, "include", "send an ignored file anyway, e.g. .env.local (repeatable)")
 	fs.Var(&f.env, "env", "set an environment variable, KEY=VALUE (repeatable)")
 	fs.StringVar(&f.dir, "dir", ".", "worktree to sync")
@@ -116,8 +118,15 @@ func (f *sandboxFlags) register(fs *flag.FlagSet) {
 }
 
 func (f *sandboxFlags) check() error {
+	if f.openNet && len(f.allow) > 0 {
+		return fmt.Errorf("use either --net (any host) or --allow (listed hosts), not both")
+	}
 	if f.openNet {
 		f.spec.Network = api.NetworkOpen
+	}
+	if len(f.allow) > 0 {
+		f.spec.Network = api.NetworkAllow
+		f.spec.Allow = f.allow
 	}
 	for _, kv := range f.env {
 		if !strings.Contains(kv, "=") {
@@ -199,6 +208,8 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 	if f.jsonOut {
 		events.emit("exit", map[string]any{"code": res.ExitCode,
 			"duration_ms": res.Duration.Milliseconds(), "sandbox": res.SandboxID})
+	} else if len(res.Connections) > 0 {
+		printNetworkSummary(stderr, res.Connections)
 	}
 	return res.ExitCode
 }
@@ -263,6 +274,10 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 				}
 			case "forwarding":
 				fmt.Fprintf(stderr, "ephemera: http://%s -> sandbox port %d\n", m["local"], m["port"])
+			case "connection":
+				if m["allowed"] != true {
+					fmt.Fprintf(stderr, "ephemera: blocked %s:%v (%v)\n", m["host"], m["port"], m["error"])
+				}
 			case "sync_error", "port_error":
 				fmt.Fprintf(stderr, "ephemera: %s\n", m["error"])
 			case "destroyed":
@@ -292,6 +307,30 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		fmt.Fprintf(stderr, "ephemera: dev command exited with code %d\n", code)
 	}
 	return code
+}
+
+// printNetworkSummary reports the sandbox's outbound connections: a count,
+// and every blocked one by name.
+func printNetworkSummary(w io.Writer, conns []api.Connection) {
+	allowed := 0
+	var blocked []api.Connection
+	for _, c := range conns {
+		if c.Allowed {
+			allowed++
+		} else {
+			blocked = append(blocked, c)
+		}
+	}
+	fmt.Fprintf(w, "ephemera: network: %d allowed, %d blocked\n", allowed, len(blocked))
+	seen := map[string]bool{}
+	for _, c := range blocked {
+		key := fmt.Sprintf("%s:%d", c.Host, c.Port)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		fmt.Fprintf(w, "ephemera:   blocked %s (%s)\n", key, c.Error)
+	}
 }
 
 // eventWriter turns command output into JSON events.

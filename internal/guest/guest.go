@@ -250,3 +250,39 @@ func (s *Server) port(w http.ResponseWriter, r *http.Request) {
 	client.Close()
 	upstream.Close()
 }
+
+// EgressPort is where sandbox programs find the HTTP proxy, on the VM's
+// localhost, and the vsock port the host's egress proxy answers on.
+const EgressPort = 3128
+
+// ServeEgress accepts proxy connections from programs in the VM and
+// carries each one to the host's egress proxy with dial. If the sandbox
+// has no network, the host has no proxy for it and every connection fails.
+func ServeEgress(ln net.Listener, dial func() (net.Conn, error)) error {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		go func() {
+			defer c.Close()
+			up, err := dial()
+			if err != nil {
+				msg := "ephemera: this sandbox has no network access\n"
+				fmt.Fprintf(c, "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(msg), msg)
+				return
+			}
+			defer up.Close()
+			go func() {
+				io.Copy(up, c)
+				if cw, ok := up.(interface{ CloseWrite() error }); ok {
+					cw.CloseWrite()
+				}
+			}()
+			io.Copy(c, up)
+		}()
+	}
+}

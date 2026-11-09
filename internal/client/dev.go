@@ -58,7 +58,7 @@ type DevOptions struct {
 	Stdout       io.Writer
 	Stderr       io.Writer
 	// Events receives progress: "sandbox", "synced", "forwarding",
-	// "sync_error", "port_error", "destroyed". It may be called from
+	// "connection", "sync_error", "port_error", "destroyed". It may be called from
 	// several goroutines, never at the same time.
 	Events func(event string, fields map[string]any)
 }
@@ -149,11 +149,23 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 func (c *Client) watch(ctx context.Context, o DevOptions, sb *api.Sandbox, snap worktree.Snapshot, emit func(string, map[string]any)) {
 	t := time.NewTicker(o.SyncInterval)
 	defer t.Stop()
+	networked := hasNetwork(o.Spec)
+	seen := 0
+	lastPoll := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+		if networked && time.Since(lastPoll) >= time.Second {
+			lastPoll = time.Now()
+			if conns, err := c.Connections(ctx, sb, seen); err == nil {
+				seen += len(conns)
+				for _, cn := range conns {
+					emit("connection", connectionFields(cn))
+				}
+			}
 		}
 		next, err := worktree.Scan(o.Dir, o.Include)
 		if err != nil {

@@ -49,6 +49,9 @@ func (b *Backend) run(ctx context.Context, stdin io.Reader, args ...string) erro
 
 // Create starts a container that idles until commands are run in it.
 func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
+	if spec.Network == api.NetworkAllow {
+		return errors.New("allow lists need the firecracker backend; the docker backend only has --net (open) or no network")
+	}
 	args := []string{"run", "--detach", "--init",
 		"--name", container(id),
 		"--label", "ephemera.sandbox=" + id,

@@ -95,13 +95,93 @@ exit 7
 	}
 }
 
-func TestFirecrackerNetworkRefused(t *testing.T) {
+// netRun runs a script in a fresh microVM sandbox with the given network
+// settings and returns its output and connection log.
+func netRun(t *testing.T, s *stack, spec api.Spec, script string) (string, []api.Connection) {
+	t.Helper()
+	var out bytes.Buffer
+	res, err := s.client.Run(context.Background(), client.RunOptions{
+		Dir:    worktree(t, map[string]string{"x": "x"}),
+		Spec:   spec,
+		Exec:   api.ExecRequest{Argv: []string{"sh", "-c", script}},
+		Stdout: &out,
+		Stderr: &out,
+	})
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	return out.String(), res.Connections
+}
+
+// status prints the HTTP status curl got for a URL through the sandbox's
+// proxy settings, or "failed".
+const statusOf = `st() { code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "$1") && echo "$1 $code" || echo "$1 failed"; }; `
+
+func TestFirecrackerNetwork(t *testing.T) {
 	be := firecrackerBackend(t)
 	s := newStack(t, be, "unused")
-	_, err := s.client.Create(context.Background(), api.Spec{Network: api.NetworkOpen})
-	if err == nil || !strings.Contains(err.Error(), "not available yet") {
-		t.Errorf("err = %v, want a clear refusal", err)
-	}
+
+	t.Run("none", func(t *testing.T) {
+		out, conns := netRun(t, s, api.Spec{}, statusOf+
+			`st https://example.com; curl -s -m 5 -x http://127.0.0.1:3128 https://example.com 2>&1 | head -c 200; echo; ls /sys/class/net`)
+		t.Logf("\n%s", out)
+		if !strings.Contains(out, "https://example.com failed") {
+			t.Error("a sandbox with no network reached example.com")
+		}
+		if strings.Contains(out, "eth0") {
+			t.Error("the VM has a network device")
+		}
+		if len(conns) != 0 {
+			t.Errorf("connections logged with no network: %+v", conns)
+		}
+	})
+
+	t.Run("allow list", func(t *testing.T) {
+		out, conns := netRun(t, s, api.Spec{Network: api.NetworkAllow, Allow: []string{"example.com"}}, statusOf+
+			`st https://example.com; st https://www.google.com; st http://example.com/`)
+		t.Logf("\n%s", out)
+		for _, want := range []string{"https://example.com 200", "https://www.google.com failed", "http://example.com/ 200"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output lacks %q", want)
+			}
+		}
+		var allowed, blocked []string
+		for _, c := range conns {
+			if c.Allowed {
+				allowed = append(allowed, c.Host)
+			} else {
+				blocked = append(blocked, c.Host)
+			}
+		}
+		t.Logf("allowed %v, blocked %v", allowed, blocked)
+		if len(allowed) != 2 || len(blocked) != 1 || blocked[0] != "www.google.com" {
+			t.Errorf("connection log: allowed %v, blocked %v", allowed, blocked)
+		}
+	})
+
+	t.Run("open still blocks internal addresses", func(t *testing.T) {
+		out, conns := netRun(t, s, api.Spec{Network: api.NetworkOpen}, statusOf+
+			`st https://example.com; st http://metadata.google.internal/computeMetadata/v1/`)
+		t.Logf("\n%s", out)
+		if !strings.Contains(out, "https://example.com 200") {
+			t.Error("open network could not reach example.com")
+		}
+		if strings.Contains(out, "metadata.google.internal/computeMetadata/v1/ 200") {
+			t.Fatal("the sandbox reached the cloud metadata server")
+		}
+		found := false
+		for _, c := range conns {
+			if c.Host == "metadata.google.internal" {
+				found = true
+				if c.Allowed || !strings.Contains(c.Error, "not a public address") {
+					t.Errorf("metadata record: %+v", c)
+				}
+			}
+		}
+		if !found {
+			t.Error("the metadata attempt was not logged")
+		}
+	})
 }
 
 func TestFirecrackerDev(t *testing.T) {

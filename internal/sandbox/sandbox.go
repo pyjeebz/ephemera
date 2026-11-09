@@ -33,3 +33,11 @@ type Backend interface {
 	// a sandbox that does not exist is not an error.
 	Destroy(ctx context.Context, id string) error
 }
+
+// NetworkLogger is implemented by backends that record sandboxes'
+// outbound connections.
+type NetworkLogger interface {
+	// Connections returns the sandbox's connection attempts from index
+	// since on.
+	Connections(id string, since int) ([]api.Connection, error)
+}

@@ -12,8 +12,9 @@ import (
 
 // Network modes for a sandbox.
 const (
-	NetworkNone = "none" // no outbound traffic at all (the default)
-	NetworkOpen = "open" // unrestricted outbound traffic
+	NetworkNone  = "none"  // no outbound traffic at all (the default)
+	NetworkAllow = "allow" // only the hosts in Spec.Allow
+	NetworkOpen  = "open"  // any public host
 )
 
 // Spec describes the sandbox to create.
@@ -22,6 +23,9 @@ type Spec struct {
 	CPUs     float64 `json:"cpus,omitempty"`
 	MemoryMB int     `json:"memory_mb,omitempty"`
 	Network  string  `json:"network,omitempty"`
+	// Allow lists the hosts a sandbox in "allow" mode may reach:
+	// "example.com", "*.example.com", optionally with ":port".
+	Allow []string `json:"allow,omitempty"`
 }
 
 // Validate checks a spec and fills in defaults that do not depend on the host.
@@ -29,9 +33,21 @@ func (s *Spec) Validate() error {
 	switch s.Network {
 	case "":
 		s.Network = NetworkNone
-	case NetworkNone, NetworkOpen:
+		if len(s.Allow) > 0 {
+			s.Network = NetworkAllow
+		}
+	case NetworkNone, NetworkAllow, NetworkOpen:
 	default:
-		return fmt.Errorf("network must be %q or %q", NetworkNone, NetworkOpen)
+		return fmt.Errorf("network must be %q, %q or %q", NetworkNone, NetworkAllow, NetworkOpen)
+	}
+	if s.Network == NetworkAllow && len(s.Allow) == 0 {
+		return fmt.Errorf("network %q needs at least one allowed host", NetworkAllow)
+	}
+	if s.Network != NetworkAllow && len(s.Allow) > 0 {
+		return fmt.Errorf("allowed hosts only apply to network %q", NetworkAllow)
+	}
+	if len(s.Allow) > 200 {
+		return fmt.Errorf("at most 200 allowed hosts")
 	}
 	if s.CPUs < 0 || s.CPUs > 64 {
 		return fmt.Errorf("cpus must be between 0 and 64")
@@ -40,6 +56,21 @@ func (s *Spec) Validate() error {
 		return fmt.Errorf("memory must be between 0 and 262144 MB")
 	}
 	return nil
+}
+
+// Connection is one outbound connection attempt from a sandbox.
+type Connection struct {
+	Time       time.Time `json:"time"`
+	Kind       string    `json:"kind"` // "https" (CONNECT) or "http"
+	Host       string    `json:"host"`
+	Port       int       `json:"port"`
+	Allowed    bool      `json:"allowed"`
+	Rule       string    `json:"rule,omitempty"` // the allow-list entry that matched
+	IP         string    `json:"ip,omitempty"`
+	BytesOut   int64     `json:"bytes_out,omitempty"`
+	BytesIn    int64     `json:"bytes_in,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
+	Error      string    `json:"error,omitempty"`
 }
 
 // CreateSandboxRequest is sent by the CLI to the central server.

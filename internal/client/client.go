@@ -143,6 +143,18 @@ func (c *Client) DeleteFiles(ctx context.Context, sb *api.Sandbox, paths []strin
 	return nil
 }
 
+// Connections returns the sandbox's outbound connection attempts from
+// index since on, straight from its host.
+func (c *Client) Connections(ctx context.Context, sb *api.Sandbox, since int) ([]api.Connection, error) {
+	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/v1/sandboxes/%s/connections?since=%d", sb.HostURL, sb.ID, since), sb.Token, nil, "")
+	if err != nil {
+		return nil, fmt.Errorf("connections: %w", err)
+	}
+	defer resp.Body.Close()
+	var out []api.Connection
+	return out, json.NewDecoder(resp.Body).Decode(&out)
+}
+
 // upgradeTransport speaks HTTP/1.1 only, since connection upgrades do not
 // exist in HTTP/2.
 var upgradeTransport = func() *http.Transport {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/egress"
 	"github.com/pyjeebz/ephemera/internal/sandbox"
 	"github.com/pyjeebz/ephemera/internal/stream"
 	"github.com/pyjeebz/ephemera/internal/worktree"
@@ -62,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/files/delete", s.deleteFiles)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.exec)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/ports/{port}", s.port)
+	mux.HandleFunc("GET /v1/sandboxes/{id}/connections", s.connections)
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.destroy)
 	return mux
 }
@@ -130,6 +132,12 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	if err := req.Spec.Validate(); err != nil {
 		WriteError(w, http.StatusBadRequest, "%v", err)
 		return
+	}
+	for _, pat := range req.Spec.Allow {
+		if err := egress.ValidatePattern(pat); err != nil {
+			WriteError(w, http.StatusBadRequest, "%v", err)
+			return
+		}
 	}
 	if req.Spec.Image == "" {
 		req.Spec.Image = s.DefaultImage
@@ -312,6 +320,26 @@ func Pipe(a, b net.Conn) {
 	wg.Wait()
 	a.Close()
 	b.Close()
+}
+
+// connections returns the sandbox's outbound connection log, from the
+// "since" index on.
+func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sandboxAuth(w, r, false)
+	if !ok {
+		return
+	}
+	since, _ := strconv.Atoi(r.URL.Query().Get("since"))
+	out := []api.Connection{}
+	if nl, ok := s.Backend.(sandbox.NetworkLogger); ok {
+		var err error
+		if out, err = nl.Connections(id, since); err != nil {
+			WriteError(w, http.StatusNotFound, "%v", err)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {

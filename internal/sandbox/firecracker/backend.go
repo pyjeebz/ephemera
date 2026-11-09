@@ -20,6 +20,7 @@ import (
 	"syscall"
 
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/egress"
 	"github.com/pyjeebz/ephemera/internal/guest"
 	"github.com/pyjeebz/ephemera/internal/sandbox"
 	"github.com/pyjeebz/ephemera/internal/stream"
@@ -48,10 +49,25 @@ type Backend struct {
 	// from UIDBase to UIDBase+65535. Default 300000.
 	UIDBase int
 
-	mu   sync.Mutex
-	vms  map[string]*VM
-	uids map[int]bool
-	next int
+	mu      sync.Mutex
+	vms     map[string]*VM
+	proxies map[string]*vmProxy
+	uids    map[int]bool
+	next    int
+}
+
+// vmProxy is one VM's egress proxy and the socket it listens on.
+type vmProxy struct {
+	proxy *egress.Proxy
+	ln    net.Listener
+}
+
+// proxyEnv points programs in the VM at its local proxy. Commands' own
+// variables come after, so they can override it.
+var proxyEnv = []string{
+	"HTTP_PROXY=http://127.0.0.1:3128", "HTTPS_PROXY=http://127.0.0.1:3128",
+	"http_proxy=http://127.0.0.1:3128", "https_proxy=http://127.0.0.1:3128",
+	"NO_PROXY=localhost,127.0.0.1,::1", "no_proxy=localhost,127.0.0.1,::1",
 }
 
 const cgroupParent = "ephemera"
@@ -96,10 +112,6 @@ func jailID(id string) string { return strings.ReplaceAll(id, "_", "-") }
 
 var _ sandbox.Backend = (*Backend)(nil)
 
-// ErrNetworkUnsupported is returned for specs that ask for outbound
-// network, which microVMs do not have yet.
-var ErrNetworkUnsupported = errors.New("outbound network for microVM sandboxes is not available yet; run without --net")
-
 func (b *Backend) vm(id string) (*VM, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -115,8 +127,17 @@ func (b *Backend) dir(id string) string { return filepath.Join(b.StateDir, id) }
 // Create boots a microVM with its own scratch disk. The spec's image is
 // ignored: every VM boots the one guest image.
 func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
-	if spec.Network == api.NetworkOpen {
-		return ErrNetworkUnsupported
+	var policy egress.Policy
+	switch spec.Network {
+	case api.NetworkAllow:
+		for _, pat := range spec.Allow {
+			if err := egress.ValidatePattern(pat); err != nil {
+				return err
+			}
+		}
+		policy.Allow = spec.Allow
+	case api.NetworkOpen:
+		policy.Allow = []string{"*"}
 	}
 	if strings.ContainsAny(id, "/\\.") || id == "" {
 		return fmt.Errorf("invalid sandbox id %q", id)
@@ -162,13 +183,70 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 		os.RemoveAll(dir)
 		return err
 	}
+	var vp *vmProxy
+	if spec.Network == api.NetworkAllow || spec.Network == api.NetworkOpen {
+		if vp, err = startProxy(vm, policy); err != nil {
+			vm.Kill()
+			vm.Cleanup()
+			if cfg.Jail != nil {
+				b.freeUID(cfg.Jail.UID)
+			}
+			os.RemoveAll(dir)
+			return fmt.Errorf("egress proxy: %w", err)
+		}
+	}
 	b.mu.Lock()
 	if b.vms == nil {
 		b.vms = map[string]*VM{}
+		b.proxies = map[string]*vmProxy{}
 	}
 	b.vms[id] = vm
+	if vp != nil {
+		b.proxies[id] = vp
+	}
 	b.mu.Unlock()
 	return nil
+}
+
+// startProxy listens where Firecracker connects when the guest dials the
+// host on the egress port: the vsock socket's path plus "_<port>". In a
+// jail, only the VM's own user may connect.
+func startProxy(vm *VM, policy egress.Policy) (*vmProxy, error) {
+	path := fmt.Sprintf("%s_%d", vm.vsock, guest.EgressPort)
+	os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if j := vm.cfg.Jail; j != nil {
+		if err := os.Chown(path, j.UID, j.GID); err != nil {
+			ln.Close()
+			return nil, err
+		}
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	p := &egress.Proxy{Policy: policy}
+	go p.Serve(ln)
+	return &vmProxy{proxy: p, ln: ln}, nil
+}
+
+// Connections returns the sandbox's outbound connection attempts, from
+// index since on.
+func (b *Backend) Connections(id string, since int) ([]api.Connection, error) {
+	b.mu.Lock()
+	_, ok := b.vms[id]
+	vp := b.proxies[id]
+	b.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("sandbox %s does not exist", id)
+	}
+	if vp == nil {
+		return []api.Connection{}, nil
+	}
+	return vp.proxy.Connections(since), nil
 }
 
 func (b *Backend) scratchMB() int {
@@ -236,6 +314,12 @@ func (b *Backend) Exec(ctx context.Context, id string, req api.ExecRequest, stdo
 	vm, err := b.vm(id)
 	if err != nil {
 		return 0, err
+	}
+	b.mu.Lock()
+	_, networked := b.proxies[id]
+	b.mu.Unlock()
+	if networked {
+		req.Env = append(append([]string{}, proxyEnv...), req.Env...)
 	}
 	body, _ := json.Marshal(req)
 	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://guest/exec", bytes.NewReader(body))
@@ -328,8 +412,13 @@ func (c *bufferedConn) CloseWrite() error {
 func (b *Backend) Destroy(ctx context.Context, id string) error {
 	b.mu.Lock()
 	vm, ok := b.vms[id]
+	vp := b.proxies[id]
 	delete(b.vms, id)
+	delete(b.proxies, id)
 	b.mu.Unlock()
+	if vp != nil {
+		vp.ln.Close()
+	}
 	if ok {
 		if err := vm.Kill(); err != nil {
 			return err

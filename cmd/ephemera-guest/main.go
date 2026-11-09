@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -224,6 +225,16 @@ func agent() {
 	ln, err := vsock.Listen(guest.Port, nil)
 	if err != nil {
 		log.Fatalf("listen on vsock port %d: %v", guest.Port, err)
+	}
+	// Programs reach the network, if the sandbox has any, only through
+	// this proxy, which forwards to the host's egress proxy over vsock.
+	eln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", guest.EgressPort))
+	if err != nil {
+		log.Printf("egress proxy: %v", err)
+	} else {
+		go guest.ServeEgress(eln, func() (net.Conn, error) {
+			return vsock.Dial(vsock.Host, guest.EgressPort, nil)
+		})
 	}
 	srv := &guest.Server{Workdir: workdir, Env: baseEnv}
 	hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 30 * time.Second}
