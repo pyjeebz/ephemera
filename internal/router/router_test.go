@@ -190,3 +190,18 @@ func TestLabel(t *testing.T) {
 		}
 	}
 }
+
+// An address naming no session is an error, never another session's page.
+func TestUnknownNameIsNotFound(t *testing.T) {
+	_, c, _ := start(t, 0)
+	port := freePort(t)
+	if _, _, err := c.Hold(context.Background(), "main", port, backend(t, "A")); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(t, port, fmt.Sprintf("typo.localhost:%d", port)); !strings.Contains(got, "no dev session at typo.localhost") {
+		t.Errorf("unknown name got %q", got)
+	}
+	if got := get(t, port, fmt.Sprintf("localhost:%d", port)); got != "A /page" {
+		t.Errorf("plain localhost = %q", got)
+	}
+}

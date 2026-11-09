@@ -108,9 +108,11 @@ func cmdFocus(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 }
 
 // sessionName is the dev session's name: the git branch, else the folder.
+// symbolic-ref also works in a repository with no commits yet, where
+// rev-parse fails; on a detached HEAD it fails and the folder is used.
 func sessionName(dir string) string {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if b := strings.TrimSpace(string(out)); err == nil && b != "" && b != "HEAD" {
+	out, err := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "HEAD").Output()
+	if b := strings.TrimSpace(string(out)); err == nil && b != "" {
 		if l := router.Label(b); l != "" {
 			return l
 		}

@@ -302,6 +302,11 @@ func (s *Server) pick(port int, host string) string {
 			focused = r.Target
 		}
 	}
+	if name != "" {
+		// A name that is not a session is an error, never another
+		// session's page.
+		return ""
+	}
 	return focused
 }
 
@@ -327,7 +332,8 @@ func (s *Server) route(c net.Conn, port int) {
 	c.SetReadDeadline(time.Time{})
 	target := s.pick(port, host)
 	if target == "" {
-		io.WriteString(c, "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nephemera: no dev session for this address\n")
+		msg := fmt.Sprintf("ephemera: no dev session at %s; run ephemera routes to see the sessions\n", host)
+		fmt.Fprintf(c, "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(msg), msg)
 		return
 	}
 	up, err := net.DialTimeout("tcp", target, 5*time.Second)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -152,5 +153,15 @@ func TestSetupSnapshotID(t *testing.T) {
 	}
 	if _, _, err := buildSetup(dir, "x", []string{"missing.txt"}, api.Spec{}); err == nil {
 		t.Error("a missing --setup-input was accepted")
+	}
+}
+
+func TestSessionNameInNewRepo(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q", "-b", "feature/Login").CombinedOutput(); err != nil {
+		t.Skipf("git: %v %s", err, out)
+	}
+	if got := sessionName(dir); got != "feature-login" {
+		t.Errorf("sessionName in a repo with no commits = %q, want feature-login", got)
 	}
 }
