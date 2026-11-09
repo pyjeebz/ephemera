@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/router"
 	"github.com/pyjeebz/ephemera/internal/worktree"
 )
 
@@ -18,11 +19,16 @@ import (
 type PortMap struct {
 	Local  int // 0 picks a free port
 	Remote int
+	// Shared means the port is shared with other dev sessions through
+	// the local router: <name>.localhost:Remote reaches this session.
+	Shared bool
 }
 
-// ParsePort parses "3000" or "8080:3000" (local:sandbox).
+// ParsePort parses "3000" (shared through the router, by session name) or
+// "8080:3000" (local port 8080, this session only).
 func ParsePort(s string) (PortMap, error) {
 	local, remote, found := cutLast(s, ":")
+	shared := !found
 	if !found {
 		local, remote = s, s
 	}
@@ -31,7 +37,10 @@ func ParsePort(s string) (PortMap, error) {
 	if err1 != nil || err2 != nil || l < 0 || l > 65535 || r < 1 || r > 65535 {
 		return PortMap{}, fmt.Errorf("invalid port %q: use PORT or LOCAL:SANDBOX", s)
 	}
-	return PortMap{Local: l, Remote: r}, nil
+	if shared {
+		l = 0 // the router owns the port; this session listens anywhere
+	}
+	return PortMap{Local: l, Remote: r, Shared: shared}, nil
 }
 
 func cutLast(s, sep string) (string, string, bool) {
@@ -55,8 +64,13 @@ type DevOptions struct {
 	// SyncInterval is how often the worktree is checked for changes;
 	// default 500ms.
 	SyncInterval time.Duration
-	Stdout       io.Writer
-	Stderr       io.Writer
+	// Router shares ports marked Shared under Name. StartRouter, if set,
+	// starts the router when none is running.
+	Router      *router.Client
+	StartRouter func() error
+	Name        string
+	Stdout      io.Writer
+	Stderr      io.Writer
 	// Events receives progress: "sandbox", "synced", "forwarding",
 	// "connection", "sync_error", "port_error", "destroyed". It may be called from
 	// several goroutines, never at the same time.
@@ -104,6 +118,18 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 		}
 		listeners = append(listeners, ln)
 	}
+	// Shared ports are registered before the sandbox exists, so a port the
+	// router cannot take fails here too. Routes last until Dev returns.
+	holdCtx, stopHolds := context.WithCancel(ctx)
+	defer stopHolds()
+	routes := make([]router.Route, len(listeners))
+	for i, ln := range listeners {
+		if o.Ports[i].Shared {
+			if routes[i], err = c.share(holdCtx, o, o.Ports[i].Remote, ln.Addr().String()); err != nil {
+				return 0, err
+			}
+		}
+	}
 
 	sb, err := c.Create(ctx, o.Spec)
 	if err != nil {
@@ -135,7 +161,13 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 
 	for i, ln := range listeners {
 		remote := o.Ports[i].Remote
-		emit("forwarding", map[string]any{"local": ln.Addr().String(), "port": remote})
+		if o.Ports[i].Shared {
+			route := routes[i]
+			emit("forwarding", map[string]any{"local": fmt.Sprintf("%s.localhost:%d", route.Name, remote),
+				"port": remote, "name": route.Name, "bare": fmt.Sprintf("localhost:%d", remote), "focused": route.Focused})
+		} else {
+			emit("forwarding", map[string]any{"local": ln.Addr().String(), "port": remote})
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -149,6 +181,28 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 	}()
 
 	return c.Exec(ctx, sb, o.Exec, o.Stdout, o.Stderr)
+}
+
+// share registers a port with the router, starting the router if needed.
+// The route lasts until ctx is done.
+func (c *Client) share(ctx context.Context, o DevOptions, port int, target string) (router.Route, error) {
+	if o.Router == nil {
+		return router.Route{}, fmt.Errorf("port %d is shared, but there is no router", port)
+	}
+	if !o.Router.Running() && o.StartRouter != nil {
+		if err := o.StartRouter(); err != nil {
+			return router.Route{}, fmt.Errorf("start the router: %w", err)
+		}
+	}
+	name := o.Name
+	if name == "" {
+		name = "dev"
+	}
+	route, _, err := o.Router.Hold(ctx, name, port, target)
+	if err != nil {
+		return router.Route{}, fmt.Errorf("share port %d: %w", port, err)
+	}
+	return route, nil
 }
 
 // watch sends changed and deleted files until ctx is done.

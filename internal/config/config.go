@@ -125,3 +125,16 @@ func RecordsDir() (string, error) {
 	}
 	return filepath.Join(dir, "ephemera", "records"), nil
 }
+
+// RouterSocket is the local router's Unix socket: $EPHEMERA_ROUTER_SOCKET,
+// or router.sock next to the saved login.
+func RouterSocket() (string, error) {
+	if p := os.Getenv("EPHEMERA_ROUTER_SOCKET"); p != "" {
+		return p, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "ephemera", "router.sock"), nil
+}

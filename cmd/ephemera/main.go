@@ -33,6 +33,8 @@ const usage = `ephemera runs commands in short-lived, locked-down sandboxes.
 Usage:
   ephemera run [flags] -- <command> [args...]
   ephemera dev [flags] [-p PORT]... -- <dev server command>
+  ephemera routes                   dev sessions sharing ports, and their addresses
+  ephemera focus <session>          make plain localhost show that session
   ephemera ls [--json]
   ephemera rm <sandbox-id>...
   ephemera verify <record.json>
@@ -67,6 +69,12 @@ func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	c := &client.Client{Server: server, Token: token}
 	switch args[0] {
+	case "router":
+		return cmdRouter(ctx, stderr)
+	case "routes":
+		return cmdRoutes(ctx, stdout, stderr)
+	case "focus":
+		return cmdFocus(ctx, args[1:], stdout, stderr)
 	case "mcp":
 		return cmdMCP(ctx, c, args[1:], stdin, stdout, stderr)
 	case "verify":
@@ -264,7 +272,8 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 	var f sandboxFlags
 	f.register(fs)
 	var ports stringList
-	fs.Var(&ports, "p", "forward a port to localhost: PORT or LOCAL:SANDBOX (repeatable)")
+	fs.Var(&ports, "p", "forward a port: PORT is shared by session at http://<name>.localhost:PORT; LOCAL:SANDBOX binds LOCAL for this session only (repeatable)")
+	name := fs.String("name", "", "session name for shared ports (default: the git branch)")
 	argv, ok := parseCommand("dev", fs, args, stderr)
 	if !ok {
 		return 2
@@ -300,6 +309,14 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		}
 		opts.Ports = append(opts.Ports, pm)
 	}
+	if rc, err := routerClient(); err == nil {
+		opts.Router = rc
+		opts.StartRouter = func() error { return startRouter(rc) }
+	}
+	opts.Name = *name
+	if opts.Name == "" {
+		opts.Name = sessionName(f.dir)
+	}
 
 	events := &jsonEvents{enc: json.NewEncoder(stdout)}
 	if f.jsonOut {
@@ -319,6 +336,9 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 				}
 			case "forwarding":
 				fmt.Fprintf(stderr, "ephemera: http://%s -> sandbox port %d\n", m["local"], m["port"])
+				if m["focused"] == true {
+					fmt.Fprintf(stderr, "ephemera: http://%s shows this session too (ephemera focus <name> to switch)\n", m["bare"])
+				}
 			case "connection":
 				if m["allowed"] != true {
 					fmt.Fprintf(stderr, "ephemera: blocked %s:%v (%v)\n", m["host"], m["port"], m["error"])

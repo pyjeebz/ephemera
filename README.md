@@ -69,6 +69,14 @@ Then open http://localhost:3000. Ctrl-C stops the dev server and destroys
 the sandbox. Ports work even when the server listens only on the sandbox's
 own `127.0.0.1`.
 
+Several branches can run at once on the same port. `-p 3000` shares the
+port through a small local router that the first session starts: each
+session is at `http://<branch>.localhost:3000` (or `--name`), and plain
+`localhost:3000` shows the newest one. `ephemera routes` lists them and
+`ephemera focus <name>` switches plain localhost. The router exits 30
+seconds after the last session ends. `-p 8080:3000` binds local port 8080
+for one session only, without the router.
+
 Flags for `run` and `dev`:
 
 | Flag | Meaning |
@@ -79,7 +87,7 @@ Flags for `run` and `dev`:
 | `--env KEY=VALUE` | Set an environment variable |
 | `--image`, `--cpus`, `--memory` | Sandbox image and limits |
 | `--json` | Newline-delimited JSON events, for agents and scripts |
-| `-p PORT`, `-p LOCAL:SANDBOX` | `dev` only: forward a port to localhost |
+| `-p PORT`, `-p LOCAL:SANDBOX` | `dev` only: forward a port, shared by session name or bound locally |
 
 ### Network
 
@@ -238,6 +246,7 @@ internal/guest        guest agent API (inside the microVM)
 internal/host         host agent API
 internal/mcp          MCP server for coding agents
 internal/record       signing and checking sandbox records
+internal/router       local router: several dev sessions on one port, by name
 internal/sandbox      backend interface; Docker, Firecracker and test backends
 internal/stream       output framing (stdout, stderr, exit code)
 internal/worktree     which files to send, tar packing, upload checks

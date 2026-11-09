@@ -174,7 +174,7 @@ func TestDevPortInUseFailsBeforeCreating(t *testing.T) {
 }
 
 func TestParsePort(t *testing.T) {
-	for in, want := range map[string]client.PortMap{"3000": {Local: 3000, Remote: 3000}, "8080:3000": {Local: 8080, Remote: 3000}, "0:5173": {Local: 0, Remote: 5173}} {
+	for in, want := range map[string]client.PortMap{"3000": {Local: 0, Remote: 3000, Shared: true}, "8080:3000": {Local: 8080, Remote: 3000}, "0:5173": {Local: 0, Remote: 5173}} {
 		if got, err := client.ParsePort(in); err != nil || got != want {
 			t.Errorf("ParsePort(%q) = %v, %v", in, got, err)
 		}
