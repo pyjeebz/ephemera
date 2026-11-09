@@ -141,6 +141,15 @@ Every sandbox boots that image read-only, with a disk of its own that
 holds everything it writes, so `apt install` works. The disk is deleted
 with the sandbox.
 
+When it starts, the host agent boots one VM, waits for its guest agent and
+saves a snapshot of it (about 8 seconds). Sandboxes of the default size then
+start by restoring that snapshot instead of booting: about 65 ms instead of
+about 900 ms. Each restored sandbox gets its own copy of the snapshot's
+disk, has its clock set and its random number generator reseeded from the
+host, so no two sandboxes share random numbers, and shares the snapshot's
+memory until it writes to it: an idle sandbox costs the host about 60 MB.
+Other sizes boot as before. `--snapshots=false` turns this off.
+
 As root, the host agent runs every microVM under Firecracker's jailer: in a
 chroot holding only that VM's files, as a user ID of its own, with cgroup
 limits on memory, CPU and processes. Jails go in `--jail-dir`

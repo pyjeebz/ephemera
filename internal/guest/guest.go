@@ -39,6 +39,16 @@ const MaxUpload = 4 << 30
 type Server struct {
 	Workdir string   // where files go and commands run
 	Env     []string // base environment for commands
+	// Restore, if set, is called when the host restores this VM from a
+	// snapshot: set the clock and reseed the random number generator, so
+	// clones of one snapshot neither live in the past nor share randomness.
+	Restore func(RestoreRequest) error
+}
+
+// RestoreRequest is what the host sends right after restoring a VM.
+type RestoreRequest struct {
+	UnixNano int64  `json:"unix_nano"` // the host's current time
+	Seed     []byte `json:"seed"`      // fresh randomness from the host
 }
 
 // Handler returns the HTTP handler.
@@ -49,6 +59,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /files/delete", s.deleteFiles)
 	mux.HandleFunc("POST /exec", s.exec)
 	mux.HandleFunc("GET /ports/{port}", s.port)
+	mux.HandleFunc("POST /restore", s.restore)
 	return mux
 }
 
@@ -199,6 +210,27 @@ func (s *Server) run(ctx context.Context, req api.ExecRequest, stdout, stderr io
 		return exitErr.ExitCode(), nil
 	}
 	return 0, err
+}
+
+func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
+	var req RestoreRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: %v", err)
+		return
+	}
+	if len(req.Seed) < 32 {
+		writeError(w, http.StatusBadRequest, "seed must be at least 32 bytes")
+		return
+	}
+	if s.Restore == nil {
+		writeError(w, http.StatusNotImplemented, "restore is not supported here")
+		return
+	}
+	if err := s.Restore(req); err != nil {
+		writeError(w, http.StatusInternalServerError, "restore: %v", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) port(w http.ResponseWriter, r *http.Request) {

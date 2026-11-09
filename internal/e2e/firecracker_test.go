@@ -43,6 +43,18 @@ func firecrackerBackend(t *testing.T) *firecracker.Backend {
 		be.ChrootBase = filepath.Join(filepath.Dir(img), fmt.Sprintf("jail-e2e-%d", os.Getpid()))
 		t.Cleanup(func() { os.RemoveAll(be.ChrootBase) })
 	}
+	// EPHEMERA_SNAPSHOTS=1 starts every sandbox from a snapshot.
+	if os.Getenv("EPHEMERA_SNAPSHOTS") == "1" {
+		be.Snapshots = true
+		be.TemplateDir = t.TempDir()
+		if be.Jailed {
+			be.TemplateDir = filepath.Join(filepath.Dir(img), fmt.Sprintf("tmpl-e2e-%d", os.Getpid()))
+			t.Cleanup(func() { os.RemoveAll(be.TemplateDir) })
+		}
+		if err := be.Prepare(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return be
 }
 

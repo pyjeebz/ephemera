@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/egress"
@@ -48,6 +49,17 @@ type Backend struct {
 	// UIDBase is the first user ID handed to VMs; each VM gets its own
 	// from UIDBase to UIDBase+65535. Default 300000.
 	UIDBase int
+
+	// Snapshots makes sandboxes of the default size start by restoring a
+	// snapshot of a booted VM instead of booting. Prepare builds it.
+	Snapshots bool
+	// TemplateDir holds the snapshot. Jailed, it must be on the same
+	// filesystem as the jails. Default /var/lib/ephemera/templates.
+	TemplateDir string
+	// Log, if set, receives one line per sandbox start: how and how long.
+	Log func(id, how string, d time.Duration)
+
+	tmpl *Snapshot // the template snapshot, once built
 
 	mu      sync.Mutex
 	vms     map[string]*VM
@@ -147,10 +159,7 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 		return err
 	}
 	scratch := filepath.Join(dir, "scratch.ext4")
-	if err := makeScratch(ctx, scratch, b.scratchMB()); err != nil {
-		os.RemoveAll(dir)
-		return err
-	}
+	var err error
 	cpus := b.DefaultCPUs
 	if spec.CPUs > 0 {
 		cpus = int(math.Ceil(spec.CPUs))
@@ -163,7 +172,6 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 		Dir:      dir,
 		Kernel:   filepath.Join(b.ImageDir, "vmlinux"),
 		RootFS:   filepath.Join(b.ImageDir, "rootfs.ext4"),
-		Scratch:  scratch,
 		CPUs:     cpus,
 		MemoryMB: mem,
 	}
@@ -175,13 +183,33 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 		}
 		cfg.Jail = &Jail{ChrootBase: b.chrootBase(), ID: jailID(id), UID: uid, GID: uid, CgroupParent: cgroupParent}
 	}
-	vm, err := Boot(ctx, cfg)
+	start := time.Now()
+	var vm *VM
+	how := "boot"
+	if t := b.tmpl; t != nil && t.CPUs == cpus && t.MemoryMB == mem {
+		how = "restore"
+		vm, err = Restore(ctx, cfg, t)
+		if err != nil {
+			// A broken snapshot must not stop sandboxes: boot instead.
+			how = "boot after failed restore: " + err.Error()
+			vm = nil
+		}
+	}
+	if vm == nil {
+		if err = makeScratch(ctx, scratch, b.scratchMB()); err == nil {
+			cfg.Scratch = scratch
+			vm, err = Boot(ctx, cfg)
+		}
+	}
 	if err != nil {
 		if cfg.Jail != nil {
 			b.freeUID(cfg.Jail.UID)
 		}
 		os.RemoveAll(dir)
 		return err
+	}
+	if b.Log != nil {
+		b.Log(id, how, time.Since(start))
 	}
 	var vp *vmProxy
 	if spec.Network == api.NetworkAllow || spec.Network == api.NetworkOpen {
@@ -247,6 +275,60 @@ func (b *Backend) Connections(id string, since int) ([]api.Connection, error) {
 		return []api.Connection{}, nil
 	}
 	return vp.proxy.Connections(since), nil
+}
+
+// Prepare builds the template snapshot when Snapshots is on: it boots a VM
+// of the default size, waits for its guest agent, and saves it. Sandboxes
+// of that size then start from it. It is rebuilt at every start, so it
+// always matches the current guest image.
+func (b *Backend) Prepare(ctx context.Context) error {
+	if !b.Snapshots {
+		return nil
+	}
+	dir := b.TemplateDir
+	if dir == "" {
+		dir = "/var/lib/ephemera/templates"
+	}
+	dst := filepath.Join(dir, "default")
+	os.RemoveAll(dst)
+	vmDir := filepath.Join(b.StateDir, "template")
+	os.RemoveAll(vmDir)
+	if err := os.MkdirAll(vmDir, 0o700); err != nil {
+		return err
+	}
+	defer os.RemoveAll(vmDir)
+	scratch := filepath.Join(vmDir, "scratch.ext4")
+	if err := makeScratch(ctx, scratch, b.scratchMB()); err != nil {
+		return err
+	}
+	cfg := VMConfig{
+		Dir:      vmDir,
+		Kernel:   filepath.Join(b.ImageDir, "vmlinux"),
+		RootFS:   filepath.Join(b.ImageDir, "rootfs.ext4"),
+		Scratch:  scratch,
+		CPUs:     max(b.DefaultCPUs, 1),
+		MemoryMB: max(b.DefaultMemoryMB, 128),
+	}
+	if b.Jailed {
+		uid, err := b.allocUID()
+		if err != nil {
+			return err
+		}
+		defer b.freeUID(uid)
+		cfg.Jail = &Jail{ChrootBase: b.chrootBase(), ID: "template", UID: uid, GID: uid, CgroupParent: cgroupParent}
+	}
+	vm, err := Boot(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("boot template: %w", err)
+	}
+	defer func() { vm.Kill(); vm.Cleanup() }()
+	snap, err := vm.CreateSnapshot(ctx, dst)
+	if err != nil {
+		os.RemoveAll(dst)
+		return fmt.Errorf("snapshot template: %w", err)
+	}
+	b.tmpl = snap
+	return nil
 }
 
 func (b *Backend) scratchMB() int {

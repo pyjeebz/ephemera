@@ -35,6 +35,8 @@ func main() {
 		stateDir  = flag.String("state-dir", "/var/lib/ephemera/vms", "per-VM working directories (firecracker backend)")
 		jail      = flag.Bool("jail", os.Geteuid() == 0, "run each microVM under Firecracker's jailer: its own user, chroot and cgroup limits (needs root)")
 		jailDir   = flag.String("jail-dir", "/var/lib/ephemera/jail", "where jails go; same filesystem as -image-dir (firecracker backend)")
+		snapshots = flag.Bool("snapshots", true, "start sandboxes from a snapshot of a booted VM (firecracker backend)")
+		tmplDir   = flag.String("template-dir", "/var/lib/ephemera/templates", "where the snapshot goes; same filesystem as -jail-dir (firecracker backend)")
 		capacity  = flag.Int("capacity", 20, "maximum sandboxes on this host")
 	)
 	flag.Parse()
@@ -45,7 +47,7 @@ func main() {
 		log.Error("EPHEMERA_HOST_SECRET must be set")
 		os.Exit(2)
 	}
-	be, err := newBackend(*backend, *imageDir, *stateDir, *jail, *jailDir, log)
+	be, err := newBackend(*backend, *imageDir, *stateDir, *jail, *jailDir, *snapshots, *tmplDir, log)
 	if err != nil {
 		log.Error("backend", "err", err)
 		os.Exit(2)
@@ -80,7 +82,7 @@ func main() {
 	log.Info("host agent stopped; all sandboxes destroyed")
 }
 
-func newBackend(name, imageDir, stateDir string, jail bool, jailDir string, log *slog.Logger) (sandbox.Backend, error) {
+func newBackend(name, imageDir, stateDir string, jail bool, jailDir string, snapshots bool, tmplDir string, log *slog.Logger) (sandbox.Backend, error) {
 	switch name {
 	case "docker":
 		return &docker.Backend{}, nil
@@ -97,12 +99,24 @@ func newBackend(name, imageDir, stateDir string, jail bool, jailDir string, log 
 			log.Warn("microVMs run without the jailer: every VM runs as this user, with no chroot or cgroup limits")
 		}
 		be := &firecracker.Backend{ImageDir: imageDir, StateDir: stateDir, DefaultCPUs: 2, DefaultMemoryMB: 1024,
-			Jailed: jail, ChrootBase: jailDir}
+			Jailed: jail, ChrootBase: jailDir, Snapshots: snapshots, TemplateDir: tmplDir,
+			Log: func(id, how string, d time.Duration) {
+				log.Info("sandbox started", "sandbox", id, "how", how, "took", d.Round(time.Millisecond))
+			}}
 		// Nothing from an earlier run may keep running unseen.
 		if n, err := be.Cleanup(); err != nil {
 			return nil, fmt.Errorf("clean up old VMs: %w", err)
 		} else if n > 0 {
 			log.Warn("removed microVMs left from an earlier run", "count", n)
+		}
+		if snapshots {
+			start := time.Now()
+			if err := be.Prepare(context.Background()); err != nil {
+				// Sandboxes still work; they just boot.
+				log.Error("snapshot template failed; sandboxes will boot instead", "err", err)
+			} else {
+				log.Info("snapshot template ready", "took", time.Since(start).Round(time.Millisecond))
+			}
 		}
 		return be, nil
 	default:

@@ -7,6 +7,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/mdlayher/vsock"
 	"golang.org/x/sys/unix"
@@ -236,11 +238,43 @@ func agent() {
 			return vsock.Dial(vsock.Host, guest.EgressPort, nil)
 		})
 	}
-	srv := &guest.Server{Workdir: workdir, Env: baseEnv}
+	srv := &guest.Server{Workdir: workdir, Env: baseEnv, Restore: restore}
 	hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 30 * time.Second}
 	if err := hs.Serve(ln); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// restore runs right after the VM is restored from a snapshot.
+func restore(req guest.RestoreRequest) error {
+	tv := unix.NsecToTimeval(req.UnixNano)
+	if err := unix.Settimeofday(&tv); err != nil {
+		return fmt.Errorf("set clock: %w", err)
+	}
+	return reseed(req.Seed)
+}
+
+// reseed mixes the host's randomness into the kernel's pool, credits it,
+// and forces the generator to reseed now, so this clone's random numbers
+// differ from every other clone of the same snapshot.
+func reseed(seed []byte) error {
+	f, err := os.OpenFile("/dev/urandom", os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	// struct rand_pool_info { int entropy_count; int buf_size; __u32 buf[]; }
+	buf := make([]byte, 8+len(seed))
+	binary.LittleEndian.PutUint32(buf[0:], uint32(len(seed)*8))
+	binary.LittleEndian.PutUint32(buf[4:], uint32(len(seed)))
+	copy(buf[8:], seed)
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), unix.RNDADDENTROPY, uintptr(unsafe.Pointer(&buf[0]))); errno != 0 {
+		return fmt.Errorf("add entropy: %w", errno)
+	}
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), unix.RNDRESEEDCRNG, 0); errno != 0 {
+		return fmt.Errorf("reseed: %w", errno)
+	}
+	return nil
 }
 
 func init() {

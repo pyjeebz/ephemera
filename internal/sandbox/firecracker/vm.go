@@ -1,13 +1,16 @@
 // Package firecracker runs sandboxes as Firecracker microVMs. Each VM boots
-// the guest image with the ephemera guest agent as init, and the host talks
-// to the agent over vsock.
+// the guest image with the ephemera guest agent as init, or is restored from
+// a snapshot of one, and the host talks to the agent over vsock.
 package firecracker
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -20,13 +23,33 @@ import (
 	"github.com/pyjeebz/ephemera/internal/guest"
 )
 
+// Every VM's files live in one directory, its root: the jail's chroot, or
+// for an unjailed VM its own directory, where Firecracker runs. Inside it
+// the files always have these names, and Firecracker is given them as
+// relative paths. A snapshot records the paths it was taken with, so this
+// sameness is what lets one snapshot be restored into any VM.
+const (
+	fileKernel   = "vmlinux"
+	fileRootFS   = "rootfs.ext4"
+	fileScratch  = "scratch.ext4"
+	fileVsock    = "vsock.sock"
+	fileAPI      = "api.sock"
+	fileConfig   = "vm.json"
+	fileSnapMem  = "snap.mem"
+	fileSnapVM   = "snap.vmstate"
+	bootArgs     = "console=ttyS0 reboot=k panic=1 pci=off quiet init=/sbin/ephemera-guest"
+	guestCID     = 3
+	readyTimeout = 30 * time.Second
+)
+
 // VMConfig describes one microVM.
 type VMConfig struct {
-	Dir    string // per-VM directory: config, sockets, log
+	Dir    string // per-VM directory on the host: console log, pid file
 	Kernel string // vmlinux
 	RootFS string // read-only root filesystem image
 	// Scratch is a writable disk image for this VM only; the guest builds
-	// its writable root and workspace on it. Optional.
+	// its writable root and workspace on it. Boot moves it into the VM's
+	// root. Optional.
 	Scratch  string
 	CPUs     int
 	MemoryMB int
@@ -64,38 +87,179 @@ func (j *Jail) cgroupDir() string {
 type VM struct {
 	cfg     VMConfig
 	cmd     *exec.Cmd
-	vsock   string        // host path of the vsock Unix socket
-	jailDir string        // the jail's directory, removed on cleanup
-	exited  chan struct{} // closed when Firecracker has exited
+	root    string // the VM's root directory on the host
+	vsock   string // host path of the vsock Unix socket
+	jailDir string // the jail's directory, removed on cleanup
+	exited  chan struct{}
 	exitErr error
 	// HTTP talks to the guest agent over vsock.
 	HTTP *http.Client
+	api  *http.Client // Firecracker's own API
 }
 
 // LogPath is where the VM's console output goes.
 func (c *VMConfig) LogPath() string { return filepath.Join(c.Dir, "console.log") }
 
-// Boot starts the VM and waits until the guest agent answers.
+func (c *VMConfig) defaults() {
+	if c.CPUs <= 0 {
+		c.CPUs = 2
+	}
+	if c.MemoryMB <= 0 {
+		c.MemoryMB = 1024
+	}
+	if c.Firecracker == "" {
+		c.Firecracker = "firecracker"
+	}
+}
+
+// Boot starts a VM from the kernel and waits until the guest agent answers.
 func Boot(ctx context.Context, cfg VMConfig) (*VM, error) {
-	if cfg.CPUs <= 0 {
-		cfg.CPUs = 2
+	cfg.defaults()
+	vm, err := prepare(cfg, map[string]string{fileKernel: cfg.Kernel, fileRootFS: cfg.RootFS})
+	if err != nil {
+		return nil, err
 	}
-	if cfg.MemoryMB <= 0 {
-		cfg.MemoryMB = 1024
+	if cfg.Scratch != "" {
+		if err := vm.adoptScratch(func(dst string) error { return os.Rename(cfg.Scratch, dst) }); err != nil {
+			vm.removeJail()
+			return nil, err
+		}
 	}
-	if cfg.Firecracker == "" {
-		cfg.Firecracker = "firecracker"
+	conf := map[string]any{
+		"boot-source":    map[string]any{"kernel_image_path": fileKernel, "boot_args": bootArgs},
+		"drives":         drives(cfg.Scratch != ""),
+		"machine-config": map[string]any{"vcpu_count": cfg.CPUs, "mem_size_mib": cfg.MemoryMB},
+		"vsock":          map[string]any{"guest_cid": guestCID, "uds_path": fileVsock},
 	}
+	b, _ := json.MarshalIndent(conf, "", "  ")
+	if err := os.WriteFile(filepath.Join(vm.root, fileConfig), b, 0o644); err != nil {
+		vm.removeJail()
+		return nil, err
+	}
+	if err := vm.start("--config-file", fileConfig); err != nil {
+		vm.removeJail()
+		return nil, err
+	}
+	if err := vm.waitReady(ctx); err != nil {
+		return nil, vm.fail(err)
+	}
+	return vm, nil
+}
+
+// Snapshot is a paused VM's saved state: its memory, its device state, and
+// its scratch disk as it was at that moment, plus the size it ran with.
+type Snapshot struct {
+	Dir      string
+	CPUs     int
+	MemoryMB int
+}
+
+// CreateSnapshot pauses the VM and saves it into dir. The VM stays paused;
+// kill it afterwards.
+func (vm *VM) CreateSnapshot(ctx context.Context, dir string) (*Snapshot, error) {
+	vm.HTTP.CloseIdleConnections() // no vsock connection may outlive the snapshot
+	if err := vm.apiCall(ctx, http.MethodPatch, "/vm", map[string]any{"state": "Paused"}); err != nil {
+		return nil, fmt.Errorf("pause: %w", err)
+	}
+	if err := vm.apiCall(ctx, http.MethodPut, "/snapshot/create", map[string]any{
+		"snapshot_type": "Full", "snapshot_path": fileSnapVM, "mem_file_path": fileSnapMem,
+	}); err != nil {
+		return nil, fmt.Errorf("create snapshot: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	for _, f := range []string{fileSnapMem, fileSnapVM} {
+		if err := moveFile(filepath.Join(vm.root, f), filepath.Join(dir, f)); err != nil {
+			return nil, err
+		}
+	}
+	if vm.hasScratch() {
+		// The scratch disk must match the memory: copy it while paused.
+		if err := sparseCopy(filepath.Join(vm.root, fileScratch), filepath.Join(dir, fileScratch)); err != nil {
+			return nil, err
+		}
+	}
+	for _, f := range []string{fileSnapMem, fileSnapVM, fileScratch} {
+		p := filepath.Join(dir, f)
+		if _, err := os.Stat(p); err == nil {
+			os.Chown(p, 0, 0)
+			os.Chmod(p, 0o644) // shared, read-only, by every clone
+		}
+	}
+	return &Snapshot{Dir: dir, CPUs: vm.cfg.CPUs, MemoryMB: vm.cfg.MemoryMB}, nil
+}
+
+// Restore starts a VM from a snapshot, with its own copy of the snapshot's
+// scratch disk, then sets its clock and reseeds its randomness.
+func Restore(ctx context.Context, cfg VMConfig, snap *Snapshot) (*VM, error) {
+	cfg.CPUs, cfg.MemoryMB = snap.CPUs, snap.MemoryMB
+	cfg.defaults()
+	vm, err := prepare(cfg, map[string]string{
+		fileRootFS:  cfg.RootFS,
+		fileSnapMem: filepath.Join(snap.Dir, fileSnapMem),
+		fileSnapVM:  filepath.Join(snap.Dir, fileSnapVM),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(filepath.Join(snap.Dir, fileScratch)); err == nil {
+		err := vm.adoptScratch(func(dst string) error { return sparseCopy(filepath.Join(snap.Dir, fileScratch), dst) })
+		if err != nil {
+			vm.removeJail()
+			return nil, err
+		}
+	}
+	if err := vm.start(); err != nil {
+		vm.removeJail()
+		return nil, err
+	}
+	if err := vm.waitAPI(ctx); err != nil {
+		return nil, vm.fail(err)
+	}
+	if err := vm.apiCall(ctx, http.MethodPut, "/snapshot/load", map[string]any{
+		"snapshot_path": fileSnapVM,
+		"mem_backend":   map[string]any{"backend_type": "File", "backend_path": fileSnapMem},
+		"resume_vm":     true,
+	}); err != nil {
+		return nil, vm.fail(fmt.Errorf("load snapshot: %w", err))
+	}
+	if err := vm.waitReady(ctx); err != nil {
+		return nil, vm.fail(err)
+	}
+	if err := vm.afterRestore(ctx); err != nil {
+		return nil, vm.fail(err)
+	}
+	return vm, nil
+}
+
+func (vm *VM) afterRestore(ctx context.Context) error {
+	seed := make([]byte, 64)
+	if _, err := rand.Read(seed); err != nil {
+		return err
+	}
+	body, _ := json.Marshal(guest.RestoreRequest{UnixNano: time.Now().UnixNano(), Seed: seed})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://guest/restore", bytes.NewReader(body))
+	resp, err := vm.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("guest restore: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("guest restore: %w", guestError(resp))
+	}
+	return nil
+}
+
+// prepare makes the VM's root directory and puts the given files in it
+// under their fixed names: hard links in a jail (a jail cannot follow a
+// link out of itself), symlinks otherwise.
+func prepare(cfg VMConfig, files map[string]string) (*VM, error) {
 	if err := os.MkdirAll(cfg.Dir, 0o700); err != nil {
 		return nil, err
 	}
 	vm := &VM{cfg: cfg, exited: make(chan struct{})}
-	// paths as Firecracker sees them, and where its files go on the host
-	kernel, rootfs, scratch := cfg.Kernel, cfg.RootFS, cfg.Scratch
-	confDir := cfg.Dir
-	vm.vsock = filepath.Join(cfg.Dir, "vsock.sock")
-	vsockInVM := vm.vsock
-	var cmd *exec.Cmd
+	vm.root = cfg.Dir
 	if cfg.Jail != nil {
 		execFile, err := exec.LookPath(cfg.Firecracker)
 		if err == nil {
@@ -104,58 +268,43 @@ func Boot(ctx context.Context, cfg VMConfig) (*VM, error) {
 		if err != nil {
 			return nil, fmt.Errorf("firecracker binary: %w", err)
 		}
-		root, err := prepareJail(cfg, execFile)
-		if err != nil {
+		vm.cfg.Firecracker = execFile
+		vm.root = cfg.Jail.chrootRoot(execFile)
+		vm.jailDir = filepath.Dir(vm.root)
+		os.RemoveAll(vm.jailDir) // a stale jail of the same id
+		if err := os.MkdirAll(vm.root, 0o755); err != nil {
 			return nil, err
 		}
-		vm.jailDir = filepath.Dir(root)
-		kernel, rootfs, vsockInVM = "/vmlinux", "/rootfs.ext4", "/vsock.sock"
-		if scratch != "" {
-			scratch = "/scratch.ext4"
+	}
+	for name, src := range files {
+		dst := filepath.Join(vm.root, name)
+		os.Remove(dst)
+		var err error
+		if cfg.Jail != nil {
+			err = os.Link(src, dst)
+			if err != nil {
+				err = fmt.Errorf("link %s into the jail (the jail base must be on the same filesystem as the image and snapshots): %w", src, err)
+			}
+		} else {
+			abs, _ := filepath.Abs(src)
+			err = os.Symlink(abs, dst)
 		}
-		confDir = root
-		vm.vsock = filepath.Join(root, "vsock.sock")
-		cmd = jailerCommand(cfg, execFile)
+		if err != nil {
+			vm.removeJail()
+			return nil, err
+		}
 	}
-	conf := map[string]any{
-		"boot-source": map[string]any{
-			"kernel_image_path": kernel,
-			"boot_args":         "console=ttyS0 reboot=k panic=1 pci=off quiet init=/sbin/ephemera-guest",
-		},
-		"drives":         drives(rootfs, scratch),
-		"machine-config": map[string]any{"vcpu_count": cfg.CPUs, "mem_size_mib": cfg.MemoryMB},
-		"vsock":          map[string]any{"guest_cid": 3, "uds_path": vsockInVM},
+	if cfg.Jail != nil {
+		// Firecracker creates its sockets in the jail's root.
+		if err := os.Chown(vm.root, cfg.Jail.UID, cfg.Jail.GID); err != nil {
+			vm.removeJail()
+			return nil, err
+		}
 	}
-	b, _ := json.MarshalIndent(conf, "", "  ")
-	confPath := filepath.Join(confDir, "vm.json")
-	if err := os.WriteFile(confPath, b, 0o644); err != nil {
-		vm.removeJail()
-		return nil, err
+	vm.vsock = filepath.Join(vm.root, fileVsock)
+	for _, f := range []string{fileVsock, fileAPI} {
+		os.Remove(filepath.Join(vm.root, f))
 	}
-	os.Remove(vm.vsock)
-	logf, err := os.Create(cfg.LogPath())
-	if err != nil {
-		vm.removeJail()
-		return nil, err
-	}
-	if cmd == nil {
-		cmd = exec.Command(cfg.Firecracker, "--no-api", "--config-file", confPath)
-	}
-	cmd.Stdin = nil // the console must not read our input
-	cmd.Stdout, cmd.Stderr = logf, logf
-	if err := cmd.Start(); err != nil {
-		logf.Close()
-		vm.removeJail()
-		return nil, fmt.Errorf("start firecracker: %w", err)
-	}
-	// The pid file lets a restarted host agent find VMs it lost track of.
-	os.WriteFile(filepath.Join(cfg.Dir, "firecracker.pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
-	vm.cmd = cmd
-	go func() {
-		vm.exitErr = cmd.Wait()
-		logf.Close()
-		close(vm.exited)
-	}()
 	vm.HTTP = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return DialGuest(ctx, vm.vsock, guest.Port)
@@ -163,62 +312,86 @@ func Boot(ctx context.Context, cfg VMConfig) (*VM, error) {
 		MaxIdleConns:    4,
 		IdleConnTimeout: 30 * time.Second,
 	}}
-	if err := vm.waitReady(ctx); err != nil {
-		vm.Kill()
-		vm.removeJail()
-		return nil, fmt.Errorf("%w (console: %s)", err, tail(cfg.LogPath(), 600))
-	}
+	apiSock := filepath.Join(vm.root, fileAPI)
+	vm.api = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", apiSock)
+		},
+	}}
 	return vm, nil
 }
 
-func drives(rootfs, scratch string) []any {
+// adoptScratch puts the VM's scratch disk in its root with place, owned by
+// the VM's user.
+func (vm *VM) adoptScratch(place func(dst string) error) error {
+	dst := filepath.Join(vm.root, fileScratch)
+	if err := place(dst); err != nil {
+		return fmt.Errorf("scratch disk: %w", err)
+	}
+	if j := vm.cfg.Jail; j != nil {
+		return os.Chown(dst, j.UID, j.GID)
+	}
+	return nil
+}
+
+func (vm *VM) hasScratch() bool {
+	_, err := os.Stat(filepath.Join(vm.root, fileScratch))
+	return err == nil
+}
+
+// start runs Firecracker, under the jailer if configured, with the API
+// socket and any extra arguments.
+func (vm *VM) start(extra ...string) error {
+	logf, err := os.Create(vm.cfg.LogPath())
+	if err != nil {
+		return err
+	}
+	fcArgs := append([]string{"--api-sock", fileAPI}, extra...)
+	var cmd *exec.Cmd
+	if vm.cfg.Jail != nil {
+		cmd = jailerCommand(vm.cfg, vm.cfg.Firecracker, fcArgs)
+	} else {
+		cmd = exec.Command(vm.cfg.Firecracker, fcArgs...)
+		cmd.Dir = vm.root
+	}
+	cmd.Stdin = nil // the console must not read our input
+	cmd.Stdout, cmd.Stderr = logf, logf
+	if err := cmd.Start(); err != nil {
+		logf.Close()
+		return fmt.Errorf("start firecracker: %w", err)
+	}
+	vm.cmd = cmd
+	// The pid file lets a restarted host agent find VMs it lost track of.
+	os.WriteFile(filepath.Join(vm.cfg.Dir, "firecracker.pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
+	go func() {
+		vm.exitErr = cmd.Wait()
+		logf.Close()
+		close(vm.exited)
+	}()
+	return nil
+}
+
+// fail stops a VM that did not come up and adds its console to the error.
+func (vm *VM) fail(err error) error {
+	vm.Kill()
+	vm.removeJail()
+	return fmt.Errorf("%w (console: %s)", err, tail(vm.cfg.LogPath(), 600))
+}
+
+func drives(scratch bool) []any {
 	d := []any{map[string]any{
-		"drive_id": "rootfs", "path_on_host": rootfs, "is_root_device": true, "is_read_only": true,
+		"drive_id": "rootfs", "path_on_host": fileRootFS, "is_root_device": true, "is_read_only": true,
 	}}
-	if scratch != "" {
+	if scratch {
 		d = append(d, map[string]any{
-			"drive_id": "scratch", "path_on_host": scratch, "is_root_device": false, "is_read_only": false,
+			"drive_id": "scratch", "path_on_host": fileScratch, "is_root_device": false, "is_read_only": false,
 		})
 	}
 	return d
 }
 
-// prepareJail fills the chroot with this VM's files only: hard links to the
-// shared kernel and read-only root filesystem, and the VM's own scratch
-// disk, owned by the VM's user. It returns the chroot root.
-func prepareJail(cfg VMConfig, execFile string) (string, error) {
-	j := cfg.Jail
-	root := j.chrootRoot(execFile)
-	os.RemoveAll(filepath.Dir(root)) // a stale jail of the same id
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", err
-	}
-	fail := func(err error) (string, error) {
-		os.RemoveAll(filepath.Dir(root))
-		return "", err
-	}
-	for src, dst := range map[string]string{cfg.Kernel: "vmlinux", cfg.RootFS: "rootfs.ext4"} {
-		if err := os.Link(src, filepath.Join(root, dst)); err != nil {
-			return fail(fmt.Errorf("link %s into the jail (the jail base must be on the same filesystem as the image): %w", src, err))
-		}
-	}
-	if cfg.Scratch != "" {
-		dst := filepath.Join(root, "scratch.ext4")
-		if err := os.Rename(cfg.Scratch, dst); err != nil {
-			return fail(fmt.Errorf("move scratch disk into the jail: %w", err))
-		}
-		if err := os.Chown(dst, j.UID, j.GID); err != nil {
-			return fail(err)
-		}
-	}
-	// Firecracker creates its vsock socket in the jail's root.
-	if err := os.Chown(root, j.UID, j.GID); err != nil {
-		return fail(err)
-	}
-	return root, nil
-}
-
-func jailerCommand(cfg VMConfig, execFile string) *exec.Cmd {
+func jailerCommand(cfg VMConfig, execFile string, fcArgs []string) *exec.Cmd {
 	j := cfg.Jail
 	jailer := j.Jailer
 	if jailer == "" {
@@ -238,9 +411,52 @@ func jailerCommand(cfg VMConfig, execFile string) *exec.Cmd {
 		"--cgroup", "pids.max=128",
 		"--resource-limit", "no-file=4096",
 		"--",
-		"--no-api", "--config-file", "/vm.json",
 	}
-	return exec.Command(jailer, args...)
+	return exec.Command(jailer, append(args, fcArgs...)...)
+}
+
+// apiCall sends one request to Firecracker's API.
+func (vm *VM) apiCall(ctx context.Context, method, path string, body any) error {
+	b, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, method, "http://firecracker"+path, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := vm.api.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, bytes.TrimSpace(msg))
+	}
+	return nil
+}
+
+// waitAPI waits until Firecracker's API socket answers.
+func (vm *VM) waitAPI(ctx context.Context) error {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		select {
+		case <-vm.exited:
+			return fmt.Errorf("firecracker exited: %v", vm.exitErr)
+		default:
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://firecracker/", nil)
+		if resp, err := vm.api.Do(req); err == nil {
+			resp.Body.Close()
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return errors.New("firecracker's API did not come up")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // removeJail deletes the jail directory and the VM's cgroup.
@@ -261,7 +477,7 @@ func (vm *VM) Cleanup() { vm.removeJail() }
 func (vm *VM) PID() int { return vm.cmd.Process.Pid }
 
 func (vm *VM) waitReady(ctx context.Context) error {
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(readyTimeout)
 	for {
 		select {
 		case <-vm.exited:
@@ -282,15 +498,18 @@ func (vm *VM) waitReady(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("guest agent did not answer within 30s: %v", err)
+			return fmt.Errorf("guest agent did not answer within %v: %v", readyTimeout, err)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
 // Kill stops the VM immediately and waits for Firecracker to exit. It is
 // safe to call more than once.
 func (vm *VM) Kill() error {
+	if vm.cmd == nil {
+		return nil
+	}
 	select {
 	case <-vm.exited:
 		return nil
@@ -344,6 +563,29 @@ func DialGuest(ctx context.Context, udsPath string, port uint32) (net.Conn, erro
 	}
 	conn.SetDeadline(time.Time{})
 	return conn, nil
+}
+
+// sparseCopy copies a disk image, keeping its holes, so a mostly empty
+// 20 GB image copies in moments.
+func sparseCopy(src, dst string) error {
+	os.Remove(dst)
+	out, err := exec.Command("cp", "--sparse=always", src, dst).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("copy %s: %v: %s", src, err, bytes.TrimSpace(out))
+	}
+	return nil
+}
+
+// moveFile renames, or copies and removes across filesystems.
+func moveFile(src, dst string) error {
+	os.Remove(dst)
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	if err := sparseCopy(src, dst); err != nil {
+		return err
+	}
+	return os.Remove(src)
 }
 
 func tail(path string, n int) string {
