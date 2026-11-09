@@ -12,6 +12,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/pyjeebz/ephemera/internal/api"
 )
 
 func TestPolicy(t *testing.T) {
@@ -149,7 +152,15 @@ func TestConnectAllowedAndBlocked(t *testing.T) {
 		t.Errorf("IP address: %s, want 403", status)
 	}
 
-	recs := p.Connections(0)
+	// The tunnel's byte counts are filled in once the proxy has finished
+	// with it, a moment after the client closes.
+	var recs []api.Connection
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		recs = p.Connections(0)
+		if len(recs) == 3 && recs[0].BytesIn > 0 || time.Now().After(deadline) {
+			break
+		}
+	}
 	if len(recs) != 3 {
 		t.Fatalf("got %d records, want 3: %+v", len(recs), recs)
 	}
