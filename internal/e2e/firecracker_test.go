@@ -240,3 +240,23 @@ func TestFirecrackerDev(t *testing.T) {
 		t.Errorf("VM directory left behind: %v", left)
 	}
 }
+
+// TestFirecrackerTools checks the guest image's tools work without any
+// network: Python with venv, git, Node with npm, and a C compiler.
+func TestFirecrackerTools(t *testing.T) {
+	be := firecrackerBackend(t)
+	s := newStack(t, be, "unused")
+	out, _ := netRun(t, s, api.Spec{}, `set -e
+python3 -m venv /tmp/venv && /tmp/venv/bin/python -c "print('venv ok')"
+python3 -m pip --version >/dev/null && echo "pip ok"
+git init -q /tmp/repo && cd /tmp/repo && git -c user.email=a@b -c user.name=t commit -q --allow-empty -m first && git log --oneline | grep -q first && echo "git ok"
+node -e "console.log('node ' + process.versions.node)"
+cd /tmp && npm init -y >/dev/null && echo "npm ok"
+printf 'int main(){return 0;}' > /tmp/a.c && cc /tmp/a.c -o /tmp/a && /tmp/a && echo "cc ok"`)
+	t.Logf("\n%s", out)
+	for _, want := range []string{"venv ok", "pip ok", "git ok", "node 24.", "npm ok", "cc ok"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q", want)
+		}
+	}
+}

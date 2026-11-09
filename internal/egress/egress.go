@@ -115,11 +115,28 @@ func (p *Proxy) Connections(since int) []api.Connection {
 	return append([]api.Connection(nil), p.recs[since:]...)
 }
 
-func (p *Proxy) record(c api.Connection) {
+// record adds a connection to the log and returns its index, or -1 if the
+// log is full. Connections are recorded when they are decided, not when
+// they end, so the log never misses one that is still open.
+func (p *Proxy) record(c api.Connection) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.recs) < 10000 { // a runaway loop must not exhaust memory
-		p.recs = append(p.recs, c)
+	if len(p.recs) >= 10000 { // a runaway loop must not exhaust memory
+		return -1
+	}
+	p.recs = append(p.recs, c)
+	return len(p.recs) - 1
+}
+
+// update replaces a logged connection with its final figures.
+func (p *Proxy) update(i int, c api.Connection) {
+	if i < 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i < len(p.recs) {
+		p.recs[i] = c
 	}
 }
 
@@ -276,6 +293,7 @@ func (p *Proxy) connect(c net.Conn, br *bufio.Reader, req *http.Request) {
 	}
 	defer upstream.Close()
 	rec.Allowed = true
+	idx := p.record(rec)
 	io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n")
 	// Bytes the client sent after the CONNECT request.
 	if n := br.Buffered(); n > 0 {
@@ -285,7 +303,7 @@ func (p *Proxy) connect(c net.Conn, br *bufio.Reader, req *http.Request) {
 	up, down := pipe(c, upstream)
 	rec.BytesOut, rec.BytesIn = up+int64(br.Buffered()), down
 	rec.DurationMS = time.Since(start).Milliseconds()
-	p.record(rec)
+	p.update(idx, rec)
 }
 
 func pipe(client, upstream net.Conn) (up, down int64) {
@@ -336,19 +354,20 @@ func (p *Proxy) forward(c net.Conn, req *http.Request) bool {
 	}
 	defer upstream.Close()
 	rec.Allowed = true
+	idx := p.record(rec)
 	req.RequestURI = ""
 	req.Header.Del("Proxy-Connection")
 	req.Header.Del("Proxy-Authorization")
 	req.Header.Set("Connection", "close")
 	if err := req.Write(upstream); err != nil {
 		rec.Error = err.Error()
-		p.record(rec)
+		p.update(idx, rec)
 		return false
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(upstream), req)
 	if err != nil {
 		rec.Error = err.Error()
-		p.record(rec)
+		p.update(idx, rec)
 		return false
 	}
 	defer resp.Body.Close()
@@ -357,7 +376,7 @@ func (p *Proxy) forward(c net.Conn, req *http.Request) bool {
 	resp.Write(cw)
 	rec.BytesIn = cw.n
 	rec.DurationMS = time.Since(start).Milliseconds()
-	p.record(rec)
+	p.update(idx, rec)
 	return false
 }
 

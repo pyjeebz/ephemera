@@ -220,3 +220,33 @@ func TestPrivateAddressesBlockedEvenWhenOpen(t *testing.T) {
 		t.Errorf("status %d body %q; want 403 for a name resolving to 127.0.0.1", resp.StatusCode, b)
 	}
 }
+
+// An open tunnel is in the log while it is still open, so a log read right
+// after a command exits never misses it.
+func TestOpenConnectionIsLogged(t *testing.T) {
+	up, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer up.Close()
+	held := make(chan net.Conn, 1)
+	go func() {
+		c, err := up.Accept()
+		if err == nil {
+			held <- c
+		}
+	}()
+	port := up.Addr().(*net.TCPAddr).Port
+	p, addr := testProxy(t, fmt.Sprintf("slow.test:%d", port))
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "CONNECT slow.test:%d HTTP/1.1\r\nHost: slow.test\r\n\r\n", port)
+	if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v %v", resp, err)
+	}
+	recs := p.Connections(0)
+	if len(recs) != 1 || !recs[0].Allowed || recs[0].Host != "slow.test" {
+		t.Errorf("open tunnel not logged: %+v", recs)
+	}
+	(<-held).Close()
+}

@@ -127,8 +127,11 @@ The microVM image is built on the host:
 sudo deploy/guest/build-image.sh /var/lib/ephemera/image
 ```
 
-It writes a kernel and a root filesystem whose init is the ephemera guest
-agent (`cmd/ephemera-guest`). Then run the host agent on microVMs:
+It writes a kernel and an Ubuntu 24.04 root filesystem whose init is the
+ephemera guest agent (`cmd/ephemera-guest`), with Python and pip, git,
+Node.js 24 LTS with npm, and build tools (gcc, make) for native packages.
+Downloads are checked against pinned SHA-256 sums; the build needs network
+for Ubuntu's packages. Then run the host agent on microVMs:
 
 ```sh
 sudo -E bin/ephemera-host --backend firecracker
