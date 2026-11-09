@@ -135,7 +135,8 @@ cmd_install() {
 	done
 	[[ "$minutes" =~ ^[0-9]+$ ]] && [ "$minutes" -ge 5 ] || die "--minutes must be a number, at least 5"
 
-	install -m 0755 "$0" "$BIN"
+	# Running the installed copy again only changes the settings.
+	[ "$(realpath "$0")" = "$BIN" ] || install -m 0755 "$0" "$BIN"
 	mkdir -p /etc/ephemera
 	cat >"$CONF" <<EOF
 # Read by $BIN.

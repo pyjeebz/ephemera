@@ -32,9 +32,10 @@ type VMConfig struct {
 
 // VM is a running microVM.
 type VM struct {
-	cfg  VMConfig
-	cmd  *exec.Cmd
-	done chan error
+	cfg     VMConfig
+	cmd     *exec.Cmd
+	exited  chan struct{} // closed when Firecracker has exited
+	exitErr error
 	// HTTP talks to the guest agent over vsock.
 	HTTP *http.Client
 }
@@ -86,8 +87,12 @@ func Boot(ctx context.Context, cfg VMConfig) (*VM, error) {
 		logf.Close()
 		return nil, fmt.Errorf("start firecracker: %w", err)
 	}
-	vm := &VM{cfg: cfg, cmd: cmd, done: make(chan error, 1)}
-	go func() { vm.done <- cmd.Wait(); logf.Close() }()
+	vm := &VM{cfg: cfg, cmd: cmd, exited: make(chan struct{})}
+	go func() {
+		vm.exitErr = cmd.Wait()
+		logf.Close()
+		close(vm.exited)
+	}()
 	vm.HTTP = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return DialGuest(ctx, cfg.vsockPath(), guest.Port)
@@ -106,9 +111,8 @@ func (vm *VM) waitReady(ctx context.Context) error {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		select {
-		case err := <-vm.done:
-			vm.done <- err
-			return fmt.Errorf("firecracker exited before the guest was ready: %v", err)
+		case <-vm.exited:
+			return fmt.Errorf("firecracker exited before the guest was ready: %v", vm.exitErr)
 		default:
 		}
 		rctx, cancel := context.WithTimeout(ctx, time.Second)
@@ -131,18 +135,25 @@ func (vm *VM) waitReady(ctx context.Context) error {
 	}
 }
 
-// Kill stops the VM immediately and waits for Firecracker to exit.
+// Kill stops the VM immediately and waits for Firecracker to exit. It is
+// safe to call more than once.
 func (vm *VM) Kill() error {
-	if vm.cmd.Process != nil {
-		vm.cmd.Process.Kill()
-	}
 	select {
-	case <-vm.done:
+	case <-vm.exited:
+		return nil
+	default:
+	}
+	vm.cmd.Process.Kill()
+	select {
+	case <-vm.exited:
+		return nil
 	case <-time.After(10 * time.Second):
 		return errors.New("firecracker did not exit")
 	}
-	return nil
 }
+
+// Exited is closed when the VM has stopped.
+func (vm *VM) Exited() <-chan struct{} { return vm.exited }
 
 // DialGuest connects to a vsock port in the guest through Firecracker's
 // Unix socket: connect, send "CONNECT <port>", expect "OK <n>".
