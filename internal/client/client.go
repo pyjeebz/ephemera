@@ -259,3 +259,5 @@ func (c *Client) Exec(ctx context.Context, sb *api.Sandbox, req api.ExecRequest,
 		}
 	}
 }
+
+func decodeJSON(r io.Reader, v any) error { return json.NewDecoder(r).Decode(v) }

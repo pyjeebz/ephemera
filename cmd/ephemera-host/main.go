@@ -38,6 +38,8 @@ func main() {
 		jailDir   = flag.String("jail-dir", "/var/lib/ephemera/jail", "where jails go; same filesystem as -image-dir (firecracker backend)")
 		snapshots = flag.Bool("snapshots", true, "start sandboxes from a snapshot of a booted VM (firecracker backend)")
 		tmplDir   = flag.String("template-dir", "/var/lib/ephemera/templates", "where the snapshot goes; same filesystem as -jail-dir (firecracker backend)")
+		snapDir   = flag.String("snapshot-dir", "/var/lib/ephemera/snapshots", "encrypted project snapshots (firecracker backend)")
+		snapMax   = flag.Int64("max-snapshot-bytes", 20<<30, "total size of project snapshots; the least recently used go first")
 		capacity  = flag.Int("capacity", 20, "maximum sandboxes on this host")
 		keyFile   = flag.String("key-file", "/var/lib/ephemera/host.key", "Ed25519 key that signs sandbox records; created if missing")
 		maxLife   = flag.Duration("max-lifetime", 24*time.Hour, "destroy any sandbox this long after it was created (0: no limit)")
@@ -51,6 +53,9 @@ func main() {
 		os.Exit(2)
 	}
 	be, err := newBackend(*backend, *imageDir, *stateDir, *jail, *jailDir, *snapshots, *tmplDir, log)
+	if fc, ok := be.(*firecracker.Backend); ok {
+		fc.ProjectSnapshotDir, fc.MaxSnapshotBytes = *snapDir, *snapMax
+	}
 	if err != nil {
 		log.Error("backend", "err", err)
 		os.Exit(2)

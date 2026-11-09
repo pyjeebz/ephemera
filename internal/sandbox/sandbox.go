@@ -41,3 +41,16 @@ type NetworkLogger interface {
 	// since on.
 	Connections(id string, since int) ([]api.Connection, error)
 }
+
+// ProjectSnapshotter is implemented by backends that can save a sandbox
+// after its setup and start later sandboxes from it. Snapshots are kept
+// encrypted with the key, which the backend never stores.
+type ProjectSnapshotter interface {
+	// SaveSnapshot saves the running sandbox as snapshot snapID. The
+	// sandbox keeps running.
+	SaveSnapshot(ctx context.Context, id, snapID string, key []byte) error
+	// LoadSnapshot replaces the sandbox's VM with one restored from
+	// snapID. It reports false, with a reason, if there is no usable
+	// snapshot; the sandbox then carries on as it was.
+	LoadSnapshot(ctx context.Context, id, snapID string, key []byte) (bool, string, error)
+}

@@ -59,6 +59,13 @@ type Backend struct {
 	// Log, if set, receives one line per sandbox start: how and how long.
 	Log func(id, how string, d time.Duration)
 
+	// ProjectSnapshotDir holds encrypted project snapshots, and
+	// MaxSnapshotBytes caps their total size; the least recently used go
+	// first. Defaults /var/lib/ephemera/snapshots and 20 GB.
+	ProjectSnapshotDir string
+	MaxSnapshotBytes   int64
+	snapMu             sync.Mutex
+
 	tmpl *Snapshot // the template snapshot, once built
 
 	mu      sync.Mutex
@@ -72,6 +79,17 @@ type Backend struct {
 type vmProxy struct {
 	proxy *egress.Proxy
 	ln    net.Listener
+}
+
+// listen starts serving the proxy for vm, for a VM that replaced another.
+func (vp *vmProxy) listen(vm *VM) error {
+	ln, err := proxyListener(vm)
+	if err != nil {
+		return err
+	}
+	vp.ln = ln
+	go vp.proxy.Serve(ln)
+	return nil
 }
 
 // proxyEnv points programs in the VM at its local proxy. Commands' own
@@ -240,6 +258,16 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 // host on the egress port: the vsock socket's path plus "_<port>". In a
 // jail, only the VM's own user may connect.
 func startProxy(vm *VM, policy egress.Policy) (*vmProxy, error) {
+	ln, err := proxyListener(vm)
+	if err != nil {
+		return nil, err
+	}
+	p := &egress.Proxy{Policy: policy}
+	go p.Serve(ln)
+	return &vmProxy{proxy: p, ln: ln}, nil
+}
+
+func proxyListener(vm *VM) (net.Listener, error) {
 	path := fmt.Sprintf("%s_%d", vm.vsock, guest.EgressPort)
 	os.Remove(path)
 	ln, err := net.Listen("unix", path)
@@ -256,9 +284,7 @@ func startProxy(vm *VM, policy egress.Policy) (*vmProxy, error) {
 		ln.Close()
 		return nil, err
 	}
-	p := &egress.Proxy{Policy: policy}
-	go p.Serve(ln)
-	return &vmProxy{proxy: p, ln: ln}, nil
+	return ln, nil
 }
 
 // Connections returns the sandbox's outbound connection attempts, from
@@ -540,6 +566,12 @@ func (b *Backend) Cleanup() (int, error) {
 			continue
 		}
 		n++
+	}
+	// Unfinished snapshot saves, which may hold plaintext.
+	if saves, _ := filepath.Glob(filepath.Join(b.projectDir(), ".save-*")); len(saves) > 0 {
+		for _, d := range saves {
+			os.RemoveAll(d)
+		}
 	}
 	if b.Jailed {
 		// Jails and cgroups of VMs that are gone.

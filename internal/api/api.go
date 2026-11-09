@@ -148,6 +148,10 @@ type Record struct {
 	// DiskDeleted is the host's statement that everything the sandbox
 	// stored was deleted with it.
 	DiskDeleted bool `json:"disk_deleted"`
+	// SnapshotLoaded and SnapshotSaved name the project snapshot the
+	// sandbox started from, or saved after its setup.
+	SnapshotLoaded string `json:"snapshot_loaded,omitempty"`
+	SnapshotSaved  string `json:"snapshot_saved,omitempty"`
 	// HostKey is the host's Ed25519 public key, base64.
 	HostKey string `json:"host_key"`
 }
@@ -174,6 +178,20 @@ type SyncRecord struct {
 type SignedRecord struct {
 	Record    json.RawMessage `json:"record"`
 	Signature string          `json:"signature"` // Ed25519, base64
+}
+
+// ProjectSnapshotRequest asks a host to load or save a project snapshot.
+// It goes from the CLI straight to the host: the key never passes through
+// the central server, and the host keeps it only for the request.
+type ProjectSnapshotRequest struct {
+	ID  string `json:"id"`  // hex, from the project and its setup inputs
+	Key []byte `json:"key"` // 32 bytes; the snapshot is stored encrypted with it
+}
+
+// ProjectSnapshotResult says whether a snapshot was loaded, and if not why.
+type ProjectSnapshotResult struct {
+	Loaded bool   `json:"loaded"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // Host is a host as the central server knows it.

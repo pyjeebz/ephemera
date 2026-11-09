@@ -187,3 +187,42 @@ func TestMCP(t *testing.T) {
 		t.Error("a sandbox was left behind")
 	}
 }
+
+// On a host without project snapshots, setup simply runs every time,
+// before the command, and a failing setup stops the run.
+func TestSetupWithoutSnapshots(t *testing.T) {
+	be := &sandboxtest.Local{Root: t.TempDir()}
+	s := newStack(t, be, "unused")
+	dir := worktree(t, map[string]string{"x": "x"})
+	var out bytes.Buffer
+	var events []string
+	res, err := s.client.Run(context.Background(), client.RunOptions{
+		Dir:    dir,
+		Setup:  &client.Setup{Argv: []string{"sh", "-c", "echo setting-up; mkdir -p deps && echo ok > deps/ready"}, SnapshotID: strings.Repeat("ab", 20), Key: make([]byte, 32)},
+		Exec:   api.ExecRequest{Argv: []string{"cat", "deps/ready"}},
+		Stdout: &out, Stderr: &out,
+		Events: func(ev string, f map[string]any) { events = append(events, ev) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 || out.String() != "setting-up\nok\n" {
+		t.Errorf("exit %d, output %q", res.ExitCode, out.String())
+	}
+	if !strings.Contains(strings.Join(events, ","), "snapshot") {
+		t.Errorf("events %v lack the snapshot attempt", events)
+	}
+
+	_, err = s.client.Run(context.Background(), client.RunOptions{
+		Dir:    dir,
+		Setup:  &client.Setup{Argv: []string{"sh", "-c", "exit 4"}},
+		Exec:   api.ExecRequest{Argv: []string{"echo", "must not run"}},
+		Stdout: &out, Stderr: &out,
+	})
+	if !errors.Is(err, client.ErrSetupFailed) {
+		t.Errorf("failed setup: %v, want ErrSetupFailed", err)
+	}
+	if strings.Contains(out.String(), "must not run") {
+		t.Error("the command ran after setup failed")
+	}
+}

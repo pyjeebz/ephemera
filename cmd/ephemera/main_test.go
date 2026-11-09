@@ -122,3 +122,35 @@ func newKey(t *testing.T) ed25519.PrivateKey {
 	}
 	return k
 }
+
+func TestSetupSnapshotID(t *testing.T) {
+	t.Setenv("EPHEMERA_SNAPSHOT_KEYS", t.TempDir())
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(`{"v":1}`), 0o644)
+	id := func(cmd string, spec api.Spec) (string, []byte) {
+		t.Helper()
+		s, _, err := buildSetup(dir, cmd, nil, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.SnapshotID, s.Key
+	}
+	a, keyA := id("npm ci", api.Spec{})
+	b, keyB := id("npm ci", api.Spec{})
+	if a != b || !bytes.Equal(keyA, keyB) || len(keyA) != 32 {
+		t.Fatalf("same inputs gave %s/%s", a, b)
+	}
+	if c, _ := id("npm install", api.Spec{}); c == a {
+		t.Error("a different setup command kept the id")
+	}
+	if c, _ := id("npm ci", api.Spec{MemoryMB: 2048}); c == a {
+		t.Error("a different sandbox size kept the id")
+	}
+	os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(`{"v":2}`), 0o644)
+	if c, _ := id("npm ci", api.Spec{}); c == a {
+		t.Error("a changed lockfile kept the id")
+	}
+	if _, _, err := buildSetup(dir, "x", []string{"missing.txt"}, api.Spec{}); err == nil {
+		t.Error("a missing --setup-input was accepted")
+	}
+}

@@ -122,6 +122,8 @@ type sandboxFlags struct {
 	openNet bool
 	timeout time.Duration
 	record  string
+	setup   string
+	inputs  stringList
 }
 
 func (f *sandboxFlags) register(fs *flag.FlagSet) {
@@ -136,6 +138,20 @@ func (f *sandboxFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.jsonOut, "json", false, "print newline-delimited JSON events instead of raw output")
 	fs.DurationVar(&f.timeout, "timeout", 0, "run: stop the command after this long (exit code 124); dev: destroy the sandbox after this long. e.g. 10m")
 	fs.StringVar(&f.record, "record", "", "save the sandbox's signed record here (default: the records directory)")
+	fs.StringVar(&f.setup, "setup", "", `prepare the sandbox first, e.g. "npm ci"; the result is snapshotted and later runs skip it`)
+	fs.Var(&f.inputs, "setup-input", "a file setup depends on, beyond the usual lockfiles (repeatable)")
+}
+
+// buildSetup returns the setup for these flags, or nil without --setup.
+func (f *sandboxFlags) buildSetup(stderr io.Writer) (*client.Setup, error) {
+	if f.setup == "" {
+		if len(f.inputs) > 0 {
+			return nil, fmt.Errorf("--setup-input needs --setup")
+		}
+		return nil, nil
+	}
+	s, _, err := buildSetup(f.dir, f.setup, f.inputs, f.spec)
+	return s, err
 }
 
 func (f *sandboxFlags) check() error {
@@ -210,6 +226,12 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		Stdout:  stdout,
 		Stderr:  stderr,
 	}
+	setup, err := f.buildSetup(stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "ephemera:", err)
+		return 2
+	}
+	opts.Setup = setup
 	if f.timeout > 0 {
 		opts.Exec.TimeoutSeconds = int((f.timeout + time.Second - 1) / time.Second)
 		// The sandbox itself goes soon after, even if the CLI does not.
@@ -220,6 +242,8 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		opts.Events = events.emit
 		opts.Stdout = eventWriter{emit: events.emit, stream: "stdout"}
 		opts.Stderr = eventWriter{emit: events.emit, stream: "stderr"}
+	} else if setup != nil {
+		opts.Events = func(ev string, m map[string]any) { printSetupEvent(stderr, ev, m) }
 	}
 
 	res, err := c.Run(ctx, opts)
@@ -296,6 +320,12 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 	if f.timeout > 0 {
 		opts.Spec.MaxLifetimeSeconds = int((f.timeout + time.Second - 1) / time.Second)
 	}
+	setup, err := f.buildSetup(stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "ephemera:", err)
+		return 2
+	}
+	opts.Setup = setup
 	recPath := ""
 	opts.OnRecord = func(sr *api.SignedRecord) {
 		if p, err := saveRecord(sr, f.record); err == nil {
@@ -346,6 +376,8 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 				if m["allowed"] != true {
 					fmt.Fprintf(stderr, "ephemera: blocked %s:%v (%v)\n", m["host"], m["port"], m["error"])
 				}
+			case "snapshot", "snapshot_saved", "snapshot_error":
+				printSetupEvent(stderr, ev, m)
 			case "sync_error", "port_error":
 				fmt.Fprintf(stderr, "ephemera: %s\n", m["error"])
 			case "destroyed":

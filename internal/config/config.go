@@ -3,6 +3,7 @@
 package config
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -137,4 +138,45 @@ func RouterSocket() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "ephemera", "router.sock"), nil
+}
+
+// SnapshotKey returns the key that encrypts a project's snapshots,
+// creating it, readable only by the user, the first time. It never leaves
+// this machine except to the host restoring or saving a snapshot.
+func SnapshotKey(projectID string) ([]byte, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	if d := os.Getenv("EPHEMERA_SNAPSHOT_KEYS"); d != "" {
+		dir = d
+	} else {
+		dir = filepath.Join(dir, "ephemera", "snapshot-keys")
+	}
+	p := filepath.Join(dir, projectID+".key")
+	if b, err := os.ReadFile(p); err == nil {
+		if len(b) != 32 {
+			return nil, fmt.Errorf("%s is not a snapshot key", p)
+		}
+		return b, nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return SnapshotKey(projectID) // another process just made it
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.Write(key); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return key, f.Close()
 }

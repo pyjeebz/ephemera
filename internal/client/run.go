@@ -18,7 +18,11 @@ type RunOptions struct {
 	Exec    api.ExecRequest
 	Stdout  io.Writer
 	Stderr  io.Writer
+	// Setup, if set, prepares the sandbox first, from a project snapshot
+	// when one exists.
+	Setup *Setup
 	// Events, when set, receives progress: "sandbox", "synced",
+	// "snapshot", "snapshot_saved", "snapshot_error",
 	// "connection" (one per outbound connection attempt), "destroyed".
 	// It is called from the goroutine running Run.
 	Events func(event string, fields map[string]any)
@@ -72,11 +76,22 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (res RunResult, err erro
 		emit("destroyed", map[string]any{"id": sb.ID})
 	}()
 
-	if err = c.Upload(ctx, sb, o.Dir, files); err != nil {
+	syncFiles := func() error {
+		if err := c.Upload(ctx, sb, o.Dir, files); err != nil {
+			return err
+		}
+		res.Files = len(files)
+		emit("synced", map[string]any{"files": len(files)})
+		return nil
+	}
+	if o.Setup != nil {
+		err = c.prepare(ctx, sb, o.Setup, syncFiles, o.Stdout, o.Stderr, emit)
+	} else {
+		err = syncFiles()
+	}
+	if err != nil {
 		return res, err
 	}
-	res.Files = len(files)
-	emit("synced", map[string]any{"files": len(files)})
 
 	res.ExitCode, err = c.Exec(ctx, sb, o.Exec, o.Stdout, o.Stderr)
 	res.Duration = time.Since(start)

@@ -77,6 +77,9 @@ type DevOptions struct {
 	Events func(event string, fields map[string]any)
 	// OnRecord receives the sandbox's signed record when it is destroyed.
 	OnRecord func(*api.SignedRecord)
+	// Setup, if set, prepares the sandbox before the dev command, from a
+	// project snapshot when one exists.
+	Setup *Setup
 }
 
 // Dev runs a long-lived command, usually a dev server, in a sandbox. It
@@ -150,10 +153,21 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 		emit("destroyed", map[string]any{"id": sb.ID})
 	}()
 
-	if err := c.Upload(ctx, sb, o.Dir, snap.Files()); err != nil {
+	syncFiles := func() error {
+		if err := c.Upload(ctx, sb, o.Dir, snap.Files()); err != nil {
+			return err
+		}
+		emit("synced", map[string]any{"files": len(snap), "deleted": 0, "initial": true})
+		return nil
+	}
+	if o.Setup != nil {
+		err = c.prepare(ctx, sb, o.Setup, syncFiles, o.Stdout, o.Stderr, emit)
+	} else {
+		err = syncFiles()
+	}
+	if err != nil {
 		return 0, err
 	}
-	emit("synced", map[string]any{"files": len(snap), "deleted": 0, "initial": true})
 
 	bg, stop := context.WithCancel(ctx)
 	var wg sync.WaitGroup

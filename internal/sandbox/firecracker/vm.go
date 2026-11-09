@@ -152,6 +152,10 @@ type Snapshot struct {
 	Dir      string
 	CPUs     int
 	MemoryMB int
+	// Own means the files belong to the VM restored from them: they are
+	// moved into its root rather than shared, and go when it does. A
+	// decrypted project snapshot is used this way.
+	Own bool
 }
 
 // CreateSnapshot pauses the VM and saves it into dir. The VM stays paused;
@@ -195,17 +199,32 @@ func (vm *VM) CreateSnapshot(ctx context.Context, dir string) (*Snapshot, error)
 func Restore(ctx context.Context, cfg VMConfig, snap *Snapshot) (*VM, error) {
 	cfg.CPUs, cfg.MemoryMB = snap.CPUs, snap.MemoryMB
 	cfg.defaults()
-	vm, err := prepare(cfg, map[string]string{
-		fileRootFS:  cfg.RootFS,
-		fileSnapMem: filepath.Join(snap.Dir, fileSnapMem),
-		fileSnapVM:  filepath.Join(snap.Dir, fileSnapVM),
-	})
+	shared := map[string]string{fileRootFS: cfg.RootFS}
+	if !snap.Own {
+		shared[fileSnapMem] = filepath.Join(snap.Dir, fileSnapMem)
+		shared[fileSnapVM] = filepath.Join(snap.Dir, fileSnapVM)
+	}
+	vm, err := prepare(cfg, shared)
 	if err != nil {
 		return nil, err
 	}
+	if snap.Own {
+		for _, f := range []string{fileSnapMem, fileSnapVM} {
+			if err := moveFile(filepath.Join(snap.Dir, f), filepath.Join(vm.root, f)); err != nil {
+				vm.removeJail()
+				return nil, err
+			}
+			if j := cfg.Jail; j != nil {
+				os.Chown(filepath.Join(vm.root, f), j.UID, j.GID)
+			}
+		}
+	}
 	if _, err := os.Stat(filepath.Join(snap.Dir, fileScratch)); err == nil {
-		err := vm.adoptScratch(func(dst string) error { return sparseCopy(filepath.Join(snap.Dir, fileScratch), dst) })
-		if err != nil {
+		place := func(dst string) error { return sparseCopy(filepath.Join(snap.Dir, fileScratch), dst) }
+		if snap.Own {
+			place = func(dst string) error { return moveFile(filepath.Join(snap.Dir, fileScratch), dst) }
+		}
+		if err := vm.adoptScratch(place); err != nil {
 			vm.removeJail()
 			return nil, err
 		}
@@ -231,6 +250,14 @@ func Restore(ctx context.Context, cfg VMConfig, snap *Snapshot) (*VM, error) {
 		return nil, vm.fail(err)
 	}
 	return vm, nil
+}
+
+// Resume continues a paused VM, such as one just snapshotted.
+func (vm *VM) Resume(ctx context.Context) error {
+	if err := vm.apiCall(ctx, http.MethodPatch, "/vm", map[string]any{"state": "Resumed"}); err != nil {
+		return fmt.Errorf("resume: %w", err)
+	}
+	return nil
 }
 
 func (vm *VM) afterRestore(ctx context.Context) error {

@@ -93,6 +93,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.exec)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/ports/{port}", s.port)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/connections", s.connections)
+	mux.HandleFunc("POST /v1/sandboxes/{id}/snapshots/load", s.snapshot(true))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/snapshots/save", s.snapshot(false))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.destroy)
 	return mux
 }
@@ -408,6 +410,45 @@ func Pipe(a, b net.Conn) {
 	wg.Wait()
 	a.Close()
 	b.Close()
+}
+
+// snapshot loads or saves a project snapshot. The key comes from the CLI
+// in the request and is used only for it.
+func (s *Server) snapshot(load bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := s.sandboxAuth(w, r, false)
+		if !ok {
+			return
+		}
+		ps, ok := s.Backend.(sandbox.ProjectSnapshotter)
+		if !ok {
+			WriteError(w, http.StatusNotImplemented, "this host's backend has no project snapshots")
+			return
+		}
+		var req api.ProjectSnapshotRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+			WriteError(w, http.StatusBadRequest, "bad request: %v", err)
+			return
+		}
+		if load {
+			loaded, reason, err := ps.LoadSnapshot(r.Context(), id, req.ID, req.Key)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, "load snapshot: %v", err)
+				return
+			}
+			if loaded {
+				s.note(id, func(rec *api.Record) { rec.SnapshotLoaded = req.ID })
+			}
+			writeJSON(w, http.StatusOK, api.ProjectSnapshotResult{Loaded: loaded, Reason: reason})
+			return
+		}
+		if err := ps.SaveSnapshot(r.Context(), id, req.ID, req.Key); err != nil {
+			WriteError(w, http.StatusInternalServerError, "save snapshot: %v", err)
+			return
+		}
+		s.note(id, func(rec *api.Record) { rec.SnapshotSaved = req.ID })
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // connections returns the sandbox's outbound connection log, from the

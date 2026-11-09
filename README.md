@@ -114,6 +114,27 @@ container ordinary networking and `--allow` is not available.
 `ephemera run` exits with the command's exit code, or 125 if ephemera itself
 failed. `ephemera ls` and `ephemera rm` list and remove sandboxes.
 
+### Setup snapshots
+
+```sh
+bin/ephemera run --setup "npm ci" --allow registry.npmjs.org -- npm test
+```
+
+`--setup` runs a command before the real one, then saves the prepared
+sandbox as a project snapshot on the host. Later runs start from it and
+skip setup. The snapshot is tied to the project, the setup command, the
+sandbox size and the project's lockfiles (`package-lock.json`,
+`requirements.txt`, `go.sum` and others; `--setup-input FILE` adds more), so
+changing any of them makes a new one. It works with `dev` too.
+
+A snapshot holds the project's code and dependencies, so the host keeps it
+only encrypted (AES-256-GCM), with a key that stays in your config
+directory and goes straight to the host when needed, never through the
+central server. The host decrypts it only into the folder of the sandbox
+using it, which is deleted with the sandbox. Snapshots made on another
+guest image are dropped; the least recently used go once they pass
+`--max-snapshot-bytes` (20 GB) on the host.
+
 ### Records
 
 When a sandbox is destroyed, its host signs a record of what happened in
@@ -263,6 +284,7 @@ internal/mcp          MCP server for coding agents
 internal/record       signing and checking sandbox records
 internal/router       local router: several dev sessions on one port, by name
 internal/sandbox      backend interface; Docker, Firecracker and test backends
+internal/snapcrypt    encryption of project snapshots at rest
 internal/stream       output framing (stdout, stderr, exit code)
 internal/worktree     which files to send, tar packing, upload checks
 deploy/guest          microVM image build
