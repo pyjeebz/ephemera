@@ -19,20 +19,33 @@ import (
 
 // Tokens checks API tokens.
 type Tokens interface {
-	// Check returns the token's name, or false if it is not valid.
-	Check(token string) (name string, ok bool)
+	// Check returns who the token belongs to, or false if it is not valid.
+	Check(token string) (Principal, bool)
+}
+
+// Principal is a token's owner and the limits on what it may use.
+type Principal struct {
+	Name string
+	Limits
+}
+
+// Limits cap what one token may use. Zero means no limit.
+type Limits struct {
+	MaxSandboxes     int `json:"max_sandboxes,omitempty"`       // running at once
+	MaxMinutesPerDay int `json:"max_minutes_per_day,omitempty"` // sandbox-minutes per UTC day
 }
 
 // StaticToken accepts a single token, for tests.
 type StaticToken struct {
 	Name, Token string
+	Limits
 }
 
-func (s StaticToken) Check(token string) (string, bool) {
+func (s StaticToken) Check(token string) (Principal, bool) {
 	if s.Token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.Token)) == 1 {
-		return s.Name, true
+		return Principal{Name: s.Name, Limits: s.Limits}, true
 	}
-	return "", false
+	return Principal{}, false
 }
 
 // TokenRecord is a stored token. Only a hash of the secret is kept.
@@ -41,6 +54,7 @@ type TokenRecord struct {
 	Name    string    `json:"name"`
 	Hash    string    `json:"sha256"`
 	Created time.Time `json:"created"`
+	Limits
 }
 
 // TokenFile keeps tokens in a JSON file. The running server only reads
@@ -62,19 +76,19 @@ func hashToken(token string) string {
 }
 
 // Check implements Tokens.
-func (f *TokenFile) Check(token string) (string, bool) {
+func (f *TokenFile) Check(token string) (Principal, bool) {
 	if !strings.HasPrefix(token, tokenPrefix) {
-		return "", false
+		return Principal{}, false
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.reloadLocked(); err != nil {
-		return "", false
+		return Principal{}, false
 	}
 	// The lookup is by hash, so the secret itself is never compared
 	// byte by byte.
 	rec, ok := f.byHash[hashToken(token)]
-	return rec.Name, ok
+	return Principal{Name: rec.Name, Limits: rec.Limits}, ok
 }
 
 func (f *TokenFile) reloadLocked() error {
@@ -139,7 +153,8 @@ func (f *TokenFile) update(fn func([]TokenRecord) ([]TokenRecord, error)) error 
 }
 
 // Create adds a token and returns its secret, which is shown only once.
-func (f *TokenFile) Create(name string) (TokenRecord, string, error) {
+// Names are unique: usage and limits are counted by name.
+func (f *TokenFile) Create(name string, limits Limits) (TokenRecord, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return TokenRecord{}, "", errors.New("a token needs a name")
@@ -151,11 +166,35 @@ func (f *TokenFile) Create(name string) (TokenRecord, string, error) {
 	secret := tokenPrefix + base64.RawURLEncoding.EncodeToString(b)
 	idb := make([]byte, 4)
 	rand.Read(idb)
-	rec := TokenRecord{ID: "tok_" + hex.EncodeToString(idb), Name: name, Hash: hashToken(secret), Created: time.Now().UTC()}
+	if limits.MaxSandboxes < 0 || limits.MaxMinutesPerDay < 0 {
+		return TokenRecord{}, "", errors.New("limits cannot be negative")
+	}
+	rec := TokenRecord{ID: "tok_" + hex.EncodeToString(idb), Name: name, Hash: hashToken(secret), Created: time.Now().UTC(), Limits: limits}
 	err := f.update(func(recs []TokenRecord) ([]TokenRecord, error) {
+		for _, r := range recs {
+			if r.Name == name {
+				return nil, fmt.Errorf("a token named %q already exists", name)
+			}
+		}
 		return append(recs, rec), nil
 	})
 	return rec, secret, err
+}
+
+// SetLimits changes the limits of the token with this id or name.
+func (f *TokenFile) SetLimits(idOrName string, limits Limits) error {
+	if limits.MaxSandboxes < 0 || limits.MaxMinutesPerDay < 0 {
+		return errors.New("limits cannot be negative")
+	}
+	return f.update(func(recs []TokenRecord) ([]TokenRecord, error) {
+		for i := range recs {
+			if recs[i].ID == idOrName || recs[i].Name == idOrName {
+				recs[i].Limits = limits
+				return recs, nil
+			}
+		}
+		return nil, fmt.Errorf("no token %q", idOrName)
+	})
 }
 
 // List returns the stored tokens, oldest first.

@@ -95,6 +95,18 @@ type Sandbox struct {
 	Token     string    `json:"token,omitempty"`
 	Spec      Spec      `json:"spec"`
 	CreatedAt time.Time `json:"created_at"`
+	Owner     string    `json:"owner,omitempty"` // the token's name
+}
+
+// Usage is what one token has used today (UTC) and its limits; a zero
+// limit means none.
+type Usage struct {
+	Name             string  `json:"name"`
+	Day              string  `json:"day"`
+	MinutesToday     float64 `json:"minutes_today"`
+	MaxMinutesPerDay int     `json:"max_minutes_per_day,omitempty"`
+	Running          int     `json:"running"`
+	MaxSandboxes     int     `json:"max_sandboxes,omitempty"`
 }
 
 // HostCreateRequest is sent by the central server to a host.

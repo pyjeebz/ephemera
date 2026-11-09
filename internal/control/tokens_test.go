@@ -14,15 +14,15 @@ func TestTokenFile(t *testing.T) {
 	if _, ok := tf.Check("eph_nothing"); ok {
 		t.Fatal("no tokens yet: Check succeeded")
 	}
-	rec, secret, err := tf.Create("laptop")
+	rec, secret, err := tf.Create("laptop", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(secret, tokenPrefix) {
 		t.Errorf("secret %q lacks prefix", secret)
 	}
-	if name, ok := tf.Check(secret); !ok || name != "laptop" {
-		t.Errorf("Check = %q, %v", name, ok)
+	if p, ok := tf.Check(secret); !ok || p.Name != "laptop" {
+		t.Errorf("Check = %+v, %v", p, ok)
 	}
 	if _, ok := tf.Check(secret + "x"); ok {
 		t.Error("altered token accepted")
@@ -39,12 +39,12 @@ func TestTokenFile(t *testing.T) {
 	// A second process (here, a second TokenFile) adds a token; the
 	// running server picks it up without a restart.
 	other := &TokenFile{Path: path}
-	_, secret2, err := other.Create("ci")
+	_, secret2, err := other.Create("ci", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name, ok := tf.Check(secret2); !ok || name != "ci" {
-		t.Errorf("new token not picked up: %q, %v", name, ok)
+	if p, ok := tf.Check(secret2); !ok || p.Name != "ci" {
+		t.Errorf("new token not picked up: %+v, %v", p, ok)
 	}
 
 	if err := other.Revoke(rec.ID); err != nil {
@@ -59,5 +59,28 @@ func TestTokenFile(t *testing.T) {
 	recs, _ := tf.List()
 	if len(recs) != 1 || recs[0].Name != "ci" {
 		t.Errorf("List = %+v", recs)
+	}
+}
+
+func TestTokenNamesUniqueAndLimits(t *testing.T) {
+	tf := &TokenFile{Path: filepath.Join(t.TempDir(), "tokens.json")}
+	_, secret, err := tf.Create("agent", Limits{MaxSandboxes: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tf.Create("agent", Limits{}); err == nil {
+		t.Error("a second token with the same name was created")
+	}
+	if p, _ := tf.Check(secret); p.MaxSandboxes != 2 {
+		t.Errorf("limits = %+v", p.Limits)
+	}
+	if err := tf.SetLimits("agent", Limits{MaxSandboxes: 5, MaxMinutesPerDay: 60}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := tf.Check(secret); p.MaxSandboxes != 5 || p.MaxMinutesPerDay != 60 {
+		t.Errorf("limits after SetLimits = %+v", p.Limits)
+	}
+	if err := tf.SetLimits("agent", Limits{MaxSandboxes: -1}); err == nil {
+		t.Error("negative limits accepted")
 	}
 }

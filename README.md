@@ -138,6 +138,21 @@ code 124. `ephemera dev --timeout 2h` destroys the sandbox after two hours.
 Every host also has a maximum lifetime for any sandbox, `--max-lifetime`
 (24 hours by default), so a forgotten sandbox cannot run forever.
 
+### Usage limits
+
+Each API token can have limits, set when it is created or later:
+
+```sh
+bin/ephemera-server token create ci-agent --max-sandboxes 5 --max-minutes 600
+bin/ephemera-server token limits ci-agent --max-sandboxes 2 --max-minutes 120
+```
+
+`--max-sandboxes` caps how many run at once; `--max-minutes` caps
+sandbox-minutes per UTC day. Over a limit, new sandboxes are refused; a new
+sandbox's lifetime is capped at the minutes left today, and running ones
+are stopped when the day's minutes run out. `ephemera usage` shows a
+token's use and limits.
+
 ### Coding agents (MCP)
 
 `ephemera mcp` serves ephemera to a coding agent over the Model Context

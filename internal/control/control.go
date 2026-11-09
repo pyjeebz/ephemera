@@ -45,6 +45,10 @@ type Server struct {
 	mu        sync.Mutex
 	hosts     map[string]*hostState
 	sandboxes map[string]*api.Sandbox
+	// usage is finished sandboxes' seconds, by owner and UTC day.
+	usage map[string]map[string]float64
+	// limits is each owner's limits as last seen on a request.
+	limits map[string]Limits
 
 	saveMu sync.Mutex
 }
@@ -54,7 +58,8 @@ type Server struct {
 const createGrace = 2 * time.Minute
 
 type stateFile struct {
-	Sandboxes []api.Sandbox `json:"sandboxes"`
+	Sandboxes []api.Sandbox                 `json:"sandboxes"`
+	Usage     map[string]map[string]float64 `json:"usage,omitempty"`
 }
 
 // Load reads the saved sandbox list, if there is one.
@@ -75,6 +80,7 @@ func (s *Server) Load() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.usage = st.Usage
 	s.sandboxes = make(map[string]*api.Sandbox, len(st.Sandboxes))
 	for i := range st.Sandboxes {
 		sb := st.Sandboxes[i]
@@ -92,7 +98,18 @@ func (s *Server) save() {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	s.mu.Lock()
-	st := stateFile{Sandboxes: make([]api.Sandbox, 0, len(s.sandboxes))}
+	st := stateFile{Sandboxes: make([]api.Sandbox, 0, len(s.sandboxes)), Usage: map[string]map[string]float64{}}
+	cutoff := s.now().UTC().AddDate(0, 0, -31).Format(dayFormat) // keep a month
+	for owner, days := range s.usage {
+		for day, secs := range days {
+			if day >= cutoff {
+				if st.Usage[owner] == nil {
+					st.Usage[owner] = map[string]float64{}
+				}
+				st.Usage[owner][day] = secs
+			}
+		}
+	}
 	for _, sb := range s.sandboxes {
 		c := *sb
 		c.Token = ""
@@ -120,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("POST /v1/hosts", s.register)
 	mux.HandleFunc("GET /v1/whoami", s.user(s.whoami))
+	mux.HandleFunc("GET /v1/usage", s.user(s.usageHandler))
 	mux.HandleFunc("GET /v1/hosts", s.user(s.hostList))
 	mux.HandleFunc("POST /v1/sandboxes", s.user(s.create))
 	mux.HandleFunc("GET /v1/sandboxes", s.user(s.list))
@@ -158,22 +176,159 @@ type ctxKey struct{}
 func (s *Server) user(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		var name string
+		var p Principal
 		ok := false
 		if s.Tokens != nil && tok != "" {
-			name, ok = s.Tokens.Check(tok)
+			p, ok = s.Tokens.Check(tok)
 		}
 		if !ok {
 			host.WriteError(w, http.StatusUnauthorized, "invalid token; run ephemera login")
 			return
 		}
-		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, name)))
+		s.mu.Lock()
+		if s.limits == nil {
+			s.limits = map[string]Limits{}
+		}
+		s.limits[p.Name] = p.Limits
+		s.mu.Unlock()
+		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
 	}
 }
 
+func principal(r *http.Request) Principal {
+	p, _ := r.Context().Value(ctxKey{}).(Principal)
+	return p
+}
+
 func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
-	name, _ := r.Context().Value(ctxKey{}).(string)
-	writeJSON(w, http.StatusOK, api.WhoAmI{Name: name})
+	writeJSON(w, http.StatusOK, api.WhoAmI{Name: principal(r).Name})
+}
+
+const dayFormat = "2006-01-02"
+
+// accrue adds a finished sandbox's time to its owner's usage, split by UTC
+// day. Locked.
+func (s *Server) accrue(sb *api.Sandbox, end time.Time) {
+	if sb.Owner == "" {
+		return
+	}
+	if s.usage == nil {
+		s.usage = map[string]map[string]float64{}
+	}
+	if s.usage[sb.Owner] == nil {
+		s.usage[sb.Owner] = map[string]float64{}
+	}
+	for start := sb.CreatedAt.UTC(); start.Before(end); {
+		dayEnd := time.Date(start.Year(), start.Month(), start.Day()+1, 0, 0, 0, 0, time.UTC)
+		stop := end
+		if dayEnd.Before(stop) {
+			stop = dayEnd
+		}
+		s.usage[sb.Owner][start.Format(dayFormat)] += stop.Sub(start).Seconds()
+		start = stop
+	}
+}
+
+// usedToday is an owner's sandbox-seconds today, running ones included,
+// and how many are running. Locked.
+func (s *Server) usedToday(owner string) (float64, int) {
+	now := s.now().UTC()
+	today := now.Format(dayFormat)
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	used := s.usage[owner][today]
+	running := 0
+	for _, sb := range s.sandboxes {
+		if sb.Owner != owner {
+			continue
+		}
+		running++
+		start := sb.CreatedAt
+		if start.Before(midnight) {
+			start = midnight
+		}
+		if now.After(start) {
+			used += now.Sub(start).Seconds()
+		}
+	}
+	return used, running
+}
+
+// admit checks a new sandbox against the owner's limits, and caps its
+// lifetime at the minutes left today.
+func (s *Server) admit(p Principal, spec *api.Spec) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	used, running := s.usedToday(p.Name)
+	if p.MaxSandboxes > 0 && running >= p.MaxSandboxes {
+		return fmt.Sprintf("limit reached: %s may run %d sandboxes at once; destroy one first", p.Name, p.MaxSandboxes), false
+	}
+	if p.MaxMinutesPerDay > 0 {
+		left := int(float64(p.MaxMinutesPerDay*60) - used)
+		if left <= 0 {
+			return fmt.Sprintf("limit reached: %s has used today's %d sandbox-minutes; it resets at midnight UTC", p.Name, p.MaxMinutesPerDay), false
+		}
+		if spec.MaxLifetimeSeconds == 0 || spec.MaxLifetimeSeconds > left {
+			spec.MaxLifetimeSeconds = left
+		}
+	}
+	return "", true
+}
+
+func (s *Server) usageOf(p Principal) api.Usage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	used, running := s.usedToday(p.Name)
+	return api.Usage{Name: p.Name, Day: s.now().UTC().Format(dayFormat), MinutesToday: used / 60,
+		MaxMinutesPerDay: p.MaxMinutesPerDay, Running: running, MaxSandboxes: p.MaxSandboxes}
+}
+
+func (s *Server) usageHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.usageOf(principal(r)))
+}
+
+// Enforce stops sandboxes whose owner has used up today's minutes, every
+// interval until ctx is done. Creating sandboxes is refused at the limit
+// either way; this catches ones already running.
+func (s *Server) Enforce(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		s.enforceOnce(ctx)
+	}
+}
+
+func (s *Server) enforceOnce(ctx context.Context) {
+	s.mu.Lock()
+	var over []*api.Sandbox
+	for owner, l := range s.limits {
+		if l.MaxMinutesPerDay <= 0 {
+			continue
+		}
+		if used, _ := s.usedToday(owner); used >= float64(l.MaxMinutesPerDay*60) {
+			for _, sb := range s.sandboxes {
+				if sb.Owner == owner {
+					over = append(over, sb)
+				}
+			}
+		}
+	}
+	s.mu.Unlock()
+	for _, sb := range over {
+		s.log().Warn("daily minutes used up; stopping sandbox", "sandbox", sb.ID, "owner", sb.Owner)
+		s.hostCall(ctx, http.MethodDelete, sb.HostURL+"/v1/sandboxes/"+sb.ID, nil)
+		s.mu.Lock()
+		if cur, ok := s.sandboxes[sb.ID]; ok {
+			s.accrue(cur, s.now())
+			delete(s.sandboxes, sb.ID)
+		}
+		s.mu.Unlock()
+		s.save()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -215,6 +370,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	}
 	for id, sb := range s.sandboxes {
 		if sb.Host == req.Name && !reported[id] && s.now().Sub(sb.CreatedAt) > createGrace {
+			s.accrue(sb, s.now())
 			delete(s.sandboxes, id)
 			changed = true
 			s.log().Info("sandbox gone from its host; record dropped", "sandbox", id, "host", req.Name)
@@ -313,6 +469,11 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		host.WriteError(w, http.StatusBadRequest, "%v", err)
 		return
 	}
+	p := principal(r)
+	if msg, ok := s.admit(p, &req.Spec); !ok {
+		host.WriteError(w, http.StatusTooManyRequests, "%s", msg)
+		return
+	}
 	h, err := s.pick()
 	if err != nil {
 		host.WriteError(w, http.StatusServiceUnavailable, "%v", err)
@@ -325,6 +486,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Token:     api.NewToken(),
 		Spec:      req.Spec,
 		CreatedAt: s.now().UTC(),
+		Owner:     p.Name,
 	}
 	// Count it against the host before the slow call, so concurrent
 	// creates spread out.
@@ -387,6 +549,7 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 		s.log().Warn("host offline; dropping sandbox record", "sandbox", id, "host", sb.Host)
 	}
 	s.mu.Lock()
+	s.accrue(sb, s.now())
 	delete(s.sandboxes, id)
 	s.mu.Unlock()
 	s.save()

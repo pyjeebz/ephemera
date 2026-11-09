@@ -127,6 +127,17 @@ func (c *Client) Destroy(ctx context.Context, id string) (*api.SignedRecord, err
 	return &sr, nil
 }
 
+// Usage returns what this token has used today and its limits.
+func (c *Client) Usage(ctx context.Context) (api.Usage, error) {
+	var u api.Usage
+	resp, err := c.do(ctx, http.MethodGet, c.server()+"/v1/usage", c.Token, nil, "")
+	if err != nil {
+		return u, fmt.Errorf("usage: %w", err)
+	}
+	defer resp.Body.Close()
+	return u, json.NewDecoder(resp.Body).Decode(&u)
+}
+
 // Hosts lists the hosts the central server knows, with their public keys.
 func (c *Client) Hosts(ctx context.Context) ([]api.Host, error) {
 	resp, err := c.do(ctx, http.MethodGet, c.server()+"/v1/hosts", c.Token, nil, "")

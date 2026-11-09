@@ -36,6 +36,7 @@ Usage:
   ephemera routes                   dev sessions sharing ports, and their addresses
   ephemera focus <session>          make plain localhost show that session
   ephemera ls [--json]
+  ephemera usage                    sandbox-minutes used today and this token's limits
   ephemera rm <sandbox-id>...
   ephemera verify <record.json>
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
@@ -87,6 +88,8 @@ func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return cmdRun(ctx, c, args[1:], stdout, stderr)
 	case "dev":
 		return cmdDev(ctx, c, args[1:], stdout, stderr)
+	case "usage":
+		return cmdUsage(ctx, c, stdout, stderr)
 	case "ls":
 		return cmdLs(ctx, c, args[1:], stdout, stderr)
 	case "rm":
@@ -434,6 +437,24 @@ func cmdLs(ctx context.Context, c *client.Client, args []string, stdout, stderr 
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", sb.ID, sb.Host, sb.Spec.Network, time.Since(sb.CreatedAt).Round(time.Second))
 	}
 	tw.Flush()
+	return 0
+}
+
+func cmdUsage(ctx context.Context, c *client.Client, stdout, stderr io.Writer) int {
+	u, err := c.Usage(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, "ephemera:", err)
+		return exitFailure
+	}
+	of := func(n int) string {
+		if n == 0 {
+			return "no limit"
+		}
+		return fmt.Sprintf("limit %d", n)
+	}
+	fmt.Fprintf(stdout, "%s, %s (UTC)\n", u.Name, u.Day)
+	fmt.Fprintf(stdout, "  sandbox-minutes today  %.1f (%s)\n", u.MinutesToday, of(u.MaxMinutesPerDay))
+	fmt.Fprintf(stdout, "  running now            %d (%s)\n", u.Running, of(u.MaxSandboxes))
 	return 0
 }
 
