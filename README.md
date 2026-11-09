@@ -9,8 +9,7 @@ the command ends.
 
 > **Status: early development.** Sandboxes run as Firecracker microVMs
 > on a Linux host with KVM (`--backend firecracker`), or on Docker, which is
-> for building ephemera only: containers share the host kernel. MicroVMs
-> have no network yet, so `--net` works only with Docker for now.
+> for building ephemera only: containers share the host kernel.
 
 ## How it works
 
@@ -74,12 +73,35 @@ Flags for `run` and `dev`:
 
 | Flag | Meaning |
 | --- | --- |
-| `--net` | Allow outbound network access (off by default) |
+| `--allow HOST` | Allow outbound access to a host: `example.com`, `*.example.com`, `host:port` (repeatable) |
+| `--net` | Allow outbound access to any public host |
 | `--include FILE` | Send an ignored file anyway |
 | `--env KEY=VALUE` | Set an environment variable |
 | `--image`, `--cpus`, `--memory` | Sandbox image and limits |
 | `--json` | Newline-delimited JSON events, for agents and scripts |
 | `-p PORT`, `-p LOCAL:SANDBOX` | `dev` only: forward a port to localhost |
+
+### Network
+
+Sandboxes have no network unless you allow it:
+
+```sh
+bin/ephemera run --allow registry.npmjs.org -- npm install
+```
+
+A microVM has no network device at all. Programs in it reach the outside
+only through an HTTP proxy at `127.0.0.1:3128` (`HTTPS_PROXY` and
+`HTTP_PROXY` are set for them), which carries each connection over vsock to
+an egress proxy on the host for that sandbox alone. It lets a connection
+through only if the host is allowed and resolves to a public address:
+private networks, localhost, cloud metadata servers and Tailscale addresses
+stay blocked even with `--net`, as do connections to raw IP addresses.
+Programs that ignore the proxy settings cannot connect at all.
+
+Every attempt is logged. `ephemera run` ends with a summary that names each
+blocked host, `ephemera dev` reports blocked connections as they happen, and
+`--json` emits a `connection` event for each. On Docker, `--net` gives the
+container ordinary networking and `--allow` is not available.
 
 `ephemera run` exits with the command's exit code, or 125 if ephemera itself
 failed. `ephemera ls` and `ephemera rm` list and remove sandboxes.
@@ -153,6 +175,7 @@ internal/api          shared types
 internal/client       CLI side: central server and host calls, run, dev
 internal/config       saved CLI login
 internal/control      central server
+internal/egress       per-sandbox egress proxy: allow lists, address checks, log
 internal/guest        guest agent API (inside the microVM)
 internal/host         host agent API
 internal/sandbox      backend interface; Docker, Firecracker and test backends
