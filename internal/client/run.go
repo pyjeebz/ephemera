@@ -76,18 +76,31 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (res RunResult, err erro
 		emit("destroyed", map[string]any{"id": sb.ID})
 	}()
 
-	syncFiles := func() error {
-		if err := c.Upload(ctx, sb, o.Dir, files); err != nil {
-			return err
+	upload := func(fs []string) error {
+		if len(fs) == 0 {
+			return nil
 		}
+		return c.Upload(ctx, sb, o.Dir, fs)
+	}
+	synced := func() error {
 		res.Files = len(files)
 		emit("synced", map[string]any{"files": len(files)})
 		return nil
 	}
 	if o.Setup != nil {
-		err = c.prepare(ctx, sb, o.Setup, syncFiles, o.Stdout, o.Stderr, emit)
-	} else {
-		err = syncFiles()
+		var base, extra []string
+		if base, extra, err = setupFiles(o.Dir, files); err == nil {
+			err = c.prepare(ctx, sb, o.Setup,
+				func() error { return c.Upload(ctx, sb, o.Dir, base) },
+				func() error {
+					if err := upload(extra); err != nil {
+						return err
+					}
+					return synced()
+				}, o.Stdout, o.Stderr, emit)
+		}
+	} else if err = c.Upload(ctx, sb, o.Dir, files); err == nil {
+		err = synced()
 	}
 	if err != nil {
 		return res, err

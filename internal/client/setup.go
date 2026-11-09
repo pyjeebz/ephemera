@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/worktree"
 )
 
 // Setup is a command that prepares a sandbox, such as "npm ci". Its result
@@ -47,9 +48,32 @@ func (c *Client) SaveSnapshot(ctx context.Context, sb *api.Sandbox, id string, k
 // ErrSetupFailed means the setup command exited non-zero.
 var ErrSetupFailed = errors.New("setup failed")
 
-// prepare loads the project snapshot, or, after the files are synced, runs
-// setup and saves one. sync uploads the worktree; it runs in between.
-func (c *Client) prepare(ctx context.Context, sb *api.Sandbox, s *Setup, sync func() error, stdout, stderr io.Writer, emit func(string, map[string]any)) error {
+// setupFiles splits the files to sync into the project's own files and
+// the ones only --include adds, such as .env.local. The extra files are
+// synced after setup and its snapshot, so they are never in a snapshot.
+func setupFiles(dir string, all []string) (base, extra []string, err error) {
+	own, err := worktree.Files(dir, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	in := make(map[string]bool, len(own))
+	for _, f := range own {
+		in[f] = true
+	}
+	for _, f := range all {
+		if in[f] {
+			base = append(base, f)
+		} else {
+			extra = append(extra, f)
+		}
+	}
+	return base, extra, nil
+}
+
+// prepare loads the project snapshot, or, after the project's files are
+// synced, runs setup and saves one. Files from --include are synced last
+// either way, so neither setup nor the snapshot ever sees them.
+func (c *Client) prepare(ctx context.Context, sb *api.Sandbox, s *Setup, syncBase, syncExtra func() error, stdout, stderr io.Writer, emit func(string, map[string]any)) error {
 	loaded := false
 	if s.SnapshotID != "" {
 		res, err := c.LoadSnapshot(ctx, sb, s.SnapshotID, s.Key)
@@ -66,11 +90,11 @@ func (c *Client) prepare(ctx context.Context, sb *api.Sandbox, s *Setup, sync fu
 	}
 	// Files are synced either way: the snapshot holds them as they were
 	// when it was made.
-	if err := sync(); err != nil {
+	if err := syncBase(); err != nil {
 		return err
 	}
 	if loaded {
-		return nil
+		return syncExtra()
 	}
 	code, err := c.Exec(ctx, sb, api.ExecRequest{Argv: s.Argv}, stdout, stderr)
 	if err != nil {
@@ -80,15 +104,15 @@ func (c *Client) prepare(ctx context.Context, sb *api.Sandbox, s *Setup, sync fu
 		return fmt.Errorf("%w: %v exited with code %d", ErrSetupFailed, s.Argv, code)
 	}
 	if s.SnapshotID == "" {
-		return nil
+		return syncExtra()
 	}
 	if err := c.SaveSnapshot(ctx, sb, s.SnapshotID, s.Key); err != nil {
 		var se *StatusError
 		if !(errors.As(err, &se) && se.Code == http.StatusNotImplemented) {
 			emit("snapshot_error", map[string]any{"error": err.Error()})
 		}
-		return nil // the sandbox is set up; only the snapshot is missing
+		return syncExtra() // the sandbox is set up; only the snapshot is missing
 	}
 	emit("snapshot_saved", map[string]any{"id": s.SnapshotID})
-	return nil
+	return syncExtra()
 }

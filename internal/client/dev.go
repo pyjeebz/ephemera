@@ -153,17 +153,30 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 		emit("destroyed", map[string]any{"id": sb.ID})
 	}()
 
-	syncFiles := func() error {
-		if err := c.Upload(ctx, sb, o.Dir, snap.Files()); err != nil {
-			return err
-		}
+	synced := func() error {
 		emit("synced", map[string]any{"files": len(snap), "deleted": 0, "initial": true})
 		return nil
 	}
 	if o.Setup != nil {
-		err = c.prepare(ctx, sb, o.Setup, syncFiles, o.Stdout, o.Stderr, emit)
-	} else {
-		err = syncFiles()
+		var base, extra []string
+		if base, extra, err = setupFiles(o.Dir, snap.Files()); err == nil {
+			upload := func(fs []string) error {
+				if len(fs) == 0 {
+					return nil
+				}
+				return c.Upload(ctx, sb, o.Dir, fs)
+			}
+			err = c.prepare(ctx, sb, o.Setup,
+				func() error { return c.Upload(ctx, sb, o.Dir, base) },
+				func() error {
+					if err := upload(extra); err != nil {
+						return err
+					}
+					return synced()
+				}, o.Stdout, o.Stderr, emit)
+		}
+	} else if err = c.Upload(ctx, sb, o.Dir, snap.Files()); err == nil {
+		err = synced()
 	}
 	if err != nil {
 		return 0, err

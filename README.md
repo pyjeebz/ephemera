@@ -135,6 +135,12 @@ using it, which is deleted with the sandbox. Snapshots made on another
 guest image are dropped; the least recently used go once they pass
 `--max-snapshot-bytes` (20 GB) on the host.
 
+Secrets stay out of snapshots. Files sent with `--include`, such as
+`.env.local`, are added only after setup has finished and the snapshot is
+saved, and `--env` values go only to the main command. Setup can't read
+them, so a setup that needs a credential, such as a private registry token,
+isn't supported yet.
+
 ### Records
 
 When a sandbox is destroyed, its host signs a record of what happened in

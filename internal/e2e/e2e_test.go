@@ -272,3 +272,32 @@ func dockerPS(id string) string {
 	out, _ := exec.Command("docker", "ps", "-aq", "--filter", "label=ephemera.sandbox="+id).Output()
 	return string(out)
 }
+
+// Files sent only with --include, such as .env.local, reach the command
+// but never setup, so they can never be saved into a project snapshot.
+func TestIncludedFilesSkipSetup(t *testing.T) {
+	be := &sandboxtest.Local{Root: t.TempDir()}
+	s := newStack(t, be, "unused")
+	dir := worktree(t, map[string]string{
+		".gitignore":   ".env.local\n",
+		".env.local":   "SECRET=1\n",
+		"package.json": "{}\n",
+	})
+	var out bytes.Buffer
+	res, err := s.client.Run(context.Background(), client.RunOptions{
+		Dir: dir, Include: []string{".env.local"},
+		Setup: &client.Setup{Argv: []string{"sh", "-c",
+			"test -e package.json || exit 7; if [ -e .env.local ]; then echo setup-saw-secret; exit 9; fi"}},
+		Exec:   api.ExecRequest{Argv: []string{"cat", ".env.local"}},
+		Stdout: &out, Stderr: &out,
+	})
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	if res.ExitCode != 0 || out.String() != "SECRET=1\n" {
+		t.Errorf("command: exit %d, output %q; want the included file", res.ExitCode, out.String())
+	}
+	if res.Files != 3 {
+		t.Errorf("files = %d, want 3", res.Files)
+	}
+}
