@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func key(t *testing.T) []byte {
@@ -92,5 +93,42 @@ func TestKeyCheck(t *testing.T) {
 	}
 	if bytes.Contains([]byte(KeyCheck(a)), a) {
 		t.Error("KeyCheck reveals the key")
+	}
+}
+
+// A sparse file with data far apart comes back exactly, and its holes
+// are skipped rather than read.
+func TestSparseFile(t *testing.T) {
+	k := key(t)
+	dir := t.TempDir()
+	src, enc, dec := filepath.Join(dir, "sparse"), filepath.Join(dir, "enc"), filepath.Join(dir, "dec")
+	f, _ := os.Create(src)
+	f.WriteAt([]byte("start"), 0)
+	f.WriteAt([]byte("middle"), 3<<30) // 3 GiB in
+	f.Truncate(8 << 30)                // 8 GiB, almost all hole
+	f.Close()
+	start := time.Now()
+	if err := EncryptFile(k, src, enc); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("encrypting an 8 GiB sparse file took %v; holes were read", d)
+	}
+	if err := DecryptFile(k, enc, dec); err != nil {
+		t.Fatal(err)
+	}
+	g, _ := os.Open(dec)
+	defer g.Close()
+	b := make([]byte, 6)
+	g.ReadAt(b[:5], 0)
+	if string(b[:5]) != "start" {
+		t.Errorf("start = %q", b[:5])
+	}
+	g.ReadAt(b, 3<<30)
+	if string(b) != "middle" {
+		t.Errorf("middle = %q", b)
+	}
+	if info, _ := g.Stat(); info.Size() != 8<<30 {
+		t.Errorf("size = %d", info.Size())
 	}
 }

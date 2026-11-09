@@ -121,12 +121,28 @@ func EncryptFile(key []byte, src, dst string) error {
 	buf := make([]byte, chunkSize)
 	zero := make([]byte, chunkSize)
 	for i := int64(0); i < chunks; i++ {
-		n, err := io.ReadFull(in, buf)
-		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		last := i == chunks-1
+		off := i * chunkSize
+		// Whole chunks inside a hole are zeros: skip them unread. This is
+		// what makes a mostly empty 20 GB disk quick to encrypt.
+		if !last {
+			if next := nextData(in, off, size); next >= off+chunkSize {
+				skip := (next - off) / chunkSize
+				if i+skip > chunks-1 {
+					skip = chunks - 1 - i
+				}
+				for j := int64(0); j < skip; j++ {
+					w.WriteByte(kindZero)
+				}
+				i += skip - 1
+				continue
+			}
+		}
+		n, err := in.ReadAt(buf[:min(int64(chunkSize), size-off)], off)
+		if err != nil && err != io.EOF {
 			out.Close()
 			return err
 		}
-		last := i == chunks-1
 		chunk := buf[:n]
 		if n > 0 && !last && bytes.Equal(chunk, zero[:n]) {
 			w.WriteByte(kindZero)

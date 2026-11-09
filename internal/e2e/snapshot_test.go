@@ -49,8 +49,11 @@ func TestFirecrackerProjectSnapshot(t *testing.T) {
 			Exec:   api.ExecRequest{Argv: []string{"cat", "node_modules/dep/built"}},
 			Stdout: &out, Stderr: &out,
 			Events: func(ev string, f map[string]any) {
-				if ev == "snapshot" {
+				switch ev {
+				case "snapshot":
 					snapEv = f
+				case "snapshot_error":
+					t.Errorf("saving the snapshot failed: %v", f["error"])
 				}
 			},
 		})
@@ -168,14 +171,34 @@ func TestOutputLatency(t *testing.T) {
 	}
 	defer s.client.Destroy(ctx, sb.ID)
 
-	lt := &lineTimer{}
-	script := "import time,sys\nfor _ in range(300):\n    sys.stdout.write('%d\\n' % time.time_ns()); sys.stdout.flush(); time.sleep(0.01)\n"
-	if _, err := s.client.Exec(ctx, sb, api.ExecRequest{Argv: []string{"python3", "-c", script}}, lt, io.Discard); err != nil {
-		t.Fatal(err)
+	// Lines printed at two different gaps: if delivery waited for the next
+	// line, the latency would follow the gap.
+	for _, gap := range []string{"0.01", "0.05"} {
+		lt := &lineTimer{}
+		script := "import time,sys\nfor _ in range(150):\n    sys.stdout.write('%d\\n' % time.time_ns()); sys.stdout.flush(); time.sleep(" + gap + ")\n"
+		if _, err := s.client.Exec(ctx, sb, api.ExecRequest{Argv: []string{"python3", "-c", script}}, lt, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		// Delay relative to the fastest line: a constant clock offset
+		// between guest and host cancels out, leaving the variation.
+		min := percentile(lt.delay, 0)
+		var extra []time.Duration
+		for _, d := range lt.delay {
+			extra = append(extra, d-min)
+		}
+		t.Logf("a line every %ss, %d lines: each line's delay beyond the fastest: p50 %v, p90 %v, p99 %v, max %v", gap, len(lt.delay),
+			percentile(extra, 0.5).Round(10*time.Microsecond), percentile(extra, 0.9).Round(10*time.Microsecond),
+			percentile(extra, 0.99).Round(10*time.Microsecond), percentile(extra, 1).Round(10*time.Microsecond))
 	}
-	t.Logf("output latency over %d lines: p50 %v, p90 %v, p99 %v", len(lt.delay),
-		percentile(lt.delay, 0.5).Round(10*time.Microsecond), percentile(lt.delay, 0.9).Round(10*time.Microsecond),
-		percentile(lt.delay, 0.99).Round(10*time.Microsecond))
+	// The guest's clock against the host's, to read the figures above.
+	var probe bytes.Buffer
+	before := time.Now()
+	s.client.Exec(ctx, sb, api.ExecRequest{Argv: []string{"python3", "-c", "import time; print(time.time_ns())"}}, &probe, io.Discard)
+	after := time.Now()
+	if ns, err := strconv.ParseInt(strings.TrimSpace(probe.String()), 10, 64); err == nil {
+		mid := before.Add(after.Sub(before) / 2)
+		t.Logf("guest clock minus host clock: about %v (round trip %v)", time.Unix(0, ns).Sub(mid).Round(100*time.Microsecond), after.Sub(before).Round(100*time.Microsecond))
+	}
 
 	// Time from asking to run a command to its first byte of output.
 	var first []time.Duration

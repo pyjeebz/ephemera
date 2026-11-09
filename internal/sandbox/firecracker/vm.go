@@ -29,14 +29,19 @@ import (
 // relative paths. A snapshot records the paths it was taken with, so this
 // sameness is what lets one snapshot be restored into any VM.
 const (
-	fileKernel   = "vmlinux"
-	fileRootFS   = "rootfs.ext4"
-	fileScratch  = "scratch.ext4"
-	fileVsock    = "vsock.sock"
-	fileAPI      = "api.sock"
-	fileConfig   = "vm.json"
-	fileSnapMem  = "snap.mem"
-	fileSnapVM   = "snap.vmstate"
+	fileKernel  = "vmlinux"
+	fileRootFS  = "rootfs.ext4"
+	fileScratch = "scratch.ext4"
+	fileVsock   = "vsock.sock"
+	fileAPI     = "api.sock"
+	fileConfig  = "vm.json"
+	fileSnapMem = "snap.mem"
+	fileSnapVM  = "snap.vmstate"
+	// A new snapshot is written under these names first: a VM restored
+	// from the template has the template's shared, read-only snap.* files
+	// in its root, which must never be written to.
+	fileSaveMem  = "save.mem"
+	fileSaveVM   = "save.vmstate"
 	bootArgs     = "console=ttyS0 reboot=k panic=1 pci=off quiet init=/sbin/ephemera-guest"
 	guestCID     = 3
 	readyTimeout = 30 * time.Second
@@ -165,16 +170,19 @@ func (vm *VM) CreateSnapshot(ctx context.Context, dir string) (*Snapshot, error)
 	if err := vm.apiCall(ctx, http.MethodPatch, "/vm", map[string]any{"state": "Paused"}); err != nil {
 		return nil, fmt.Errorf("pause: %w", err)
 	}
+	for _, f := range []string{fileSaveMem, fileSaveVM} {
+		os.Remove(filepath.Join(vm.root, f))
+	}
 	if err := vm.apiCall(ctx, http.MethodPut, "/snapshot/create", map[string]any{
-		"snapshot_type": "Full", "snapshot_path": fileSnapVM, "mem_file_path": fileSnapMem,
+		"snapshot_type": "Full", "snapshot_path": fileSaveVM, "mem_file_path": fileSaveMem,
 	}); err != nil {
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	for _, f := range []string{fileSnapMem, fileSnapVM} {
-		if err := moveFile(filepath.Join(vm.root, f), filepath.Join(dir, f)); err != nil {
+	for src, dst := range map[string]string{fileSaveMem: fileSnapMem, fileSaveVM: fileSnapVM} {
+		if err := moveFile(filepath.Join(vm.root, src), filepath.Join(dir, dst)); err != nil {
 			return nil, err
 		}
 	}
