@@ -63,7 +63,7 @@ log "unpacking the Ubuntu base"
 unsquashfs -q -f -d "$work/root" "$cache/$BASE_FILE" >/dev/null
 
 install -m 0755 "$guest_bin" "$work/root/sbin/ephemera-guest"
-mkdir -p "$work/root/workspace"
+mkdir -p "$work/root/workspace" "$work/root/mnt"
 # Nothing should log in to a sandbox; drop any SSH host keys and keys.
 rm -f "$work/root"/etc/ssh/ssh_host_* "$work/root"/root/.ssh/authorized_keys
 echo "ephemera" >"$work/root/etc/hostname"

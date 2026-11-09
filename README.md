@@ -7,9 +7,10 @@ locked-down sandboxes. You keep editing locally; commands run in a sandbox
 that has no outbound network unless you allow it, and that is destroyed when
 the command ends.
 
-> **Status: early development.** Sandboxes currently run on a Docker
-> backend, which is for building ephemera only: containers share the host
-> kernel. Firecracker microVMs are next.
+> **Status: early development.** Sandboxes run as Firecracker microVMs
+> on a Linux host with KVM (`--backend firecracker`), or on Docker, which is
+> for building ephemera only: containers share the host kernel. MicroVMs
+> have no network yet, so `--net` works only with Docker for now.
 
 ## How it works
 
@@ -105,10 +106,21 @@ sudo deploy/guest/build-image.sh /var/lib/ephemera/image
 ```
 
 It writes a kernel and a root filesystem whose init is the ephemera guest
-agent (`cmd/ephemera-guest`). The microVM tests use it:
+agent (`cmd/ephemera-guest`). Then run the host agent on microVMs:
 
 ```sh
-EPHEMERA_GUEST_IMAGE=/var/lib/ephemera/image sudo -E go test ./internal/sandbox/firecracker/
+sudo -E bin/ephemera-host --backend firecracker
+```
+
+Every sandbox boots that image read-only, with a disk of its own that
+holds everything it writes, so `apt install` works. The disk is deleted
+with the sandbox. The host reaches the guest agent over vsock, so the VM
+needs no network to run commands or serve forwarded ports.
+
+The microVM tests use the same image:
+
+```sh
+EPHEMERA_GUEST_IMAGE=/var/lib/ephemera/image go test ./internal/sandbox/firecracker/ ./internal/e2e/
 ```
 
 ## Development

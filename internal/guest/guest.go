@@ -237,7 +237,16 @@ func (s *Server) port(w http.ResponseWriter, r *http.Request) {
 		pending, _ := buf.Reader.Peek(n)
 		upstream.Write(pending)
 	}
-	go func() { io.Copy(upstream, client); upstream.Close() }()
+	go func() {
+		io.Copy(upstream, client)
+		// The client is done sending; let the server finish its reply.
+		if tc, ok := upstream.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		} else {
+			upstream.Close()
+		}
+	}()
 	io.Copy(client, upstream)
 	client.Close()
+	upstream.Close()
 }

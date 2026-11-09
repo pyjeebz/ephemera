@@ -91,7 +91,19 @@ func startAgent() (int, error) {
 	return cmd.Process.Pid, nil
 }
 
+// scratchDisk is the per-VM writable disk the host attaches. Everything the
+// sandbox writes lands on it, and the host deletes it with the VM.
+const scratchDisk = "/dev/vdb"
+
 func setup() error {
+	var errs []error
+	writableRoot := false
+	if err := overlayRoot(); err == nil {
+		writableRoot = true
+	} else if !errors.Is(err, errNoScratch) {
+		errs = append(errs, fmt.Errorf("writable root: %w", err))
+	}
+
 	mounts := []struct {
 		source, target, fstype, data string
 		flags                        uintptr
@@ -104,22 +116,23 @@ func setup() error {
 		{"tmpfs", "/run", "tmpfs", "mode=0755", unix.MS_NOSUID | unix.MS_NODEV},
 		{"tmpfs", "/tmp", "tmpfs", "mode=1777", unix.MS_NOSUID | unix.MS_NODEV},
 	}
-	var errs []error
 	for _, m := range mounts {
 		os.MkdirAll(m.target, 0o755)
 		if err := unix.Mount(m.source, m.target, m.fstype, m.flags, m.data); err != nil && !errors.Is(err, unix.EBUSY) {
 			errs = append(errs, fmt.Errorf("mount %s: %w", m.target, err))
 		}
 	}
-	// The workspace is a disk of its own when the host attaches one,
-	// otherwise memory.
-	os.MkdirAll(workdir, 0o755)
-	if _, err := os.Stat("/dev/vdb"); err == nil {
-		if err := unix.Mount("/dev/vdb", workdir, "ext4", unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
-			errs = append(errs, fmt.Errorf("mount workspace disk: %w", err))
+	// With a writable root the workspace is a directory on the scratch
+	// disk. Without one, it is memory.
+	if writableRoot {
+		if err := os.MkdirAll(workdir, 0o755); err != nil {
+			errs = append(errs, err)
 		}
-	} else if err := unix.Mount("tmpfs", workdir, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=50%"); err != nil {
-		errs = append(errs, fmt.Errorf("mount workspace: %w", err))
+	} else {
+		os.MkdirAll(workdir, 0o755)
+		if err := unix.Mount("tmpfs", workdir, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=50%"); err != nil {
+			errs = append(errs, fmt.Errorf("mount workspace: %w", err))
+		}
 	}
 	if err := unix.Sethostname([]byte("ephemera")); err != nil {
 		errs = append(errs, err)
@@ -128,6 +141,64 @@ func setup() error {
 		errs = append(errs, fmt.Errorf("loopback: %w", err))
 	}
 	return errors.Join(errs...)
+}
+
+var errNoScratch = errors.New("no scratch disk")
+
+// overlayRoot makes the root filesystem writable: the shared read-only image
+// is the lower layer, the scratch disk holds the changes, and the result
+// becomes the new root with pivot_root.
+func overlayRoot() error {
+	if _, err := os.Stat(scratchDisk); err != nil {
+		return errNoScratch
+	}
+	// The read-only root has no writable place for mount points. The
+	// kernel mounts a writable /dev at boot, so build them under it, in
+	// memory. (Mount it first if the kernel did not.)
+	if _, err := os.Stat("/dev/null"); err != nil {
+		if err := unix.Mount("devtmpfs", "/dev", "devtmpfs", unix.MS_NOSUID, "mode=0755"); err != nil {
+			return fmt.Errorf("mount /dev: %w", err)
+		}
+	}
+	const base = "/dev/.ephemera"
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return err
+	}
+	if err := unix.Mount("tmpfs", base, "tmpfs", 0, "mode=0700"); err != nil {
+		return fmt.Errorf("tmpfs on %s: %w", base, err)
+	}
+	scratch, root := base+"/scratch", base+"/root"
+	for _, d := range []string{scratch, root} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			return err
+		}
+	}
+	if err := unix.Mount(scratchDisk, scratch, "ext4", unix.MS_NODEV, ""); err != nil {
+		return fmt.Errorf("mount scratch disk: %w", err)
+	}
+	for _, d := range []string{scratch + "/upper", scratch + "/work"} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+	}
+	opts := "lowerdir=/,upperdir=" + scratch + "/upper,workdir=" + scratch + "/work"
+	if err := unix.Mount("overlay", root, "overlay", 0, opts); err != nil {
+		return fmt.Errorf("mount overlay: %w", err)
+	}
+	if err := os.MkdirAll(root+"/.oldroot", 0o700); err != nil {
+		return err
+	}
+	if err := unix.PivotRoot(root, root+"/.oldroot"); err != nil {
+		return fmt.Errorf("pivot_root: %w", err)
+	}
+	if err := unix.Chdir("/"); err != nil {
+		return err
+	}
+	// The overlay keeps the scratch disk in use; the old root goes.
+	if err := unix.Unmount("/.oldroot", unix.MNT_DETACH); err != nil {
+		return fmt.Errorf("detach old root: %w", err)
+	}
+	return os.Remove("/.oldroot")
 }
 
 // loopbackUp brings up lo, so servers can listen on 127.0.0.1 even though

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/host"
 	"github.com/pyjeebz/ephemera/internal/sandbox"
 	"github.com/pyjeebz/ephemera/internal/sandbox/docker"
+	"github.com/pyjeebz/ephemera/internal/sandbox/firecracker"
 )
 
 func main() {
@@ -27,8 +29,10 @@ func main() {
 		advertise = flag.String("url", "http://127.0.0.1:7701", "URL the CLI and central server use to reach this host")
 		server    = flag.String("server", "http://127.0.0.1:7700", "central server URL")
 		name      = flag.String("name", hostname, "host name")
-		backend   = flag.String("backend", "docker", "sandbox backend: docker")
-		image     = flag.String("image", "ubuntu:24.04", "default sandbox image")
+		backend   = flag.String("backend", "docker", "sandbox backend: docker or firecracker")
+		image     = flag.String("image", "ubuntu:24.04", "default sandbox image (docker backend)")
+		imageDir  = flag.String("image-dir", "/var/lib/ephemera/image", "guest image from deploy/guest/build-image.sh (firecracker backend)")
+		stateDir  = flag.String("state-dir", "/var/lib/ephemera/vms", "per-VM working directories (firecracker backend)")
 		capacity  = flag.Int("capacity", 20, "maximum sandboxes on this host")
 	)
 	flag.Parse()
@@ -39,7 +43,7 @@ func main() {
 		log.Error("EPHEMERA_HOST_SECRET must be set")
 		os.Exit(2)
 	}
-	be, err := newBackend(*backend)
+	be, err := newBackend(*backend, *imageDir, *stateDir, log)
 	if err != nil {
 		log.Error("backend", "err", err)
 		os.Exit(2)
@@ -74,11 +78,25 @@ func main() {
 	log.Info("host agent stopped; all sandboxes destroyed")
 }
 
-func newBackend(name string) (sandbox.Backend, error) {
+func newBackend(name, imageDir, stateDir string, log *slog.Logger) (sandbox.Backend, error) {
 	switch name {
 	case "docker":
 		return &docker.Backend{}, nil
+	case "firecracker":
+		for _, f := range []string{"vmlinux", "rootfs.ext4"} {
+			if _, err := os.Stat(filepath.Join(imageDir, f)); err != nil {
+				return nil, fmt.Errorf("guest image: %w (build it with deploy/guest/build-image.sh %s)", err, imageDir)
+			}
+		}
+		be := &firecracker.Backend{ImageDir: imageDir, StateDir: stateDir, DefaultCPUs: 2, DefaultMemoryMB: 1024}
+		// Nothing from an earlier run may keep running unseen.
+		if n, err := be.Cleanup(); err != nil {
+			return nil, fmt.Errorf("clean up old VMs: %w", err)
+		} else if n > 0 {
+			log.Warn("removed microVMs left from an earlier run", "count", n)
+		}
+		return be, nil
 	default:
-		return nil, fmt.Errorf("unknown backend %q (available: docker)", name)
+		return nil, fmt.Errorf("unknown backend %q (available: docker, firecracker)", name)
 	}
 }

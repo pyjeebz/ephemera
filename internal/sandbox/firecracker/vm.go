@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,9 +22,12 @@ import (
 
 // VMConfig describes one microVM.
 type VMConfig struct {
-	Dir      string // per-VM directory: config, sockets, log
-	Kernel   string // vmlinux
-	RootFS   string // read-only root filesystem image
+	Dir    string // per-VM directory: config, sockets, log
+	Kernel string // vmlinux
+	RootFS string // read-only root filesystem image
+	// Scratch is a writable disk image for this VM only; the guest builds
+	// its writable root and workspace on it. Optional.
+	Scratch  string
 	CPUs     int
 	MemoryMB int
 	// Firecracker is the firecracker binary; default "firecracker".
@@ -64,9 +68,7 @@ func Boot(ctx context.Context, cfg VMConfig) (*VM, error) {
 			"kernel_image_path": cfg.Kernel,
 			"boot_args":         "console=ttyS0 reboot=k panic=1 pci=off quiet init=/sbin/ephemera-guest",
 		},
-		"drives": []any{map[string]any{
-			"drive_id": "rootfs", "path_on_host": cfg.RootFS, "is_root_device": true, "is_read_only": true,
-		}},
+		"drives":         drives(cfg),
 		"machine-config": map[string]any{"vcpu_count": cfg.CPUs, "mem_size_mib": cfg.MemoryMB},
 		"vsock":          map[string]any{"guest_cid": 3, "uds_path": cfg.vsockPath()},
 	}
@@ -87,6 +89,8 @@ func Boot(ctx context.Context, cfg VMConfig) (*VM, error) {
 		logf.Close()
 		return nil, fmt.Errorf("start firecracker: %w", err)
 	}
+	// The pid file lets a restarted host agent find VMs it lost track of.
+	os.WriteFile(filepath.Join(cfg.Dir, "firecracker.pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
 	vm := &VM{cfg: cfg, cmd: cmd, exited: make(chan struct{})}
 	go func() {
 		vm.exitErr = cmd.Wait()
@@ -105,6 +109,18 @@ func Boot(ctx context.Context, cfg VMConfig) (*VM, error) {
 		return nil, fmt.Errorf("%w (console: %s)", err, tail(cfg.LogPath(), 600))
 	}
 	return vm, nil
+}
+
+func drives(cfg VMConfig) []any {
+	d := []any{map[string]any{
+		"drive_id": "rootfs", "path_on_host": cfg.RootFS, "is_root_device": true, "is_read_only": true,
+	}}
+	if cfg.Scratch != "" {
+		d = append(d, map[string]any{
+			"drive_id": "scratch", "path_on_host": cfg.Scratch, "is_root_device": false, "is_read_only": false,
+		})
+	}
+	return d
 }
 
 func (vm *VM) waitReady(ctx context.Context) error {
@@ -203,3 +219,5 @@ func tail(path string, n int) string {
 	}
 	return strings.TrimSpace(string(b))
 }
+
+var timeZero time.Time
