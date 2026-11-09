@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -32,7 +33,17 @@ func firecrackerBackend(t *testing.T) *firecracker.Backend {
 	if _, err := exec.LookPath("firecracker"); err != nil {
 		t.Skip("firecracker not installed")
 	}
-	return &firecracker.Backend{ImageDir: img, StateDir: t.TempDir(), DefaultCPUs: 2, DefaultMemoryMB: 1024}
+	be := &firecracker.Backend{ImageDir: img, StateDir: t.TempDir(), DefaultCPUs: 2, DefaultMemoryMB: 1024}
+	// EPHEMERA_JAILED=1 runs the same tests with every VM jailed (as root).
+	if os.Getenv("EPHEMERA_JAILED") == "1" {
+		if os.Geteuid() != 0 {
+			t.Skip("EPHEMERA_JAILED needs root")
+		}
+		be.Jailed = true
+		be.ChrootBase = filepath.Join(filepath.Dir(img), fmt.Sprintf("jail-e2e-%d", os.Getpid()))
+		t.Cleanup(func() { os.RemoveAll(be.ChrootBase) })
+	}
+	return be
 }
 
 func TestFirecrackerRun(t *testing.T) {

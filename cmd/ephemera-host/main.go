@@ -33,6 +33,8 @@ func main() {
 		image     = flag.String("image", "ubuntu:24.04", "default sandbox image (docker backend)")
 		imageDir  = flag.String("image-dir", "/var/lib/ephemera/image", "guest image from deploy/guest/build-image.sh (firecracker backend)")
 		stateDir  = flag.String("state-dir", "/var/lib/ephemera/vms", "per-VM working directories (firecracker backend)")
+		jail      = flag.Bool("jail", os.Geteuid() == 0, "run each microVM under Firecracker's jailer: its own user, chroot and cgroup limits (needs root)")
+		jailDir   = flag.String("jail-dir", "/var/lib/ephemera/jail", "where jails go; same filesystem as -image-dir (firecracker backend)")
 		capacity  = flag.Int("capacity", 20, "maximum sandboxes on this host")
 	)
 	flag.Parse()
@@ -43,7 +45,7 @@ func main() {
 		log.Error("EPHEMERA_HOST_SECRET must be set")
 		os.Exit(2)
 	}
-	be, err := newBackend(*backend, *imageDir, *stateDir, log)
+	be, err := newBackend(*backend, *imageDir, *stateDir, *jail, *jailDir, log)
 	if err != nil {
 		log.Error("backend", "err", err)
 		os.Exit(2)
@@ -78,7 +80,7 @@ func main() {
 	log.Info("host agent stopped; all sandboxes destroyed")
 }
 
-func newBackend(name, imageDir, stateDir string, log *slog.Logger) (sandbox.Backend, error) {
+func newBackend(name, imageDir, stateDir string, jail bool, jailDir string, log *slog.Logger) (sandbox.Backend, error) {
 	switch name {
 	case "docker":
 		return &docker.Backend{}, nil
@@ -88,7 +90,14 @@ func newBackend(name, imageDir, stateDir string, log *slog.Logger) (sandbox.Back
 				return nil, fmt.Errorf("guest image: %w (build it with deploy/guest/build-image.sh %s)", err, imageDir)
 			}
 		}
-		be := &firecracker.Backend{ImageDir: imageDir, StateDir: stateDir, DefaultCPUs: 2, DefaultMemoryMB: 1024}
+		if jail && os.Geteuid() != 0 {
+			return nil, fmt.Errorf("the jailer needs root; run as root or pass -jail=false for development")
+		}
+		if !jail {
+			log.Warn("microVMs run without the jailer: every VM runs as this user, with no chroot or cgroup limits")
+		}
+		be := &firecracker.Backend{ImageDir: imageDir, StateDir: stateDir, DefaultCPUs: 2, DefaultMemoryMB: 1024,
+			Jailed: jail, ChrootBase: jailDir}
 		// Nothing from an earlier run may keep running unseen.
 		if n, err := be.Cleanup(); err != nil {
 			return nil, fmt.Errorf("clean up old VMs: %w", err)

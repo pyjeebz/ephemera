@@ -114,7 +114,13 @@ sudo -E bin/ephemera-host --backend firecracker
 
 Every sandbox boots that image read-only, with a disk of its own that
 holds everything it writes, so `apt install` works. The disk is deleted
-with the sandbox. The host reaches the guest agent over vsock, so the VM
+with the sandbox.
+
+As root, the host agent runs every microVM under Firecracker's jailer: in a
+chroot holding only that VM's files, as a user ID of its own, with cgroup
+limits on memory, CPU and processes. Jails go in `--jail-dir`
+(`/var/lib/ephemera/jail`), which must be on the same filesystem as the
+image. `--jail=false` turns this off for development. The host reaches the guest agent over vsock, so the VM
 needs no network to run commands or serve forwarded ports.
 
 The microVM tests use the same image:
@@ -122,6 +128,9 @@ The microVM tests use the same image:
 ```sh
 EPHEMERA_GUEST_IMAGE=/var/lib/ephemera/image go test ./internal/sandbox/firecracker/ ./internal/e2e/
 ```
+
+Run them as root, with `EPHEMERA_JAILED=1` for the end-to-end tests, to
+test with the jailer.
 
 ## Development
 

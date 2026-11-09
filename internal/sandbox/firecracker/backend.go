@@ -36,9 +36,63 @@ type Backend struct {
 	DefaultCPUs     int
 	DefaultMemoryMB int
 
-	mu  sync.Mutex
-	vms map[string]*VM
+	// Jailed runs every VM under Firecracker's jailer, each as a user ID
+	// of its own in a chroot with cgroup limits. Needs root; production
+	// hosts always run jailed.
+	Jailed bool
+	// ChrootBase holds the jails. It must be on the same filesystem as
+	// ImageDir, so the image can be hard-linked in. Default
+	// /var/lib/ephemera/jail.
+	ChrootBase string
+	// UIDBase is the first user ID handed to VMs; each VM gets its own
+	// from UIDBase to UIDBase+65535. Default 300000.
+	UIDBase int
+
+	mu   sync.Mutex
+	vms  map[string]*VM
+	uids map[int]bool
+	next int
 }
+
+const cgroupParent = "ephemera"
+
+func (b *Backend) chrootBase() string {
+	if b.ChrootBase != "" {
+		return b.ChrootBase
+	}
+	return "/var/lib/ephemera/jail"
+}
+
+// allocUID returns a user ID no running VM has.
+func (b *Backend) allocUID() (int, error) {
+	base := b.UIDBase
+	if base == 0 {
+		base = 300000
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.uids == nil {
+		b.uids = map[int]bool{}
+	}
+	for i := 0; i < 65536; i++ {
+		uid := base + (b.next+i)%65536
+		if !b.uids[uid] {
+			b.uids[uid] = true
+			b.next = (b.next + i + 1) % 65536
+			return uid, nil
+		}
+	}
+	return 0, errors.New("no free user IDs for VMs")
+}
+
+func (b *Backend) freeUID(uid int) {
+	b.mu.Lock()
+	delete(b.uids, uid)
+	b.mu.Unlock()
+}
+
+// jailID turns a sandbox id into one the jailer accepts.
+func jailID(id string) string { return strings.ReplaceAll(id, "_", "-") }
 
 var _ sandbox.Backend = (*Backend)(nil)
 
@@ -84,15 +138,27 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 	if spec.MemoryMB > 0 {
 		mem = spec.MemoryMB
 	}
-	vm, err := Boot(ctx, VMConfig{
+	cfg := VMConfig{
 		Dir:      dir,
 		Kernel:   filepath.Join(b.ImageDir, "vmlinux"),
 		RootFS:   filepath.Join(b.ImageDir, "rootfs.ext4"),
 		Scratch:  scratch,
 		CPUs:     cpus,
 		MemoryMB: mem,
-	})
+	}
+	if b.Jailed {
+		uid, err := b.allocUID()
+		if err != nil {
+			os.RemoveAll(dir)
+			return err
+		}
+		cfg.Jail = &Jail{ChrootBase: b.chrootBase(), ID: jailID(id), UID: uid, GID: uid, CgroupParent: cgroupParent}
+	}
+	vm, err := Boot(ctx, cfg)
 	if err != nil {
+		if cfg.Jail != nil {
+			b.freeUID(cfg.Jail.UID)
+		}
 		os.RemoveAll(dir)
 		return err
 	}
@@ -218,7 +284,7 @@ func (b *Backend) Dial(ctx context.Context, id string, port int) (net.Conn, erro
 	if err != nil {
 		return nil, err
 	}
-	conn, err := DialGuest(ctx, vm.cfg.vsockPath(), guest.Port)
+	conn, err := DialGuest(ctx, vm.vsock, guest.Port)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +334,10 @@ func (b *Backend) Destroy(ctx context.Context, id string) error {
 		if err := vm.Kill(); err != nil {
 			return err
 		}
+		vm.Cleanup()
+		if vm.cfg.Jail != nil {
+			b.freeUID(vm.cfg.Jail.UID)
+		}
 	}
 	return os.RemoveAll(b.dir(id))
 }
@@ -299,6 +369,19 @@ func (b *Backend) Cleanup() (int, error) {
 			continue
 		}
 		n++
+	}
+	if b.Jailed {
+		// Jails and cgroups of VMs that are gone.
+		jails, _ := filepath.Glob(filepath.Join(b.chrootBase(), "*", "*"))
+		for _, j := range jails {
+			os.RemoveAll(j)
+		}
+		groups, _ := filepath.Glob(filepath.Join("/sys/fs/cgroup", cgroupParent, "*"))
+		for _, g := range groups {
+			if fi, err := os.Stat(g); err == nil && fi.IsDir() {
+				os.Remove(g)
+			}
+		}
 	}
 	return n, errors.Join(errs...)
 }
