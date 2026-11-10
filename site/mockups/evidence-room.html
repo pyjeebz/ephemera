@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ephemera · Evidence room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;700;800&family=Courier+Prime:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: an evidence table. A cutting-mat grid under everything; the hero object is a sealed evidence bag with a custody tag you can tamper with. */
+:root {
+  color-scheme: light;
+  --ground: #EFF0EC;      /* lab table */
+  --grid: #DFE1DA;
+  --ink: #131516;
+  --ink-muted: #565B58;
+  --kraft: #C9A97A;       /* evidence bag */
+  --kraft-deep: #B08F60;
+  --manila: #EEE0B4;      /* custody tag */
+  --tape: #C41E1A;        /* tamper tape */
+  --paper: #FBFBF8;
+  --font-head: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-type: "Courier Prime", "Courier New", monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+* { box-sizing: border-box; }
+html, body { overflow-x: clip; }
+body { margin: 0; color: var(--ink); font-family: var(--font-head); font-size: 17px; line-height: 1.55; }
+body { background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 32px 32px; background-color: var(--ground); }
+.wrap { max-width: 1160px; margin: 0 auto; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+
+nav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 22px; }
+.word { font-weight: 800; font-size: 24px; letter-spacing: -0.03em; text-decoration: none; }
+.word small { font: 500 11px/1 var(--font-mono); letter-spacing: .1em; color: var(--ink-muted); margin-left: 8px; vertical-align: 4px; }
+.links { display: flex; gap: 26px; font-size: 15px; }
+.links a { text-decoration: none; color: var(--ink-muted); }
+.links a:hover { color: var(--ink); }
+.btn { display: inline-flex; align-items: center; gap: 8px; font: 600 15px/1 var(--font-head); padding: 12px 18px; border-radius: 2px; border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); text-decoration: none; cursor: pointer; transition: transform 160ms var(--ease-out); }
+.btn:active { transform: scale(0.97); }
+.btn-solid { background: var(--ink); color: var(--paper); }
+
+.hero .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; padding-block: 48px 80px; }
+.case { font: 500 12px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--tape); }
+h1 { font-weight: 800; font-size: clamp(46px, 6.4vw, 82px); line-height: 0.98; letter-spacing: -0.045em; margin: 16px 0 22px; text-wrap: balance; }
+.lede { font-size: 19px; max-width: 32em; color: var(--ink-muted); margin: 0 0 30px; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 520px; padding: 12px 14px; background: var(--paper); border: 1.5px solid var(--ink); border-radius: 2px; font: 400 14px/1.4 var(--font-mono); }
+.cmd code { min-width: 0; overflow-x: auto; white-space: nowrap; }
+.cmd button { font: 500 12px/1 var(--font-mono); border: 0; background: none; color: var(--ink-muted); cursor: pointer; }
+.agent { margin-top: 12px; font-size: 14px; color: var(--ink-muted); }
+
+.hero .wrap > * { min-width: 0; }
+/* Evidence bag */
+.bench { position: relative; padding: 18px 0 30px; }
+.bag { position: relative; background: var(--kraft); border-radius: 4px; padding: 76px 26px 26px; box-shadow: inset 0 0 0 1px var(--kraft-deep); transform: rotate(-1.5deg); }
+.bag::before { content: "EVIDENCE"; position: absolute; top: 64px; display: none; left: 26px; font: 700 13px/1 var(--font-mono); letter-spacing: .3em; color: rgba(19, 21, 22, .7); }
+.bag::after { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 10px; background: repeating-linear-gradient(90deg, var(--kraft-deep) 0 6px, transparent 6px 10px); border-radius: 4px 4px 0 0; }
+.window { background: rgba(251, 251, 248, .88); border: 1.5px solid rgba(19, 21, 22, .25); border-radius: 3px; padding: 18px 20px; font-family: var(--font-type); font-size: 14px; line-height: 1.65; }
+.window h4 { font: 700 15px/1.2 var(--font-type); margin: 0 0 8px; text-transform: uppercase; letter-spacing: .04em; }
+.log { margin: 0; padding: 0; list-style: none; }
+.log li { display: grid; grid-template-columns: 74px 1fr; gap: 10px; font-variant-numeric: tabular-nums; }
+.log time { color: rgba(19, 21, 22, .6); }
+.log .bad { color: var(--tape); }
+.edit { background: transparent; transition: background-color 200ms ease; }
+.tampered .edit { background: #FFE58A; }
+.tape { position: absolute; left: -18px; right: -18px; top: 26px; transform: rotate(-2deg); background: var(--tape); color: #FFF; font: 700 13px/1 var(--font-mono); letter-spacing: .16em; text-transform: uppercase; padding: 9px 0; white-space: nowrap; overflow: hidden; text-align: center; box-shadow: 0 1px 0 rgba(0,0,0,.15); }
+.tape span { display: inline-block; }
+.tampered .tape { background: repeating-linear-gradient(90deg, var(--tape) 0 22px, #8C1411 22px 26px); }
+.tag { position: absolute; right: -14px; bottom: -78px; width: 204px; z-index: 2; background: var(--manila); border-radius: 3px 3px 3px 3px; padding: 16px 14px 14px; transform: rotate(5deg); font-family: var(--font-type); font-size: 12.5px; line-height: 1.5; box-shadow: 0 1px 0 rgba(19,21,22,.18); }
+.tag::before { content: ""; position: absolute; left: 12px; top: 10px; width: 10px; height: 10px; border-radius: 50%; background: var(--ground); box-shadow: inset 0 0 0 2px rgba(19,21,22,.25); }
+.tag b { display: block; font: 700 11px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; margin: 0 0 8px 18px; }
+.seal { margin-top: 10px; font: 700 12px/1.3 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; padding: 6px 8px; border: 2px solid #1E6A43; color: #1E6A43; display: inline-block; transform: rotate(-3deg); }
+.tampered .seal { border-color: var(--tape); color: var(--tape); }
+.tamper { margin-top: 30px; max-width: calc(100% - 220px); display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 14px; color: var(--ink-muted); }
+.mayfly { position: absolute; right: 22px; top: -15px; width: 30px; height: 18px; color: var(--ink); opacity: .7; cursor: help; transform: rotate(3deg); }
+.mayfly .wing { transform-origin: 21px 15px; transform-box: view-box; }
+@media (hover: hover) and (pointer: fine) { .mayfly:hover .wing { animation: flutter 120ms ease-in-out 6 alternate; } }
+@keyframes flutter { to { transform: rotate(-16deg); } }
+
+/* Exhibits */
+.exhibits { background: var(--paper); border-block: 1.5px solid var(--ink); }
+.exhibits .wrap { display: grid; grid-template-columns: repeat(4, 1fr); }
+.exhibits div { padding: 20px 18px 18px; border-left: 1.5px solid var(--grid); min-width: 0; }
+.exhibits div:first-child { border-left: 0; padding-left: 0; }
+.exhibits small { font: 500 11px/1 var(--font-mono); letter-spacing: .14em; color: var(--tape); text-transform: uppercase; }
+.exhibits b { display: block; font: 800 38px/1.1 var(--font-head); letter-spacing: -0.03em; margin: 8px 0 2px; font-variant-numeric: tabular-nums; }
+.exhibits span { font-size: 14px; color: var(--ink-muted); }
+
+.pillars .wrap { padding-block: 80px 96px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+.pillar { background: var(--paper); border: 1.5px solid var(--ink); border-radius: 2px; padding: 22px; }
+.pillar .label { display: inline-block; font: 700 11px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; background: var(--manila); padding: 6px 8px; }
+.pillar h3 { font-size: 24px; letter-spacing: -0.02em; line-height: 1.15; margin: 16px 0 10px; }
+.pillar p { margin: 0; font-size: 15.5px; color: var(--ink-muted); }
+.pillar code { font-family: var(--font-mono); font-size: 13px; color: var(--ink); }
+footer { font: 400 12px/1.5 var(--font-mono); color: var(--ink-muted); padding-block: 0 40px; }
+
+@media (max-width: 860px) {
+  .hero .wrap { grid-template-columns: 1fr; gap: 64px; padding-block: 28px 56px; }
+  .links { display: none; }
+  .tag { position: relative; right: auto; bottom: auto; margin: 18px 0 0 auto; transform: rotate(2deg); }
+  .tamper { max-width: none; }
+  .exhibits .wrap { grid-template-columns: repeat(2, 1fr); }
+  .exhibits div:nth-child(3) { border-left: 0; padding-left: 0; }
+  .pillars .wrap { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .mayfly .wing { animation: none !important; } }
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="word" href="#">ephemera<small>case file</small></a>
+  <div class="links"><a href="#">Docs</a><a href="#">Self-host</a><a href="#">GitHub</a></div>
+  <a class="btn btn-solid" href="#">Get started</a>
+</div></nav>
+
+<section class="hero"><div class="wrap">
+  <div>
+    <div class="case">Case SBX-23FC6DF1 · sealed</div>
+    <h1>Every sandbox leaves evidence.</h1>
+    <p class="lede">ephemera runs your dev servers, tests and coding agents in microVMs that start in 65&nbsp;ms and are deleted when they finish. Outbound traffic is blocked unless you allow it, and the host signs a record of everything that happened.</p>
+    <div class="cta"><a class="btn btn-solid" href="#">Get started</a><a class="btn" href="#">Read how it works</a></div>
+    <div class="cmd"><code>go install github.com/pyjeebz/ephemera/cmd/ephemera@latest</code><button type="button" class="copy" data-copy="go install github.com/pyjeebz/ephemera/cmd/ephemera@latest">Copy</button></div>
+    <div class="agent">Using a coding agent? <a href="#">Copy the setup prompt</a></div>
+  </div>
+
+  <div class="bench" id="bench">
+    <div class="bag">
+      <div class="tag">
+        <b>Custody tag</b>
+        Case&nbsp;&nbsp;&nbsp;SBX-23FC6DF1<br>
+        Item&nbsp;&nbsp;&nbsp;signed record<br>
+        Host&nbsp;&nbsp;&nbsp;host-1<br>
+        Sealed 19:58:15 UTC<br>
+        <span class="seal" id="seal">✓ Signature valid</span>
+        <svg class="mayfly" viewBox="0 0 48 28" role="img" aria-label="A mayfly"><title>A mayfly. It lives for about a day.</title>
+      <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.3">
+        <path d="M9 19 C15 17.5 23 16.5 31 17"/><path d="M9 19 C6 20 3.5 22.5 1.5 26"/><path d="M9 19 C7 21.5 6 24.5 5.5 27.5"/>
+        <path d="M24 17.4 L22.5 22"/><path d="M28 17.2 L29 21.5"/><path d="M31 17 L33.5 14.5"/>
+        <path class="wing" d="M20 16.8 C18.5 10 21 3.5 26.5 1.5 C27.5 7 25.5 12.5 23 16.8 Z" fill="currentColor" fill-opacity=".14"/>
+      </g><circle cx="32" cy="16.6" r="1.7" fill="currentColor"/></svg>
+      </div>
+      <div class="window" aria-live="polite">
+        <h4>Chain of custody</h4>
+        <ol class="log">
+          <li><time>19:58:02</time><span>sandbox created (65 ms)</span></li>
+          <li><time>19:58:02</time><span>3 files synced from ~/my-app</span></li>
+          <li><time>19:58:03</time><span>ran <span class="edit" id="cmd">npm test</span> → exit <span class="edit" id="exit">0</span></span></li>
+          <li><time>19:58:04</time><span>registry.npmjs.org allowed</span></li>
+          <li><time>19:58:09</time><span class="bad">169.254.169.254 blocked</span></li>
+          <li><time>19:58:15</time><span>destroyed · disk deleted</span></li>
+        </ol>
+      </div>
+      <div class="tape" aria-hidden="true"><span id="tape">Sealed · Ed25519 · Do not alter · Sealed · Ed25519 · Do not alter · Sealed · Ed25519</span></div>
+    </div>
+    <div class="tamper"><button type="button" class="btn" id="tamperBtn">Change the exit code</button><span id="tamperNote">Try it: edit one character and the signature stops matching.</span></div>
+  </div>
+</div></section>
+
+<section class="exhibits"><div class="wrap">
+  <div><small>Exhibit A</small><b>65 ms</b><span>to start from a snapshot</span></div>
+  <div><small>Exhibit B</small><b>0.15 s</b><span>ephemera run, end to end</span></div>
+  <div><small>Exhibit C</small><b>60 MB</b><span>host memory per idle sandbox</span></div>
+  <div><small>Exhibit D</small><b>0</b><span>outbound hosts allowed by default</span></div>
+</div></section>
+
+<section class="pillars"><div class="wrap">
+  <article class="pillar"><span class="label">Short-lived</span><h3>Nothing stays at the scene</h3><p>The VM and its disk are deleted when the command ends. Every sandbox has a time limit, and <code>--timeout</code> stops a runaway command.</p></article>
+  <article class="pillar"><span class="label">Locked down</span><h3>No way out you didn't allow</h3><p>The VM has no network card. Its only route out is a proxy that allows the hosts you list and logs every attempt.</p></article>
+  <article class="pillar"><span class="label">Signed</span><h3>A record that holds up</h3><p>Commands, connections and the deleted disk, signed with the host's Ed25519 key. <code>ephemera verify</code> checks it.</p></article>
+</div></section>
+
+<footer><div class="wrap">Mockup B · Evidence room. Numbers are from the benchmarks on a nested Google Cloud VM.</div></footer>
+
+<script>
+(function () {
+  var bench = document.getElementById('bench'), btn = document.getElementById('tamperBtn');
+  var exit = document.getElementById('exit'), seal = document.getElementById('seal'), note = document.getElementById('tamperNote'), tape = document.getElementById('tape');
+  var tampered = false;
+  btn.addEventListener('click', function () {
+    tampered = !tampered;
+    bench.classList.toggle('tampered', tampered);
+    exit.textContent = tampered ? '1' : '0';
+    seal.textContent = tampered ? '✕ Signature does not match' : '✓ Signature valid';
+    tape.textContent = tampered ? 'Void · tampered · void · tampered · void · tampered · void · tampered' : 'Sealed · Ed25519 · Do not alter · Sealed · Ed25519 · Do not alter · Sealed · Ed25519';
+    btn.textContent = tampered ? 'Put it back' : 'Change the exit code';
+    note.textContent = tampered ? 'One character changed. ephemera verify would reject this record.' : 'Try it: edit one character and the signature stops matching.';
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      seal.animate([{ transform: 'rotate(-3deg) scale(1.25)', opacity: 0 }, { transform: 'rotate(-3deg) scale(1)', opacity: 1 }], { duration: 180, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
+    }
+  });
+  document.querySelectorAll('.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var done = function (ok) { b.textContent = ok ? 'Copied' : 'Select to copy'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+      try { navigator.clipboard.writeText(b.dataset.copy).then(function () { done(true); }, function () { done(false); }); } catch (e) { done(false); }
+    });
+  });
+})();
+</script>
+</body>
+</html>

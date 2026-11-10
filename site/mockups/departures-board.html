@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ephemera · Departures board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: an airport concourse. Wayfinding yellow for direction, a bright hall, and one dark split-flap board as the hero object. */
+:root {
+  color-scheme: light;
+  --ground: #F2F2EF;
+  --ink: #111316;
+  --ink-muted: #585C61;
+  --sign: #FFC629;        /* wayfinding yellow */
+  --board: #17191C;
+  --flap: #24272B;
+  --flap-ink: #F1F1EC;
+  --flap-yellow: #FFC629;
+  --flap-red: #FF7A6B;
+  --flap-green: #7CDBA4;
+  --font-sign: "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-flap: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--font-sign); font-size: 17px; line-height: 1.55; }
+.wrap { max-width: 1160px; margin: 0 auto; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+
+nav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 20px; }
+.word { display: inline-flex; align-items: center; gap: 10px; font-weight: 800; font-size: 24px; letter-spacing: -0.03em; text-decoration: none; }
+.word i { display: inline-grid; place-items: center; width: 26px; height: 26px; background: var(--sign); border-radius: 4px; font: 700 15px/1 var(--font-flap); font-style: normal; }
+.links { display: flex; gap: 26px; font-size: 15px; font-weight: 500; }
+.links a { text-decoration: none; color: var(--ink-muted); }
+.links a:hover { color: var(--ink); }
+.btn { display: inline-flex; align-items: center; gap: 10px; font: 700 15px/1 var(--font-sign); padding: 13px 18px; border-radius: 6px; border: 2px solid var(--ink); background: transparent; color: var(--ink); text-decoration: none; cursor: pointer; transition: transform 160ms var(--ease-out); }
+.btn:active { transform: scale(0.97); }
+.btn-sign { background: var(--sign); border-color: var(--sign); }
+.btn-sign::after { content: "→"; font-family: var(--font-flap); }
+
+.hero .wrap { padding-block: 44px 40px; display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 48px; align-items: end; }
+h1 { font-weight: 800; font-size: clamp(48px, 7vw, 92px); line-height: 0.95; letter-spacing: -0.05em; margin: 0; text-wrap: balance; }
+h1 mark { background: var(--sign); color: var(--ink); padding: 0 .08em; border-radius: 4px; }
+.side .lede { font-size: 18px; color: var(--ink-muted); margin: 0 0 22px; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: #fff; border: 2px solid var(--ink); border-radius: 6px; font: 500 13.5px/1.4 var(--font-flap); }
+.cmd code { min-width: 0; overflow-x: auto; white-space: nowrap; }
+.cmd button { font: 500 12px/1 var(--font-flap); border: 0; background: none; color: var(--ink-muted); cursor: pointer; }
+.agent { margin-top: 10px; font-size: 14px; color: var(--ink-muted); }
+
+.hero .wrap > * { min-width: 0; }
+.board-wrap .wrap { min-width: 0; }
+/* The board */
+.board-wrap { position: relative; padding-block: 18px 72px; }
+.board { position: relative; max-width: 100%; background: var(--board); border-radius: 10px; padding: 18px 20px 22px; overflow-x: auto; }
+.board-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; color: var(--flap-ink); font: 700 13px/1 var(--font-sign); letter-spacing: .14em; text-transform: uppercase; padding-bottom: 16px; }
+.board-head .dep { display: flex; gap: 12px; align-items: center; }
+.board-head .dep::before { content: "↗"; display: inline-grid; place-items: center; width: 28px; height: 28px; background: var(--sign); color: var(--ink); border-radius: 4px; font-size: 16px; letter-spacing: 0; }
+.board-head .clock { font-family: var(--font-flap); color: var(--flap-yellow); letter-spacing: .06em; }
+.grid { display: grid; grid-template-columns: repeat(5, max-content) minmax(18ch, 1fr); column-gap: 22px; row-gap: 9px; width: max-content; min-width: 100%; }
+.cols, .row { display: contents; }
+.cols span { color: #8D9198; font: 500 11px/1 var(--font-sign); letter-spacing: .14em; text-transform: uppercase; padding-bottom: 4px; }
+.cell { display: flex; gap: 2px; }
+.ch { display: inline-grid; place-items: center; width: 1.12em; height: 1.55em; background: var(--flap); color: var(--flap-ink); border-radius: 2px; font: 700 15px/1 var(--font-flap); position: relative; text-transform: uppercase; }
+.ch::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: rgba(0, 0, 0, .55); }
+.yellow .ch { color: var(--flap-yellow); } .red .ch { color: var(--flap-red); } .green .ch { color: var(--flap-green); }
+.remark { color: #A9ADB3; font: 500 13px/1.55em var(--font-flap); align-self: center; }
+.mayfly { position: absolute; top: 5px; right: 46px; width: 30px; height: 18px; color: var(--ink); opacity: .75; cursor: help; }
+.mayfly .wing { transform-origin: 21px 15px; transform-box: view-box; }
+@media (hover: hover) and (pointer: fine) { .mayfly:hover .wing { animation: flutter 120ms ease-in-out 6 alternate; } }
+@keyframes flutter { to { transform: rotate(-16deg); } }
+
+/* Signs */
+.signs .wrap { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding-block: 0 72px; }
+.sign { background: var(--ink); color: #fff; border-radius: 8px; padding: 18px 18px 16px; display: grid; gap: 6px; min-width: 0; }
+.sign b { font: 800 34px/1 var(--font-sign); letter-spacing: -0.03em; color: var(--sign); font-variant-numeric: tabular-nums; }
+.sign span { font-size: 14px; color: #C9CBCF; }
+.gates .wrap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; padding-block: 0 96px; }
+.gate { border-top: 4px solid var(--ink); padding-top: 16px; }
+.gate .g { display: inline-flex; gap: 8px; align-items: center; font: 700 13px/1 var(--font-sign); letter-spacing: .14em; text-transform: uppercase; }
+.gate .g i { font-style: normal; display: inline-grid; place-items: center; width: 24px; height: 24px; background: var(--sign); border-radius: 4px; font-family: var(--font-flap); letter-spacing: 0; }
+.gate h3 { font-size: 26px; line-height: 1.12; letter-spacing: -0.03em; margin: 14px 0 8px; }
+.gate p { margin: 0; color: var(--ink-muted); font-size: 15.5px; }
+.gate code { font-family: var(--font-flap); font-size: 13px; color: var(--ink); }
+footer { font: 500 12px/1.5 var(--font-flap); color: var(--ink-muted); padding-block: 0 40px; }
+
+@media (max-width: 860px) {
+  .hero .wrap { grid-template-columns: 1fr; gap: 28px; padding-block: 24px 28px; }
+  .links { display: none; }
+  .signs .wrap { grid-template-columns: repeat(2, 1fr); }
+  .gates .wrap { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .mayfly .wing { animation: none !important; } }
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="word" href="#"><i>e</i>ephemera</a>
+  <div class="links"><a href="#">Docs</a><a href="#">Self-host</a><a href="#">GitHub</a></div>
+  <a class="btn btn-sign" href="#">Get started</a>
+</div></nav>
+
+<section class="hero"><div class="wrap">
+  <h1>Every sandbox <mark>departs</mark> on time.</h1>
+  <div class="side">
+    <p class="lede">Run dev servers, tests and coding agents in microVMs that start in 65&nbsp;ms and are deleted when they finish. Outbound traffic is blocked unless you allow it. Each departure leaves a signed record.</p>
+    <div class="cta"><a class="btn btn-sign" href="#">Get started</a><a class="btn" href="#">How it works</a></div>
+    <div class="cmd"><code>go install github.com/pyjeebz/ephemera/cmd/ephemera@latest</code><button type="button" class="copy" data-copy="go install github.com/pyjeebz/ephemera/cmd/ephemera@latest">Copy</button></div>
+    <div class="agent">Using a coding agent? <a href="#">Copy the setup prompt</a></div>
+  </div>
+</div></section>
+
+<section class="board-wrap"><div class="wrap" style="position: relative;">
+  <svg class="mayfly" viewBox="0 0 48 28" role="img" aria-label="A mayfly"><title>A mayfly. It lives for about a day.</title>
+    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.3">
+      <path d="M9 19 C15 17.5 23 16.5 31 17"/><path d="M9 19 C6 20 3.5 22.5 1.5 26"/><path d="M9 19 C7 21.5 6 24.5 5.5 27.5"/>
+      <path d="M24 17.4 L22.5 22"/><path d="M28 17.2 L29 21.5"/><path d="M31 17 L33.5 14.5"/>
+      <path class="wing" d="M20 16.8 C18.5 10 21 3.5 26.5 1.5 C27.5 7 25.5 12.5 23 16.8 Z" fill="currentColor" fill-opacity=".14"/>
+    </g><circle cx="32" cy="16.6" r="1.7" fill="currentColor"/></svg>
+  <div class="board" role="table" aria-label="Sandboxes on host-1">
+    <div class="board-head"><span class="dep">Departures · host-1</span><span class="clock" id="clock">19:58:12 UTC</span></div>
+    <div class="grid" id="rows">
+    <div class="cols" role="row"><span role="columnheader">Time</span><span role="columnheader">Sandbox</span><span role="columnheader">Command</span><span role="columnheader">Gate</span><span role="columnheader">Status</span><span role="columnheader">Remarks</span></div>
+    </div>
+  </div>
+</div></section>
+
+<section class="signs"><div class="wrap">
+  <div class="sign"><b>65 ms</b><span>to start from a snapshot</span></div>
+  <div class="sign"><b>0.15 s</b><span>ephemera run, end to end</span></div>
+  <div class="sign"><b>60 MB</b><span>host memory per idle sandbox</span></div>
+  <div class="sign"><b>0</b><span>outbound hosts allowed by default</span></div>
+</div></section>
+
+<section class="gates"><div class="wrap">
+  <article class="gate"><span class="g"><i>A</i>Short-lived</span><h3>Everything departs</h3><p>Sandboxes are deleted when the command ends, and none outlives its time limit. <code>--timeout 10m</code> stops a runaway command.</p></article>
+  <article class="gate"><span class="g"><i>B</i>Locked down</span><h3>One exit, and it's checked</h3><p>The VM has no network card. Traffic leaves through a proxy that allows only the hosts you list and logs every attempt.</p></article>
+  <article class="gate"><span class="g"><i>C</i>Signed</span><h3>A record of every trip</h3><p>Commands, connections and the deleted disk, signed by the host. <code>ephemera verify</code> checks it.</p></article>
+</div></section>
+
+<footer><div class="wrap">Mockup C · Departures board. Numbers are from the benchmarks on a nested Google Cloud VM.</div></footer>
+
+<script>
+(function () {
+  // [time, sandbox, command, gate (port or -), status, tone, remark]
+  var rows = [
+    ['19:58:02', 'SBX 23FC', 'NPM TEST', '-', 'DEPARTED', '', 'Signed · 15 allowed'],
+    ['19:58:04', 'SBX 9A1E', 'PYTEST -Q', '-', 'RUNNING', 'green', 'Allow pypi.org'],
+    ['19:58:05', 'SBX 77B0', 'NPM RUN DEV', '3000', 'RUNNING', 'green', 'main.localhost:3000'],
+    ['19:58:06', 'SBX C3D2', 'CURL EVIL.EXAMPLE', '-', 'BLOCKED', 'red', 'Not on the allow list'],
+    ['19:58:09', 'SBX 51F8', 'CARGO TEST', '-', 'BOARDING', 'yellow', 'From snapshot · 65 ms']
+  ];
+  var widths = [8, 8, 17, 4, 8];
+  var CH = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:-. ';
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var host = document.getElementById('rows');
+  var cells = [];
+  function pad(s, n) { s = String(s); return (s + ' '.repeat(n)).slice(0, n); }
+  rows.forEach(function (r, ri) {
+    var row = document.createElement('div'); row.className = 'row'; row.setAttribute('role', 'row');
+    var label = r.slice(0, 5).join(', ') + ', ' + r[6];
+    row.setAttribute('aria-label', label);
+    widths.forEach(function (w, ci) {
+      var cell = document.createElement('div'); cell.className = 'cell' + (ci === 4 && r[5] ? ' ' + r[5] : ''); cell.setAttribute('aria-hidden', 'true');
+      var target = pad(r[ci], w), spans = [];
+      for (var i = 0; i < w; i++) { var s = document.createElement('span'); s.className = 'ch'; s.textContent = target[i]; cell.appendChild(s); spans.push(s); }
+      row.appendChild(cell); cells.push({ spans: spans, target: target, row: ri, col: ci, el: cell });
+    });
+    var rem = document.createElement('div'); rem.className = 'remark'; rem.textContent = r[6]; rem.setAttribute('aria-hidden', 'true');
+    row.appendChild(rem); host.appendChild(row);
+  });
+  function flipTo(c, text, delay) {
+    c.target = text;
+    c.spans.forEach(function (s, i) {
+      var goal = text[i], steps = 4 + Math.floor(Math.random() * 6), n = 0;
+      if (s.textContent === goal) return;
+      setTimeout(function tick() {
+        n++;
+        s.textContent = n >= steps ? goal : CH[Math.floor(Math.random() * CH.length)];
+        s.animate([{ transform: 'scaleY(0.6)' }, { transform: 'scaleY(1)' }], { duration: 70, easing: 'ease-out' });
+        if (n < steps) setTimeout(tick, 55);
+      }, delay + i * 18);
+    });
+  }
+  if (!reduce) {
+    cells.forEach(function (c) { c.spans.forEach(function (s) { s.textContent = ' '; }); flipTo(c, c.target, c.row * 160 + c.col * 60); });
+    // One sandbox finishes while you watch: RUNNING flips to DEPARTED, once.
+    setTimeout(function () {
+      var c = cells.filter(function (x) { return x.row === 1 && x.col === 4; })[0];
+      c.el.className = 'cell';
+      flipTo(c, pad('DEPARTED', 8), 0);
+      host.children[2].querySelector('.remark').textContent = 'Signed · exit 0';
+      document.getElementById('clock').textContent = '19:58:31 UTC';
+    }, 4200);
+  }
+  document.querySelectorAll('.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var done = function (ok) { b.textContent = ok ? 'Copied' : 'Select to copy'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+      try { navigator.clipboard.writeText(b.dataset.copy).then(function () { done(true); }, function () { done(false); }); } catch (e) { done(false); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
