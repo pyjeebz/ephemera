@@ -23,6 +23,9 @@ import (
 func limitedStack(t *testing.T, limits control.Limits) (*control.Server, *client.Client, *sandboxtest.Local, *fakeClock, func()) {
 	t.Helper()
 	clock := newClock()
+	// Daily limits count by UTC day: start at midday so the minutes these
+	// tests advance never cross midnight, whatever time they run.
+	clock.ns.Store(time.Date(2026, 3, 14, 12, 0, 0, 0, time.UTC).UnixNano())
 	cs := &control.Server{Tokens: control.StaticToken{Name: "agent", Token: userToken, Limits: limits},
 		HostSecret: hostSecret, Log: discardLog(), Now: clock.now,
 		StatePath: filepath.Join(t.TempDir(), "s.json")}
