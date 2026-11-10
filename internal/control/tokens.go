@@ -149,7 +149,18 @@ func (f *TokenFile) update(fn func([]TokenRecord) ([]TokenRecord, error)) error 
 	if err != nil {
 		return err
 	}
-	return writeJSONAtomic(f.Path, recs, 0o600)
+	if err := writeJSONAtomic(f.Path, recs, 0o600); err != nil {
+		return err
+	}
+	// Run as root ("sudo ephemera-server token create"), the files would
+	// belong to root and a server running as its own user could not read
+	// them. They belong to whoever owns the state directory.
+	for _, p := range []string{f.Path, f.Path + ".lock"} {
+		if err := matchDirOwner(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Create adds a token and returns its secret, which is shown only once.

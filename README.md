@@ -217,6 +217,18 @@ public IP once Tailscale works, and `--idle-shutdown 30` on a cloud test
 server to power it off after 30 idle minutes
 (`deploy/host/idle-shutdown.sh status` shows why it is awake).
 
+Then install ephemera as services:
+
+```sh
+sudo deploy/host/install.sh
+```
+
+It builds the binaries and the guest image, runs the central server and
+host agent under systemd on the machine's Tailscale address, and prints a
+first API token. [docs/self-hosting.md](docs/self-hosting.md) covers
+tokens, more hosts, upgrades and what lives where. The rest of this
+section is for running the parts by hand while developing.
+
 The microVM image is built on the host:
 
 ```sh
@@ -310,5 +322,7 @@ internal/snapcrypt    encryption of project snapshots at rest
 internal/stream       output framing (stdout, stderr, exit code)
 internal/worktree     which files to send, tar packing, upload checks
 deploy/guest          microVM image build
-deploy/host           host setup and idle shutdown scripts
+deploy/host           host setup, install and idle shutdown scripts
+deploy/systemd        systemd services for the central server and host agent
+docs                  self-hosting guide
 ```

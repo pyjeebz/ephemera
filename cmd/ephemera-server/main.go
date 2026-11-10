@@ -38,7 +38,7 @@ sandboxes (sandboxes.json). EPHEMERA_HOST_SECRET must be set for serve.
 
 func defaultStateDir() string {
 	if os.Geteuid() == 0 {
-		return "/var/lib/ephemera"
+		return "/var/lib/ephemera/server"
 	}
 	if dir, err := os.UserConfigDir(); err == nil {
 		return filepath.Join(dir, "ephemera", "server")

@@ -1,0 +1,23 @@
+# ephemera host agent: runs sandboxes as Firecracker microVMs. It runs as
+# root because the jailer gives every VM its own user, chroot and cgroup.
+# Stopping it destroys every sandbox on this host. Installed by
+# deploy/host/install.sh.
+[Unit]
+Description=ephemera host agent
+Documentation=https://github.com/pyjeebz/ephemera/blob/main/docs/self-hosting.md
+Wants=network-online.target
+After=network-online.target tailscaled.service ephemera-server.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/ephemera/ephemera.env
+ExecStart=/usr/local/bin/ephemera-host --backend firecracker --listen ${EPHEMERA_HOST_LISTEN} --url ${EPHEMERA_HOST_URL} --server ${EPHEMERA_SERVER_URL} --name ${EPHEMERA_HOST_NAME} $EPHEMERA_HOST_ARGS
+Restart=always
+RestartSec=5
+# Time to destroy every sandbox, then stop whatever is left.
+KillMode=mixed
+TimeoutStopSec=90
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

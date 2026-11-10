@@ -1,0 +1,43 @@
+# ephemera central server: places sandboxes on hosts and tracks them. It
+# never sees files, output or secrets, so it runs as its own unprivileged
+# user with a read-only view of the system. Installed by deploy/host/install.sh.
+[Unit]
+Description=ephemera central server
+Documentation=https://github.com/pyjeebz/ephemera/blob/main/docs/self-hosting.md
+Wants=network-online.target
+After=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/ephemera/ephemera.env
+ExecStart=/usr/local/bin/ephemera-server serve --listen ${EPHEMERA_SERVER_LISTEN} --state /var/lib/ephemera/server
+User=ephemera-server
+Group=ephemera-server
+StateDirectory=ephemera/server
+StateDirectoryMode=0700
+# The listen address may be a Tailscale address that comes up after boot.
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
