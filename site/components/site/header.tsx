@@ -1,0 +1,39 @@
+import Link from "next/link"
+
+import { Button } from "@/components/ui/button"
+import { CHANGELOG, DOCS, GITHUB, SECURITY, SELF_HOST } from "@/lib/site"
+import { GitHubMark, Mayfly } from "./icons"
+
+const NAV: [string, string][] = [
+  ["Docs", DOCS],
+  ["Self-host", SELF_HOST],
+  ["Security", SECURITY],
+  ["Changelog", CHANGELOG],
+]
+
+export function Header() {
+  return (
+    <header className="header">
+      <Link className="logo" href="/" aria-label="ephemera home">
+        <Mayfly />
+        <span>ephemera</span>
+      </Link>
+      <nav className="nav">
+        {NAV.map(([label, href]) => (
+          <a key={label} href={href}>
+            {label}
+          </a>
+        ))}
+      </nav>
+      <div className="actions">
+        <a className="link github" href={GITHUB}>
+          <GitHubMark />
+          GitHub
+        </a>
+        <Button asChild>
+          <a href="#get-started">Get started</a>
+        </Button>
+      </div>
+    </header>
+  )
+}
