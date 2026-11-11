@@ -46,10 +46,10 @@ sudo deploy/host/install.sh
 Install the CLI:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pyjeebz/ephemera/main/install.sh | sh
+curl -fsSL https://ephemera.run/install | sh
 ```
 
-On Windows, download the zip from the releases page, or use `go install github.com/pyjeebz/ephemera/cmd/ephemera@latest`.
+On Windows, download the zip from the releases page.
 
 Log in with the server address and token that `deploy/host/install.sh` printed:
 
