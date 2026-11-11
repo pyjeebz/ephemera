@@ -133,7 +133,7 @@ cmd_install() {
 		*) die "unknown option: $1" ;;
 		esac
 	done
-	[[ "$minutes" =~ ^[0-9]+$ ]] && [ "$minutes" -ge 5 ] || die "--minutes must be a number, at least 5"
+	{ [[ "$minutes" =~ ^[0-9]+$ ]] && [ "$minutes" -ge 5 ]; } || die "--minutes must be a number, at least 5"
 
 	# Running the installed copy again only changes the settings.
 	[ "$(realpath "$0")" = "$BIN" ] || install -m 0755 "$0" "$BIN"

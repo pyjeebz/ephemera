@@ -27,6 +27,24 @@ Only files git would track are sent: tracked files and untracked files that
 are not ignored. Ignored files such as `.env.local` stay on your machine
 unless you pass `--include`.
 
+## Install the CLI
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/pyjeebz/ephemera/main/install.sh | sh
+```
+
+It downloads the latest release for your OS and CPU (Linux or macOS, x86_64
+or arm64), checks it against the release's `checksums.txt`, and installs
+`ephemera` into `/usr/local/bin`, or `~/.local/bin` if that isn't writable.
+`EPHEMERA_VERSION=v0.1.0` installs a specific release, and
+`EPHEMERA_INSTALL_DIR` picks the folder. On Windows, download the zip from
+the [releases page](https://github.com/pyjeebz/ephemera/releases). With Go
+installed, `go install github.com/pyjeebz/ephemera/cmd/ephemera@latest` works
+everywhere.
+
+Then connect it to a server: `ephemera login --server <URL>`. To run your own
+server and hosts, see [docs/self-hosting.md](docs/self-hosting.md).
+
 ## Try it locally
 
 Needs Go 1.24+ and Docker on Linux. The host agent runs as root, so it can
@@ -297,7 +315,24 @@ go test -race ./...
 ```
 
 The end-to-end tests in `internal/e2e` run against Docker when it is
-available and skip that part otherwise.
+available and skip that part otherwise. CI runs the same checks, plus
+shellcheck and a release build, on every push to `main`.
+
+### Releasing
+
+Push an annotated tag whose message, after its first line, holds the release
+notes:
+
+```sh
+git tag -a v0.1.0 -F notes.md
+git push origin v0.1.0
+```
+
+The release workflow tests the tag, builds the archives with
+`deploy/release/build.sh` (the CLI for Linux, macOS and Windows, and the
+server, host agent and guest agent for Linux x86_64), and publishes them
+with `checksums.txt` and `install.sh` on a GitHub release. A tag with a
+suffix, such as `v0.2.0-rc.1`, is published as a pre-release.
 
 ## Layout
 
@@ -323,6 +358,8 @@ internal/stream       output framing (stdout, stderr, exit code)
 internal/worktree     which files to send, tar packing, upload checks
 deploy/guest          microVM image build
 deploy/host           host setup, install and idle shutdown scripts
+deploy/release        release build
 deploy/systemd        systemd services for the central server and host agent
 docs                  self-hosting guide
+install.sh            CLI install script
 ```

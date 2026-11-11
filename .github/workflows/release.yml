@@ -1,0 +1,39 @@
+name: release
+
+# Pushing a tag vX.Y.Z publishes a release. The annotated tag's message,
+# after its first line, becomes the release notes.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Test
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test -race ./...
+      - name: Build
+        run: deploy/release/build.sh "$GITHUB_REF_NAME" dist
+      - name: Notes
+        run: |
+          git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents:body)' > notes.md
+          test -s notes.md || { echo "the tag has no notes: tag with git tag -a $GITHUB_REF_NAME -F notes.md"; exit 1; }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag $pre

@@ -33,7 +33,7 @@ sudo deploy/host/install.sh
 
 `bootstrap.sh` prepares the machine. It checks KVM, then installs Firecracker and Go, creates an `ephemera` user, and joins Tailscale with SSH. On a server with a public IP, run it again with `--lock-public-ssh` once Tailscale works, so the machine accepts connections only over Tailscale.
 
-`install.sh` installs ephemera itself:
+`deploy/host/install.sh` installs ephemera itself:
 
 1. Builds `ephemera`, `ephemera-server` and `ephemera-host` into `/usr/local/bin`.
 2. Builds the guest image into `/var/lib/ephemera/image`. This takes a few minutes and needs network.
@@ -46,10 +46,12 @@ sudo deploy/host/install.sh
 Install the CLI:
 
 ```bash
-go install github.com/pyjeebz/ephemera/cmd/ephemera@latest
+curl -fsSL https://raw.githubusercontent.com/pyjeebz/ephemera/main/install.sh | sh
 ```
 
-Log in with the server address and token that `install.sh` printed:
+On Windows, download the zip from the releases page, or use `go install github.com/pyjeebz/ephemera/cmd/ephemera@latest`.
+
+Log in with the server address and token that `deploy/host/install.sh` printed:
 
 ```bash
 ephemera login --server http://100.64.0.1:7700
@@ -91,7 +93,7 @@ Delete the secret file afterwards; the installer has copied it into `/etc/epheme
 
 ## Settings
 
-`/etc/ephemera/ephemera.env` holds the addresses, the host name and the secret. To change them, run `install.sh` again with new options rather than editing the file. Useful options:
+`/etc/ephemera/ephemera.env` holds the addresses, the host name and the secret. To change them, run `deploy/host/install.sh` again with new options rather than editing the file. Useful options:
 
 - `--listen-ip IP`: serve on another private address instead of the Tailscale one.
 - `--name NAME`: the host's name in records and `ephemera ls`.

@@ -28,6 +28,7 @@ Usage:
   ephemera-server token limits <id-or-name> [--max-sandboxes N] [--max-minutes N] [--state DIR]
   ephemera-server token ls [--state DIR]
   ephemera-server token revoke <id-or-name> [--state DIR]
+  ephemera-server version
 
 Limits: --max-sandboxes caps sandboxes running at once, --max-minutes caps
 sandbox-minutes per UTC day. 0 means no limit.
@@ -50,7 +51,14 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// version is set at release time with -ldflags "-X main.version=vX.Y.Z".
+var version = "dev"
+
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version") {
+		fmt.Fprintln(stdout, "ephemera-server", version)
+		return 0
+	}
 	if len(args) > 0 && args[0] == "token" {
 		return tokenCmd(args[1:], stdout, stderr)
 	}
@@ -103,7 +111,7 @@ func serve(args []string, stderr io.Writer) int {
 		hs.Shutdown(sctx)
 	}()
 	go srv.Enforce(ctx, 15*time.Second)
-	log.Info("central server listening", "addr", *listen, "state", *state)
+	log.Info("central server listening", "addr", *listen, "state", *state, "version", version)
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("serve", "err", err)
 		return 1

@@ -61,7 +61,7 @@ done
 
 # shellcheck source=/dev/null
 . /etc/os-release
-[ "${ID:-}" = ubuntu ] && [ "${VERSION_ID:-}" = "24.04" ] ||
+{ [ "${ID:-}" = ubuntu ] && [ "${VERSION_ID:-}" = "24.04" ]; } ||
 	die "needs Ubuntu 24.04, found ${PRETTY_NAME:-unknown}"
 [ "$(uname -m)" = x86_64 ] || die "needs an x86_64 CPU, found $(uname -m)"
 

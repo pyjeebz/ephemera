@@ -23,6 +23,9 @@ import (
 	"github.com/pyjeebz/ephemera/internal/sandbox/firecracker"
 )
 
+// version is set at release time with -ldflags "-X main.version=vX.Y.Z".
+var version = "dev"
+
 func main() {
 	hostname, _ := os.Hostname()
 	var (
@@ -46,6 +49,10 @@ func main() {
 	)
 	if len(os.Args) > 1 && os.Args[1] == "bench" {
 		os.Exit(benchMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Println("ephemera-host", version)
+		return
 	}
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -91,7 +98,7 @@ func main() {
 		}
 	}()
 
-	log.Info("host agent listening", "addr", *listen, "backend", *backend)
+	log.Info("host agent listening", "addr", *listen, "backend", *backend, "version", version)
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("serve", "err", err)
 		os.Exit(1)
