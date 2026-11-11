@@ -363,3 +363,7 @@ deploy/systemd        systemd services for the central server and host agent
 docs                  self-hosting guide
 install.sh            CLI install script
 ```
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
