@@ -63,7 +63,8 @@ bin/ephemera run -- sh -c 'ls && uname -a'
 `ephemera login` checks the token and saves it, readable only by you, in
 your user config directory. `ephemera logout` removes it. The variables
 `EPHEMERA_SERVER` and `EPHEMERA_TOKEN` override the saved login, which is
-handy in CI.
+handy in CI. If a command can't reach the server or a host, `ephemera doctor`
+checks the login, the network, the token and the hosts, and says what to fix.
 
 The central server keeps its API tokens (stored only as hashes) and its list
 of running sandboxes in a state directory: `/var/lib/ephemera` as root,

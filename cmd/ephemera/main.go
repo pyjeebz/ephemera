@@ -43,6 +43,7 @@ Usage:
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
   ephemera logout
+  ephemera doctor [--json]          why the CLI can't reach the server or a host
   ephemera version
 
 Environment (overrides the saved login):
@@ -64,6 +65,11 @@ func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if args[0] == "doctor" {
+		// Before Resolve, so a broken saved login is reported once, by the
+		// login check.
+		return cmdDoctor(ctx, args[1:], stdout, stderr)
+	}
 
 	server, token, err := config.Resolve()
 	if err != nil {

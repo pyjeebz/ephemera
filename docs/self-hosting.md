@@ -63,6 +63,8 @@ Try it:
 ephemera run -- echo hello from a microVM
 ```
 
+If that fails, `ephemera doctor` says which step is broken (the login, the network, the token or a host) and how to fix it.
+
 ## Tokens and limits
 
 Make one token per person, laptop, agent or CI system, so each can be limited and revoked on its own:
