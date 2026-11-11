@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	ver "github.com/pyjeebz/ephemera/internal/version"
 	"io"
 	"os"
 	"os/signal"
@@ -95,7 +96,7 @@ func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "rm":
 		return cmdRm(ctx, c, args[1:], stderr)
 	case "version", "--version":
-		fmt.Fprintln(stdout, "ephemera", version)
+		fmt.Fprintln(stdout, "ephemera", ver.String(version))
 		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)

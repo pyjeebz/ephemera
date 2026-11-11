@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	ver "github.com/pyjeebz/ephemera/internal/version"
 	"log/slog"
 	"net/http"
 	"os"
@@ -51,7 +52,7 @@ func main() {
 		os.Exit(benchMain(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
-		fmt.Println("ephemera-host", version)
+		fmt.Println("ephemera-host", ver.String(version))
 		return
 	}
 	flag.Parse()
@@ -98,7 +99,7 @@ func main() {
 		}
 	}()
 
-	log.Info("host agent listening", "addr", *listen, "backend", *backend, "version", version)
+	log.Info("host agent listening", "addr", *listen, "backend", *backend, "version", ver.String(version))
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("serve", "err", err)
 		os.Exit(1)

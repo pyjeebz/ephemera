@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	ver "github.com/pyjeebz/ephemera/internal/version"
 	"io"
 	"log/slog"
 	"net/http"
@@ -56,7 +57,7 @@ var version = "dev"
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && (args[0] == "version" || args[0] == "--version") {
-		fmt.Fprintln(stdout, "ephemera-server", version)
+		fmt.Fprintln(stdout, "ephemera-server", ver.String(version))
 		return 0
 	}
 	if len(args) > 0 && args[0] == "token" {
@@ -111,7 +112,7 @@ func serve(args []string, stderr io.Writer) int {
 		hs.Shutdown(sctx)
 	}()
 	go srv.Enforce(ctx, 15*time.Second)
-	log.Info("central server listening", "addr", *listen, "state", *state, "version", version)
+	log.Info("central server listening", "addr", *listen, "state", *state, "version", ver.String(version))
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("serve", "err", err)
 		return 1

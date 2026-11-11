@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `go install github.com/pyjeebz/ephemera/cmd/ephemera@<version>` reported `ephemera dev`. It now reports the version installed.
+
 ## v0.1.0 (2026-11-11)
 
 The first release of ephemera: run dev servers, tests and coding agents in short-lived, locked-down Firecracker microVMs on your own hardware, while you keep editing on your laptop.
