@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -213,4 +214,31 @@ func TestDoctorFailures(t *testing.T) {
 			t.Fatalf("code %d, want 2", code)
 		}
 	})
+}
+
+// A server older than this CLI sends hosts without url or online.
+func TestDoctorOldServer(t *testing.T) {
+	for _, tc := range []struct {
+		age  time.Duration
+		want string
+	}{{time.Second, "hosts=ok"}, {time.Minute, "hosts=fail"}} {
+		old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/healthz":
+				w.Write([]byte("ok\n"))
+			case "/v1/whoami":
+				json.NewEncoder(w).Encode(api.WhoAmI{Name: "laptop"})
+			case "/v1/hosts":
+				fmt.Fprintf(w, `[{"name":"h1","last_seen":%q}]`, time.Now().Add(-tc.age).Format(time.RFC3339Nano))
+			}
+		}))
+		t.Setenv("EPHEMERA_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+		t.Setenv("EPHEMERA_SERVER", old.URL)
+		t.Setenv("EPHEMERA_TOKEN", "eph_good")
+		_, rep := runDoctorJSON(t)
+		old.Close()
+		if got := statuses(rep); !strings.HasSuffix(got, tc.want) {
+			t.Errorf("last seen %s ago: checks %s, want %s", tc.age, got, tc.want)
+		}
+	}
 }

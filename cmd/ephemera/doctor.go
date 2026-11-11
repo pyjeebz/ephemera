@@ -23,10 +23,14 @@ import (
 // a clear failure instead of a hang.
 const doctorTimeout = 5 * time.Second
 
+// hostTimeout matches control.HostTimeout: a host with no heartbeat for
+// this long gets no new sandboxes.
+const hostTimeout = 45 * time.Second
+
 // check is one line of the doctor's report.
 type check struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // ok, fail or skip
+	Status string `json:"status"` // ok, warn, fail or skip
 	Detail string `json:"detail"`
 	Fix    string `json:"fix,omitempty"`
 }
@@ -228,6 +232,11 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 	var out []check
 	reachable := false
 	for _, h := range hosts {
+		if h.URL == "" {
+			// A server older than this CLI sends neither url nor online, so
+			// judge by the last heartbeat on this machine's clock.
+			h.Online = time.Since(h.LastSeen) <= hostTimeout
+		}
 		if !h.Online {
 			ago := time.Since(h.LastSeen).Round(time.Second)
 			out = append(out, check{Name: "hosts", Status: "fail",
@@ -236,7 +245,6 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 			continue
 		}
 		if h.URL == "" {
-			// A server older than this CLI doesn't report host addresses.
 			reachable = true
 			out = append(out, check{Name: "hosts", Status: "ok", Detail: h.Name + " is online"})
 			continue
