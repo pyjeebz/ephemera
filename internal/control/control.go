@@ -567,8 +567,15 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) hostList(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	out := make([]api.Host, 0, len(s.hosts))
+	now := s.now()
 	for _, h := range s.hosts {
-		out = append(out, api.Host{Name: h.Name, PublicKey: h.PublicKey, LastSeen: h.lastSeen.UTC()})
+		out = append(out, api.Host{
+			Name:      h.Name,
+			PublicKey: h.PublicKey,
+			LastSeen:  h.lastSeen.UTC(),
+			URL:       h.URL,
+			Online:    now.Sub(h.lastSeen) <= HostTimeout,
+		})
 	}
 	s.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

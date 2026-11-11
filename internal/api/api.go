@@ -199,6 +199,10 @@ type Host struct {
 	Name      string    `json:"name"`
 	PublicKey string    `json:"public_key"`
 	LastSeen  time.Time `json:"last_seen"`
+	// URL is where the CLI reaches the host for files and commands.
+	URL string `json:"url"`
+	// Online is true while the host checks in often enough to get sandboxes.
+	Online bool `json:"online"`
 }
 
 // DeleteFilesRequest removes files from a sandbox's workspace, for files
