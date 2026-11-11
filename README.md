@@ -320,18 +320,19 @@ shellcheck and a release build, on every push to `main`.
 
 ### Releasing
 
-Push an annotated tag whose message, after its first line, holds the release
-notes:
+Add a `## vX.Y.Z` section to `CHANGELOG.md` with the release notes, then
+either push a tag:
 
 ```sh
-git tag -a v0.1.0 -F notes.md
-git push origin v0.1.0
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
-The release workflow tests the tag, builds the archives with
-`deploy/release/build.sh` (the CLI for Linux, macOS and Windows, and the
-server, host agent and guest agent for Linux x86_64), and publishes them
-with `checksums.txt` and `install.sh` on a GitHub release. A tag with a
+or run the release workflow by hand from the Actions tab with the version,
+which tags the commit it runs on. The workflow tests that commit, builds the
+archives with `deploy/release/build.sh` (the CLI for Linux, macOS and
+Windows, and the server, host agent and guest agent for Linux x86_64), and
+publishes them with `checksums.txt` and `install.sh` on a GitHub release,
+using the version's changelog section as its notes. A version with a
 suffix, such as `v0.2.0-rc.1`, is published as a pre-release.
 
 ## Layout
@@ -362,6 +363,7 @@ deploy/release        release build
 deploy/systemd        systemd services for the central server and host agent
 docs                  self-hosting guide
 install.sh            CLI install script
+CHANGELOG.md          release notes, one section per version
 ```
 
 ## License
