@@ -368,8 +368,6 @@ a.inline { color: var(--bone); text-decoration: underline; text-underline-offset
 .footer-cta p { font-size: 16px; line-height: 24px; color: var(--dim); }
 .footer-cta .buttons { padding-top: 4px; }
 .footer-cols { display: flex; gap: 72px; padding-top: 8px; }
-.small-print { padding: 0 96px 32px; font-size: 13px; line-height: 20px; color: var(--faint); }
-.small-print a { color: var(--dim); text-decoration: underline; text-underline-offset: 3px; }
 .footer-cols div { display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
 .footer-cols a { color: var(--dim); transition: color 150ms ease; }
 .label { font-family: var(--mono); font-size: 12px; color: var(--faint); }
@@ -405,7 +403,6 @@ a.inline { color: var(--bone); text-decoration: underline; text-underline-offset
   .ftext { max-width: none; }
   .footer-top { padding: 56px 20px 32px; flex-direction: column; gap: 40px; }
   .footer-cta h2 { font-size: 32px; line-height: 38px; }
-  .small-print { padding: 0 20px 24px; }
   }
 @media (max-width: 640px) {
   .hero { height: 760px; }

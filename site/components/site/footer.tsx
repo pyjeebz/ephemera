@@ -56,10 +56,6 @@ export function Footer() {
           ))}
         </div>
       </div>
-      <p className="small-print">
-        ephemera is open source. From the Greek ephēmeros: lasting a day. Benchmarks are from a nested Google Cloud VM; see the{" "}
-        <a href={BENCHMARKS}>Benchmarks</a> notes for how to rerun them.
-      </p>
       <div className="pit" id="pit" role="img" aria-label="ephemera, written in sand">
         <canvas id="pit-sand" aria-hidden="true" />
       </div>
