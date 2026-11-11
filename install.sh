@@ -67,13 +67,13 @@ main() {
 	case "$(uname -s)" in
 	Linux) os=linux ;;
 	Darwin) os=darwin ;;
-	MINGW* | MSYS* | CYGWIN*) die "on Windows, download ephemera_<version>_windows_amd64.zip from $RELEASES, or run: go install github.com/$REPO/cmd/ephemera@latest" ;;
-	*) die "no release for $(uname -s); build it with: go install github.com/$REPO/cmd/ephemera@latest" ;;
+	MINGW* | MSYS* | CYGWIN*) die "on Windows, download ephemera_<version>_windows_amd64.zip from $RELEASES" ;;
+	*) die "no release for $(uname -s); releases cover Linux, macOS and Windows: $RELEASES" ;;
 	esac
 	case "$(uname -m)" in
 	x86_64 | amd64) arch=amd64 ;;
 	aarch64 | arm64) arch=arm64 ;;
-	*) die "no release for $(uname -m) CPUs; build it with: go install github.com/$REPO/cmd/ephemera@latest" ;;
+	*) die "no release for $(uname -m) CPUs; releases cover x86_64 and arm64: $RELEASES" ;;
 	esac
 
 	version="${EPHEMERA_VERSION:-}"
