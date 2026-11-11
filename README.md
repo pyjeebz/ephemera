@@ -30,7 +30,7 @@ unless you pass `--include`.
 ## Install the CLI
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pyjeebz/ephemera/main/install.sh | sh
+curl -fsSL https://ephemera.run/install | sh
 ```
 
 It downloads the latest release for your OS and CPU (Linux or macOS, x86_64
@@ -38,9 +38,7 @@ or arm64), checks it against the release's `checksums.txt`, and installs
 `ephemera` into `/usr/local/bin`, or `~/.local/bin` if that isn't writable.
 `EPHEMERA_VERSION=v0.1.0` installs a specific release, and
 `EPHEMERA_INSTALL_DIR` picks the folder. On Windows, download the zip from
-the [releases page](https://github.com/pyjeebz/ephemera/releases). With Go
-installed, `go install github.com/pyjeebz/ephemera/cmd/ephemera@latest` works
-everywhere.
+the [releases page](https://github.com/pyjeebz/ephemera/releases).
 
 Then connect it to a server: `ephemera login --server <URL>`. To run your own
 server and hosts, see [docs/self-hosting.md](docs/self-hosting.md).
