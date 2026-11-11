@@ -190,6 +190,10 @@ func TestDevDocker(t *testing.T) {
 	if testing.Short() || !dockerAvailable() {
 		t.Skip("docker not available")
 	}
+	if os.Geteuid() != 0 {
+		// Port forwarding enters the container's network namespace.
+		t.Skip("the Docker backend forwards ports only as root")
+	}
 	const image = "alpine:3.20"
 	if err := ensureImage(image); err != nil {
 		t.Skip(err)
