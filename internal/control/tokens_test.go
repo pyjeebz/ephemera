@@ -14,7 +14,7 @@ func TestTokenFile(t *testing.T) {
 	if _, ok := tf.Check("eph_nothing"); ok {
 		t.Fatal("no tokens yet: Check succeeded")
 	}
-	rec, secret, err := tf.Create("laptop", Limits{})
+	rec, secret, err := tf.Create("laptop", "", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestTokenFile(t *testing.T) {
 	// A second process (here, a second TokenFile) adds a token; the
 	// running server picks it up without a restart.
 	other := &TokenFile{Path: path}
-	_, secret2, err := other.Create("ci", Limits{})
+	_, secret2, err := other.Create("ci", "", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,11 +64,11 @@ func TestTokenFile(t *testing.T) {
 
 func TestTokenNamesUniqueAndLimits(t *testing.T) {
 	tf := &TokenFile{Path: filepath.Join(t.TempDir(), "tokens.json")}
-	_, secret, err := tf.Create("agent", Limits{MaxSandboxes: 2})
+	_, secret, err := tf.Create("agent", "", Limits{MaxSandboxes: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := tf.Create("agent", Limits{}); err == nil {
+	if _, _, err := tf.Create("agent", "", Limits{}); err == nil {
 		t.Error("a second token with the same name was created")
 	}
 	if p, _ := tf.Check(secret); p.MaxSandboxes != 2 {

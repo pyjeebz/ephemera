@@ -83,6 +83,14 @@ sudo ephemera-server token revoke ci
 
 `--max-sandboxes` caps how many run at once, and `--max-minutes` caps sandbox-minutes per UTC day. `ephemera-server token limits <name>` changes them later. The server picks up changes without a restart.
 
+Every token belongs to an account, and a token only sees and destroys its own account's sandboxes. Tokens made without `--account` share the account `local`, which suits one person or a small team who trust each other. To keep people apart, give each their own account:
+
+```bash
+sudo ephemera-server token create sam-laptop --account sam
+```
+
+Hosts are shared by every account for now.
+
 ## Add another host
 
 On the new machine, run `bootstrap.sh` as above. Then copy the host secret over from the first machine; it is the `EPHEMERA_HOST_SECRET` line in `/etc/ephemera/ephemera.env`. Put it in a file only root can read, and point the installer at the central server:

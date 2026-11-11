@@ -25,7 +25,7 @@ const usage = `ephemera-server is ephemera's central server.
 
 Usage:
   ephemera-server [serve] [--listen ADDR] [--state DIR]
-  ephemera-server token create <name> [--max-sandboxes N] [--max-minutes N] [--state DIR]
+  ephemera-server token create <name> [--account NAME] [--max-sandboxes N] [--max-minutes N] [--state DIR]
   ephemera-server token limits <id-or-name> [--max-sandboxes N] [--max-minutes N] [--state DIR]
   ephemera-server token ls [--state DIR]
   ephemera-server token revoke <id-or-name> [--state DIR]
@@ -33,6 +33,9 @@ Usage:
 
 Limits: --max-sandboxes caps sandboxes running at once, --max-minutes caps
 sandbox-minutes per UTC day. 0 means no limit.
+
+Accounts: a token sees and destroys only its own account's sandboxes.
+Tokens made without --account share the account "local".
 
 The state directory holds API tokens (tokens.json) and the list of running
 sandboxes (sandboxes.json). EPHEMERA_HOST_SECRET must be set for serve.
@@ -132,6 +135,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	var limits control.Limits
 	fs.IntVar(&limits.MaxSandboxes, "max-sandboxes", 0, "sandboxes running at once (0: no limit)")
 	fs.IntVar(&limits.MaxMinutesPerDay, "max-minutes", 0, "sandbox-minutes per UTC day (0: no limit)")
+	account := fs.String("account", "", `account the token belongs to (create only; default "local")`)
 	// Allow the flag before or after the positional argument.
 	var pos []string
 	rest := args[1:]
@@ -149,7 +153,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 
 	switch {
 	case sub == "create" && len(pos) == 1:
-		rec, secret, err := tf.Create(pos[0], limits)
+		rec, secret, err := tf.Create(pos[0], *account, limits)
 		if err != nil {
 			fmt.Fprintln(stderr, "ephemera-server:", err)
 			return 1
@@ -164,7 +168,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tNAME\tCREATED\tMAX SANDBOXES\tMAX MINUTES/DAY")
+		fmt.Fprintln(tw, "ID\tNAME\tACCOUNT\tCREATED\tMAX SANDBOXES\tMAX MINUTES/DAY")
 		limit := func(n int) string {
 			if n == 0 {
 				return "-"
@@ -172,7 +176,11 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 			return fmt.Sprint(n)
 		}
 		for _, r := range recs {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ID, r.Name, r.Created.Format(time.RFC3339), limit(r.MaxSandboxes), limit(r.MaxMinutesPerDay))
+			acct := r.Account
+			if acct == "" {
+				acct = control.DefaultAccount
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, r.Name, acct, r.Created.Format(time.RFC3339), limit(r.MaxSandboxes), limit(r.MaxMinutesPerDay))
 		}
 		tw.Flush()
 		return 0

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,7 +27,27 @@ type Tokens interface {
 // Principal is a token's owner and the limits on what it may use.
 type Principal struct {
 	Name string
+	// Account is who the token belongs to. A token sees and destroys only
+	// its own account's sandboxes.
+	Account string
 	Limits
+}
+
+// DefaultAccount is the account of tokens made without one, which is every
+// token on a server with a single user.
+const DefaultAccount = "local"
+
+var accountName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,38}$`)
+
+// ValidAccount reports whether name can be an account: lowercase letters,
+// digits and dashes, at most 39 characters.
+func ValidAccount(name string) bool { return accountName.MatchString(name) }
+
+func accountOr(a string) string {
+	if a == "" {
+		return DefaultAccount
+	}
+	return a
 }
 
 // Limits cap what one token may use. Zero means no limit.
@@ -37,13 +58,13 @@ type Limits struct {
 
 // StaticToken accepts a single token, for tests.
 type StaticToken struct {
-	Name, Token string
+	Name, Token, Account string
 	Limits
 }
 
 func (s StaticToken) Check(token string) (Principal, bool) {
 	if s.Token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.Token)) == 1 {
-		return Principal{Name: s.Name, Limits: s.Limits}, true
+		return Principal{Name: s.Name, Account: accountOr(s.Account), Limits: s.Limits}, true
 	}
 	return Principal{}, false
 }
@@ -52,6 +73,7 @@ func (s StaticToken) Check(token string) (Principal, bool) {
 type TokenRecord struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
+	Account string    `json:"account,omitempty"` // empty is DefaultAccount
 	Hash    string    `json:"sha256"`
 	Created time.Time `json:"created"`
 	Limits
@@ -88,7 +110,7 @@ func (f *TokenFile) Check(token string) (Principal, bool) {
 	// The lookup is by hash, so the secret itself is never compared
 	// byte by byte.
 	rec, ok := f.byHash[hashToken(token)]
-	return Principal{Name: rec.Name, Limits: rec.Limits}, ok
+	return Principal{Name: rec.Name, Account: accountOr(rec.Account), Limits: rec.Limits}, ok
 }
 
 func (f *TokenFile) reloadLocked() error {
@@ -163,12 +185,20 @@ func (f *TokenFile) update(fn func([]TokenRecord) ([]TokenRecord, error)) error 
 	return nil
 }
 
-// Create adds a token and returns its secret, which is shown only once.
-// Names are unique: usage and limits are counted by name.
-func (f *TokenFile) Create(name string, limits Limits) (TokenRecord, string, error) {
+// Create adds a token to an account (empty for DefaultAccount) and returns
+// its secret, which is shown only once. Names are unique across accounts:
+// usage and limits are counted by name.
+func (f *TokenFile) Create(name, account string, limits Limits) (TokenRecord, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return TokenRecord{}, "", errors.New("a token needs a name")
+	}
+	account = accountOr(account)
+	if !ValidAccount(account) {
+		return TokenRecord{}, "", fmt.Errorf("account %q: use lowercase letters, digits and dashes, at most 39", account)
+	}
+	if account == DefaultAccount {
+		account = "" // keep files written before accounts unchanged
 	}
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -180,7 +210,7 @@ func (f *TokenFile) Create(name string, limits Limits) (TokenRecord, string, err
 	if limits.MaxSandboxes < 0 || limits.MaxMinutesPerDay < 0 {
 		return TokenRecord{}, "", errors.New("limits cannot be negative")
 	}
-	rec := TokenRecord{ID: "tok_" + hex.EncodeToString(idb), Name: name, Hash: hashToken(secret), Created: time.Now().UTC(), Limits: limits}
+	rec := TokenRecord{ID: "tok_" + hex.EncodeToString(idb), Name: name, Account: account, Hash: hashToken(secret), Created: time.Now().UTC(), Limits: limits}
 	err := f.update(func(recs []TokenRecord) ([]TokenRecord, error) {
 		for _, r := range recs {
 			if r.Name == name {

@@ -95,7 +95,8 @@ type Sandbox struct {
 	Token     string    `json:"token,omitempty"`
 	Spec      Spec      `json:"spec"`
 	CreatedAt time.Time `json:"created_at"`
-	Owner     string    `json:"owner,omitempty"` // the token's name
+	Owner     string    `json:"owner,omitempty"`   // the token's name
+	Account   string    `json:"account,omitempty"` // the token's account
 }
 
 // Usage is what one token has used today (UTC) and its limits; a zero
@@ -236,7 +237,8 @@ type RegisterHostResponse struct {
 
 // WhoAmI describes the caller's token.
 type WhoAmI struct {
-	Name string `json:"name"`
+	Name    string `json:"name"`
+	Account string `json:"account,omitempty"`
 }
 
 // Error is the body of every non-2xx JSON response.

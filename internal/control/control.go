@@ -85,6 +85,7 @@ func (s *Server) Load() error {
 	for i := range st.Sandboxes {
 		sb := st.Sandboxes[i]
 		sb.Token = ""
+		sb.Account = accountOr(sb.Account) // saved before accounts existed
 		s.sandboxes[sb.ID] = &sb
 	}
 	return nil
@@ -201,7 +202,8 @@ func principal(r *http.Request) Principal {
 }
 
 func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, api.WhoAmI{Name: principal(r).Name})
+	p := principal(r)
+	writeJSON(w, http.StatusOK, api.WhoAmI{Name: p.Name, Account: p.Account})
 }
 
 const dayFormat = "2006-01-02"
@@ -487,6 +489,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Spec:      req.Spec,
 		CreatedAt: s.now().UTC(),
 		Owner:     p.Name,
+		Account:   p.Account,
 	}
 	// Count it against the host before the slow call, so concurrent
 	// creates spread out.
@@ -514,10 +517,15 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, sb)
 }
 
-func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
+// list returns the caller's account's sandboxes.
+func (s *Server) list(w http.ResponseWriter, r *http.Request) {
+	account := principal(r).Account
 	s.mu.Lock()
-	out := make([]api.Sandbox, 0, len(s.sandboxes))
+	out := []api.Sandbox{}
 	for _, sb := range s.sandboxes {
+		if sb.Account != account {
+			continue
+		}
 		c := *sb
 		c.Token = "" // tokens are only ever returned once
 		out = append(out, c)
@@ -532,7 +540,8 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	sb, ok := s.sandboxes[id]
 	s.mu.Unlock()
-	if !ok {
+	// Another account's sandbox is "not found" too, so ids can't be probed.
+	if !ok || sb.Account != principal(r).Account {
 		host.WriteError(w, http.StatusNotFound, "sandbox %s not found", id)
 		return
 	}
