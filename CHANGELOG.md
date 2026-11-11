@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Install the CLI with `curl -fsSL https://ephemera.run/install | sh`, which serves `install.sh` from the latest release. The docs no longer suggest `go install`.
+
 ### Fixed
 
 - `go install github.com/pyjeebz/ephemera/cmd/ephemera@<version>` reported `ephemera dev`. It now reports the version installed.
