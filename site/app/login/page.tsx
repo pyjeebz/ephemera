@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 
-import { SandBox } from "@/components/app/sand-box"
+import { TetrisDrop } from "@/components/app/tetris-drop"
 import { GitHubMark, Mayfly } from "@/components/site/icons"
 import { Button } from "@/components/ui/button"
 import { API } from "@/lib/sample"
@@ -12,13 +12,7 @@ export default function Login() {
   return (
     <main className="grid min-h-dvh grid-cols-1 md:grid-cols-2">
       <section aria-hidden className="relative hidden overflow-hidden border-r border-border md:block">
-        <span className="absolute left-8 top-7 font-mono text-xs text-faint">
-          sbx_6abe91d8 · <span className="text-sand">● pour</span>
-        </span>
-        <SandBox cell={8} mode="loop" className="absolute inset-0 h-full w-full" />
-        <p className="absolute inset-x-0 bottom-0 border-t border-border bg-background/90 px-8 py-4 font-mono text-xs text-muted-foreground">
-          Every sandbox fills, runs, and drains. Nothing is left in the box.
-        </p>
+        <TetrisDrop className="absolute inset-0 h-full w-full" />
       </section>
 
       <section className="flex items-center justify-center px-6 py-16">
