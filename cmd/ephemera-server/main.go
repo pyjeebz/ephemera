@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -43,6 +44,12 @@ sandboxes (sandboxes.json). With --database, or EPHEMERA_DATABASE_URL, they
 are kept in that Postgres database instead (postgres://...), along with a
 history of finished sandboxes; the token commands then use it too.
 EPHEMERA_HOST_SECRET must be set for serve.
+
+Web sign-in with GitHub needs the database and a GitHub OAuth app:
+  EPHEMERA_GITHUB_CLIENT_ID, EPHEMERA_GITHUB_CLIENT_SECRET
+  EPHEMERA_PUBLIC_URL      where browsers reach this server, e.g. https://api.example.com
+  EPHEMERA_DASHBOARD_URL   where people land after signing in
+The OAuth app's callback URL is EPHEMERA_PUBLIC_URL/auth/github/callback.
 `
 
 func defaultStateDir() string {
@@ -106,6 +113,10 @@ func serve(args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer closeStore()
+	if err := webSignIn(srv, *database); err != nil {
+		log.Error("web sign-in", "err", err)
+		return 2
+	}
 	if err := srv.Load(); err != nil {
 		log.Error("load state", "err", err)
 		return 1
@@ -134,6 +145,37 @@ func serve(args []string, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// webSignIn turns on GitHub sign-in when its settings are in the
+// environment. It needs Postgres, which keeps the sessions.
+func webSignIn(srv *control.Server, database string) error {
+	id := os.Getenv("EPHEMERA_GITHUB_CLIENT_ID")
+	if id == "" {
+		return nil
+	}
+	g := &control.GitHub{
+		ClientID:     id,
+		ClientSecret: os.Getenv("EPHEMERA_GITHUB_CLIENT_SECRET"),
+		PublicURL:    os.Getenv("EPHEMERA_PUBLIC_URL"),
+		DashboardURL: os.Getenv("EPHEMERA_DASHBOARD_URL"),
+	}
+	switch {
+	case database == "":
+		return errors.New("GitHub sign-in keeps sessions in Postgres; set EPHEMERA_DATABASE_URL too")
+	case g.ClientSecret == "":
+		return errors.New("EPHEMERA_GITHUB_CLIENT_SECRET is not set")
+	case !strings.HasPrefix(g.PublicURL, "https://") && !strings.HasPrefix(g.PublicURL, "http://"):
+		return errors.New("EPHEMERA_PUBLIC_URL must be this server's http(s) URL")
+	case !strings.HasPrefix(g.DashboardURL, "https://") && !strings.HasPrefix(g.DashboardURL, "http://"):
+		return errors.New("EPHEMERA_DASHBOARD_URL must be the dashboard's http(s) URL")
+	}
+	accounts, ok := srv.Tokens.(control.AccountStore)
+	if !ok {
+		return errors.New("this storage can't keep accounts")
+	}
+	srv.GitHub, srv.Accounts = g, accounts
+	return nil
 }
 
 // openStores returns where tokens are kept, and sets srv's Tokens and State

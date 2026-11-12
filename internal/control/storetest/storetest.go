@@ -177,3 +177,89 @@ func State(t *testing.T, open func(t *testing.T) control.StateStore) {
 		}
 	})
 }
+
+// Accounts checks an AccountStore. open returns a new, empty store.
+func Accounts(t *testing.T, open func(t *testing.T) control.AccountStore) {
+	ctx := context.Background()
+
+	t.Run("github accounts", func(t *testing.T) {
+		as := open(t)
+		a, err := as.UpsertGitHubAccount(ctx, control.GitHubUser{ID: 42, Login: "octo", Name: "Octo Cat", AvatarURL: "https://a/1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.ID != "gh-42" || a.Login != "octo" || a.Name != "Octo Cat" || a.AvatarURL != "https://a/1" {
+			t.Errorf("account = %+v", a)
+		}
+		// A renamed GitHub user keeps their account.
+		b, err := as.UpsertGitHubAccount(ctx, control.GitHubUser{ID: 42, Login: "octo-renamed"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.ID != "gh-42" || b.Login != "octo-renamed" || b.Name != "" {
+			t.Errorf("after rename, account = %+v", b)
+		}
+	})
+
+	t.Run("sessions", func(t *testing.T) {
+		as := open(t)
+		a, err := as.UpsertGitHubAccount(ctx, control.GitHubUser{ID: 7, Login: "seven"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret, err := as.CreateSession(ctx, a.ID, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(secret, control.SessionPrefix) {
+			t.Errorf("session secret %q lacks its prefix", secret)
+		}
+		if got, ok := as.CheckSession(ctx, secret); !ok || got.ID != a.ID || got.Login != "seven" {
+			t.Errorf("CheckSession = %+v, %v", got, ok)
+		}
+		if _, ok := as.CheckSession(ctx, secret+"x"); ok {
+			t.Error("an altered session was accepted")
+		}
+		if err := as.DeleteSession(ctx, secret); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := as.CheckSession(ctx, secret); ok {
+			t.Error("a deleted session was accepted")
+		}
+		old, err := as.CreateSession(ctx, a.ID, -time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := as.CheckSession(ctx, old); ok {
+			t.Error("an expired session was accepted")
+		}
+	})
+
+	t.Run("each account's tokens", func(t *testing.T) {
+		as := open(t)
+		mine, _, err := as.CreateToken(ctx, "laptop", "gh-1", control.Limits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		theirs, _, err := as.CreateToken(ctx, "laptop", "gh-2", control.Limits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recs, err := as.AccountTokens(ctx, "gh-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(recs) != 1 || recs[0].ID != mine.ID {
+			t.Errorf("gh-1's tokens = %+v", recs)
+		}
+		if err := as.RevokeAccountToken(ctx, "gh-1", theirs.ID); err != control.ErrNotFound {
+			t.Errorf("revoking another account's token: %v, want ErrNotFound", err)
+		}
+		if err := as.RevokeAccountToken(ctx, "gh-1", mine.ID); err != nil {
+			t.Errorf("revoking its own token: %v", err)
+		}
+		if recs, _ := as.AccountTokens(ctx, "gh-2"); len(recs) != 1 {
+			t.Error("gh-1's revoke touched gh-2's token")
+		}
+	})
+}

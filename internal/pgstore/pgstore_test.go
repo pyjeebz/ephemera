@@ -2,6 +2,7 @@ package pgstore_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,7 @@ import (
 func TestStore(t *testing.T) {
 	storetest.Tokens(t, func(t *testing.T) control.TokenStore { s, _ := pgtest.Open(t); return s })
 	storetest.State(t, func(t *testing.T) control.StateStore { s, _ := pgtest.Open(t); return s })
+	storetest.Accounts(t, func(t *testing.T) control.AccountStore { s, _ := pgtest.Open(t); return s })
 }
 
 // Opening a database again applies each migration once.
@@ -35,8 +37,9 @@ func TestOpenTwice(t *testing.T) {
 	if err := conn.QueryRow(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("%d migrations recorded, want 1", n)
+	files, _ := filepath.Glob("migrations/*.sql")
+	if n != len(files) {
+		t.Errorf("%d migrations recorded, want %d", n, len(files))
 	}
 }
 

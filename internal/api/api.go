@@ -263,3 +263,34 @@ func NewToken() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
+
+// Account is a person signed in on the web.
+type Account struct {
+	ID        string `json:"id"` // "gh-" and their GitHub user id
+	Login     string `json:"login"`
+	Name      string `json:"name,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+// Token is an API token as the dashboard shows it. The secret is shown
+// once, when it is made, and never again.
+type Token struct {
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Created          time.Time `json:"created"`
+	MaxSandboxes     int       `json:"max_sandboxes,omitempty"`
+	MaxMinutesPerDay int       `json:"max_minutes_per_day,omitempty"`
+}
+
+// CreateTokenRequest asks for a new API token in the caller's account.
+type CreateTokenRequest struct {
+	Name             string `json:"name"`
+	MaxSandboxes     int    `json:"max_sandboxes,omitempty"`
+	MaxMinutesPerDay int    `json:"max_minutes_per_day,omitempty"`
+}
+
+// CreatedToken is a new token with its secret.
+type CreatedToken struct {
+	Token
+	Secret string `json:"secret"`
+}

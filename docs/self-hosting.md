@@ -121,6 +121,21 @@ The server creates its tables on first start and updates them on upgrades. `ephe
 
 In Postgres, token names are unique within an account rather than across them. When two accounts have a token with the same name, revoke or change it by its id.
 
+### Sign in with GitHub
+
+With Postgres, people can also sign in with GitHub and make their own tokens, each in an account of their own. Make a GitHub OAuth app (GitHub, Settings, Developer settings, OAuth Apps) with the callback URL `https://<your server>/auth/github/callback`, then add to `/etc/ephemera/ephemera.env`:
+
+```bash
+EPHEMERA_GITHUB_CLIENT_ID=...
+EPHEMERA_GITHUB_CLIENT_SECRET=...
+EPHEMERA_PUBLIC_URL=https://ephemera.example.com
+EPHEMERA_DASHBOARD_URL=https://ephemera.example.com/dashboard
+```
+
+Sign-in asks GitHub only for `read:user`: the person's id, login, name and avatar, never their repositories. GitHub's access token is used once to read those and isn't kept. A GitHub user's account is `gh-` and their GitHub user id, so renaming their login changes nothing. Sessions last 30 days and live in an `HttpOnly` cookie; only a hash of each is stored. Requests that change something with a session must come from the dashboard's own site.
+
+The server has no HTTPS of its own yet, so put it behind a proxy that has it, and use `https://` in both URLs: browsers only send the session cookie over HTTPS.
+
 ## Upgrade
 
 Pull and run the installer again:

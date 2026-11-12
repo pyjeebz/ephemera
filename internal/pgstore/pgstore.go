@@ -156,18 +156,20 @@ func isUnique(err error) bool {
 
 // ListTokens implements control.TokenStore.
 func (s *Store) ListTokens(ctx context.Context) ([]control.TokenRecord, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, account_id, sha256, max_sandboxes, max_minutes_per_day, created_at
-		FROM tokens ORDER BY created_at, id`)
+	rows, err := s.pool.Query(ctx, `SELECT `+tokenColumns+` FROM tokens ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (control.TokenRecord, error) {
-		var t control.TokenRecord
-		err := r.Scan(&t.ID, &t.Name, &t.Account, &t.Hash, &t.MaxSandboxes, &t.MaxMinutesPerDay, &t.Created)
-		t.Created = t.Created.UTC()
-		return t, err
-	})
+	return pgx.CollectRows(rows, scanToken)
+}
+
+const tokenColumns = `id, name, account_id, sha256, max_sandboxes, max_minutes_per_day, created_at`
+
+func scanToken(r pgx.CollectableRow) (control.TokenRecord, error) {
+	var t control.TokenRecord
+	err := r.Scan(&t.ID, &t.Name, &t.Account, &t.Hash, &t.MaxSandboxes, &t.MaxMinutesPerDay, &t.Created)
+	t.Created = t.Created.UTC()
+	return t, err
 }
 
 // tokenID finds the token with this id, or the one token with this name.
@@ -289,4 +291,86 @@ func (s *Store) UsageSince(ctx context.Context, day string) ([]control.Usage, er
 		err := r.Scan(&u.Account, &u.Owner, &u.Day, &u.Seconds)
 		return u, err
 	})
+}
+
+var _ control.AccountStore = (*Store)(nil)
+
+// UpsertGitHubAccount implements control.AccountStore.
+func (s *Store) UpsertGitHubAccount(ctx context.Context, u control.GitHubUser) (api.Account, error) {
+	a := api.Account{ID: control.GitHubAccount(u.ID)}
+	var name, avatar *string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO accounts (id, github_id, login, name, avatar_url, last_seen_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), now())
+		ON CONFLICT (id) DO UPDATE SET login = EXCLUDED.login, name = EXCLUDED.name,
+			avatar_url = EXCLUDED.avatar_url, last_seen_at = now()
+		RETURNING login, name, avatar_url`,
+		a.ID, u.ID, u.Login, u.Name, u.AvatarURL).Scan(&a.Login, &name, &avatar)
+	if name != nil {
+		a.Name = *name
+	}
+	if avatar != nil {
+		a.AvatarURL = *avatar
+	}
+	return a, err
+}
+
+// CreateSession implements control.AccountStore. It also clears out
+// sessions that have expired.
+func (s *Store) CreateSession(ctx context.Context, accountID string, ttl time.Duration) (string, error) {
+	secret, err := control.NewSessionSecret()
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at < now()`); err != nil {
+		return "", err
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO sessions (sha256, account_id, expires_at) VALUES ($1, $2, $3)`,
+		control.HashToken(secret), accountID, time.Now().Add(ttl))
+	return secret, err
+}
+
+// CheckSession implements control.AccountStore.
+func (s *Store) CheckSession(ctx context.Context, secret string) (api.Account, bool) {
+	var a api.Account
+	var login, name, avatar *string
+	err := s.pool.QueryRow(ctx, `
+		SELECT a.id, a.login, a.name, a.avatar_url FROM sessions s JOIN accounts a ON a.id = s.account_id
+		WHERE s.sha256 = $1 AND s.expires_at > now()`, control.HashToken(secret)).Scan(&a.ID, &login, &name, &avatar)
+	for _, f := range []struct {
+		dst *string
+		src *string
+	}{{&a.Login, login}, {&a.Name, name}, {&a.AvatarURL, avatar}} {
+		if f.src != nil {
+			*f.dst = *f.src
+		}
+	}
+	return a, err == nil
+}
+
+// DeleteSession implements control.AccountStore.
+func (s *Store) DeleteSession(ctx context.Context, secret string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE sha256 = $1`, control.HashToken(secret))
+	return err
+}
+
+// AccountTokens implements control.AccountStore.
+func (s *Store) AccountTokens(ctx context.Context, accountID string) ([]control.TokenRecord, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+tokenColumns+` FROM tokens WHERE account_id = $1 ORDER BY created_at, id`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanToken)
+}
+
+// RevokeAccountToken implements control.AccountStore.
+func (s *Store) RevokeAccountToken(ctx context.Context, accountID, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM tokens WHERE id = $1 AND account_id = $2`, id, accountID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return control.ErrNotFound
+	}
+	return nil
 }

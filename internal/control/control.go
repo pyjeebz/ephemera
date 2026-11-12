@@ -36,9 +36,13 @@ type Server struct {
 	HostSecret string     // shared with every host
 	State      StateStore // where sandboxes and usage are kept
 	StatePath  string     // with no State: a FileState at this path; empty keeps it in memory
-	Client     *http.Client
-	Log        *slog.Logger
-	Now        func() time.Time
+	// GitHub and Accounts turn on web sign-in and the dashboard's token
+	// endpoints. Without both, those routes don't exist.
+	GitHub   *GitHub
+	Accounts AccountStore
+	Client   *http.Client
+	Log      *slog.Logger
+	Now      func() time.Time
 
 	stateOnce sync.Once
 	state     StateStore
@@ -152,7 +156,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes", s.user(s.create))
 	mux.HandleFunc("GET /v1/sandboxes", s.user(s.list))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.user(s.destroy))
-	return mux
+	if !s.webEnabled() {
+		return mux
+	}
+	s.webRoutes(mux)
+	return s.cors(mux)
 }
 
 func (s *Server) now() time.Time {
