@@ -29,7 +29,7 @@ export default function Device() {
         </p>
 
         <div className="mt-6 border border-border bg-background px-4 py-5 text-center">
-          <p className="font-mono text-[28px] font-semibold tracking-[0.18em] text-sand">SAND-7K2Q</p>
+          <p className="font-mono text-[28px] font-semibold tracking-[0.18em] text-sand">K7QM-2XRT</p>
           <p className="mt-1.5 text-xs text-muted-foreground">Check this matches the code in your terminal.</p>
         </div>
 
