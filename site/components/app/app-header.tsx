@@ -1,6 +1,6 @@
 import Link from "next/link"
 
-import { Mayfly } from "@/components/site/icons"
+import { PourMark } from "@/components/site/icons"
 import { ACCOUNT } from "@/lib/sample"
 import { cn } from "@/lib/utils"
 
@@ -15,10 +15,10 @@ function Logo() {
   return (
     <Link
       href="/"
-      className="flex items-center gap-2.5 text-[17px] font-bold tracking-tight text-foreground"
+      className="pour-host flex items-center gap-2.5 text-[17px] font-bold tracking-tight text-foreground"
       aria-label="ephemera home"
     >
-      <Mayfly />
+      <PourMark size={26} />
       <span className="hidden sm:inline">ephemera</span>
     </Link>
   )

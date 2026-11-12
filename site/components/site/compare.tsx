@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 
-import { Mayfly } from "./icons"
+import { PourMark } from "./icons"
 
 // [anchor word, detail]. The anchor leads every cell so the table still scans
 // if the detail is dropped for space.
@@ -45,7 +45,7 @@ export function Compare() {
               <th scope="col">Cloud dev box</th>
               <th scope="col" className="us">
                 <span className="us-mark">
-                  <Mayfly width={28} />
+                  <PourMark size={30} />
                 </span>
                 ephemera
               </th>

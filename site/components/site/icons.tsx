@@ -24,16 +24,24 @@ export function Brand({ name, size = 18, className }: { name: BrandIcon; size?: 
   )
 }
 
-// The pixel mayfly: ephemera's mark.
-const MAYFLY: [number, number, number][] = [
-  [11, 0, 1], [10, 1, 2], [9, 2, 3], [8, 3, 4], [7, 4, 5], [0, 5, 1], [6, 5, 6], [14, 5, 1],
-  [1, 6, 2], [4, 6, 10], [15, 6, 1], [3, 7, 11], [7, 8, 1], [10, 8, 1], [6, 9, 1], [11, 9, 1],
-]
+// ephemera's mark: one solid cube whose bottom runs out in steps, with
+// three grains falling below it, shrinking as they go. The cut is worked
+// out into the polygons, so the mark needs no clip path or ids. Inside an
+// element with the class pour-host, hovering makes the grains fall once
+// and refill (see globals.css).
+const POUR_TOP = "50,8 81.18,26 50,44 18.82,26"
+const POUR_LEFT = "18.82,26 18.82,60 36,60 36,66 43,66 43,72 50,72 50,44"
+const POUR_RIGHT = "81.18,26 81.18,60 64,60 64,66 57,66 57,72 50,72 50,44"
 
-export function Mayfly({ width = 32, className }: { width?: number; className?: string }) {
+export function PourMark({ size = 28, className }: { size?: number; className?: string }) {
   return (
-    <svg className={className} width={width} height={(width * 10) / 16} viewBox="0 0 16 10" fill="currentColor" shapeRendering="crispEdges" aria-hidden="true">
-      {MAYFLY.map(([x, y, w]) => <rect key={`${x}-${y}`} x={x} y={y} width={w} height={1} />)}
+    <svg className={className} width={(size * 72) / 96} height={size} viewBox="14 4 72 96" aria-hidden="true">
+      <polygon points={POUR_LEFT} fill="#B98A4D" />
+      <polygon points={POUR_RIGHT} fill="#8C6A3D" />
+      <polygon points={POUR_TOP} fill="#E6C287" />
+      <rect className="pour-grain" x={45} y={77} width={10} height={7} fill="#B98A4D" />
+      <rect className="pour-grain" x={46.5} y={88} width={7} height={5} fill="#8C6A3D" />
+      <rect className="pour-grain" x={48} y={96} width={4} height={3} fill="#8C6A3D" fillOpacity={0.6} />
     </svg>
   )
 }

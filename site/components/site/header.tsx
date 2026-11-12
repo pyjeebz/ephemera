@@ -2,7 +2,7 @@ import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
 import { CHANGELOG, DOCS, GITHUB, SECURITY, SELF_HOST } from "@/lib/site"
-import { GitHubMark, Mayfly } from "./icons"
+import { GitHubMark, PourMark } from "./icons"
 
 const NAV: [string, string][] = [
   ["Docs", DOCS],
@@ -14,8 +14,8 @@ const NAV: [string, string][] = [
 export function Header() {
   return (
     <header className="header">
-      <Link className="logo" href="/" aria-label="ephemera home">
-        <Mayfly />
+      <Link className="logo pour-host" href="/" aria-label="ephemera home">
+        <PourMark />
         <span>ephemera</span>
       </Link>
       <nav className="nav">

@@ -412,3 +412,22 @@ a.inline { color: var(--bone); text-decoration: underline; text-underline-offset
   .mono-list { white-space: pre-wrap; overflow-wrap: anywhere; }
   .buttons { flex-wrap: wrap; justify-content: center; }
 }
+
+/* The logo's grains fall once and refill, on hover or keyboard focus of
+   whatever holds it. The fall eases in like gravity; the refill eases out. */
+@keyframes pour-fall {
+  0% { transform: translateY(0); opacity: 1; animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45); }
+  52% { transform: translateY(16px); opacity: 0; }
+  53% { transform: translateY(-7px); opacity: 0; animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.pour-host:hover .pour-grain,
+.pour-host:focus-visible .pour-grain { animation: pour-fall 760ms both; }
+.pour-host:hover .pour-grain:nth-of-type(2),
+.pour-host:focus-visible .pour-grain:nth-of-type(2) { animation-delay: 70ms; }
+.pour-host:hover .pour-grain:nth-of-type(3),
+.pour-host:focus-visible .pour-grain:nth-of-type(3) { animation-delay: 140ms; }
+@media (prefers-reduced-motion: reduce) {
+  .pour-host:hover .pour-grain,
+  .pour-host:focus-visible .pour-grain { animation: none; }
+}

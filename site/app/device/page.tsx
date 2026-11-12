@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 
-import { Mayfly } from "@/components/site/icons"
+import { PourMark } from "@/components/site/icons"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = { title: "Approve the CLI" }
@@ -22,7 +22,7 @@ export default function Device() {
   return (
     <main className="flex min-h-dvh items-center justify-center px-6 py-16">
       <div className="w-full max-w-[400px] border border-border bg-card p-7">
-        <Mayfly width={30} />
+        <PourMark size={34} />
         <h1 className="mt-5 text-[22px] font-bold tracking-[-0.02em]">Connect the ephemera CLI</h1>
         <p className="mt-1.5 text-sm leading-[21px] text-muted-foreground">
           A terminal on jeebz-laptop is asking to sign in as you.
