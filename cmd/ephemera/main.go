@@ -43,13 +43,15 @@ Usage:
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
   ephemera logout
+  ephemera hosts [trust <host>]     the account's hosts, and the keys this CLI has pinned
   ephemera doctor [--json]          why the CLI can't reach the server or a host
   ephemera version
 
 Environment (overrides the saved login):
   EPHEMERA_SERVER   central server URL (default http://127.0.0.1:7700)
   EPHEMERA_TOKEN    API token
-  EPHEMERA_CONFIG   where the login is saved
+  EPHEMERA_CONFIG   where the login is saved; pinned host keys go next to it
+  EPHEMERA_STRICT_HOSTS=1  refuse hosts not pinned yet, instead of pinning them
 
 Run "ephemera run -h" or "ephemera dev -h" for their flags.
 `
@@ -76,6 +78,17 @@ func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "ephemera: reading saved login:", err)
 	}
 	c := &client.Client{Server: server, Token: token}
+	if needsHosts(args[0]) {
+		pins, err := loadPins()
+		if err != nil {
+			fmt.Fprintln(stderr, "ephemera:", err)
+			return exitFailure
+		}
+		c.Pins, c.Strict = pins, os.Getenv("EPHEMERA_STRICT_HOSTS") == "1"
+		c.OnNewHost = func(name, fp string) {
+			fmt.Fprintf(stderr, "ephemera: new host %s (%s); pinned\n", name, fp)
+		}
+	}
 	switch args[0] {
 	case "router":
 		return cmdRouter(ctx, stderr)
@@ -87,6 +100,8 @@ func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return cmdMCP(ctx, c, args[1:], stdin, stdout, stderr)
 	case "verify":
 		return cmdVerify(ctx, c, args[1:], stdout, stderr)
+	case "hosts":
+		return cmdHosts(ctx, c, args[1:], stdout, stderr)
 	case "login":
 		return cmdLogin(ctx, args[1:], stdin, stdout, stderr)
 	case "logout":

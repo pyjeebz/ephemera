@@ -13,6 +13,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/client"
 	"github.com/pyjeebz/ephemera/internal/control"
 	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/host/hosttest"
 	"github.com/pyjeebz/ephemera/internal/sandbox/sandboxtest"
 )
 
@@ -33,8 +34,7 @@ func limitedStack(t *testing.T, limits control.Limits) (*control.Server, *client
 	servers.Store(cts.URL, cs)
 	be := &sandboxtest.Local{Root: t.TempDir()}
 	hs := &host.Server{Backend: be, Log: discardLog(), Name: "test-host", Key: testKey()}
-	hts := httptest.NewServer(hs.Handler())
-	t.Cleanup(hts.Close)
+	hts := hosttest.Serve(t, hs)
 	t.Cleanup(func() { hs.DestroyAll(context.Background()) })
 	beat := func() { heartbeat(t, hs, cts.URL, hts.URL) }
 	beat()

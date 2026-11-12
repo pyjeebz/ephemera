@@ -25,7 +25,7 @@ type Setup struct {
 // sandbox is then as it was.
 func (c *Client) LoadSnapshot(ctx context.Context, sb *api.Sandbox, id string, key []byte) (api.ProjectSnapshotResult, error) {
 	var res api.ProjectSnapshotResult
-	resp, err := c.do(ctx, http.MethodPost, sb.HostURL+"/v1/sandboxes/"+sb.ID+"/snapshots/load", sb.Token,
+	resp, err := c.hostDo(ctx, sb, http.MethodPost, "/v1/sandboxes/"+sb.ID+"/snapshots/load",
 		jsonBody(api.ProjectSnapshotRequest{ID: id, Key: key}), "application/json")
 	if err != nil {
 		return res, err
@@ -36,7 +36,7 @@ func (c *Client) LoadSnapshot(ctx context.Context, sb *api.Sandbox, id string, k
 
 // SaveSnapshot asks the sandbox's host to save it as a project snapshot.
 func (c *Client) SaveSnapshot(ctx context.Context, sb *api.Sandbox, id string, key []byte) error {
-	resp, err := c.do(ctx, http.MethodPost, sb.HostURL+"/v1/sandboxes/"+sb.ID+"/snapshots/save", sb.Token,
+	resp, err := c.hostDo(ctx, sb, http.MethodPost, "/v1/sandboxes/"+sb.ID+"/snapshots/save",
 		jsonBody(api.ProjectSnapshotRequest{ID: id, Key: key}), "application/json")
 	if err != nil {
 		return err

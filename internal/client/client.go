@@ -22,7 +22,15 @@ import (
 type Client struct {
 	Server string // central server URL
 	Token  string
-	HTTP   *http.Client
+	HTTP   *http.Client // for the central server
+
+	// Pins are the host keys this CLI trusts. With none, a host is trusted
+	// if its key is the one the central server reports.
+	Pins *Pins
+	// Strict refuses hosts that aren't pinned yet, instead of pinning them.
+	Strict bool
+	// OnNewHost is told when a host is pinned for the first time.
+	OnNewHost func(name, fingerprint string)
 }
 
 func (c *Client) http() *http.Client {
@@ -33,6 +41,20 @@ func (c *Client) http() *http.Client {
 }
 
 func (c *Client) do(ctx context.Context, method, url, token string, body io.Reader, contentType string) (*http.Response, error) {
+	return doWith(ctx, c.http(), method, url, token, body, contentType)
+}
+
+// hostDo sends a request to a sandbox's host over its pinned TLS, with
+// the sandbox's token.
+func (c *Client) hostDo(ctx context.Context, sb *api.Sandbox, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	hc, err := c.forHost(sb)
+	if err != nil {
+		return nil, err
+	}
+	return doWith(ctx, hc, method, sb.HostURL+path, sb.Token, body, contentType)
+}
+
+func doWith(ctx context.Context, hc *http.Client, method, url, token string, body io.Reader, contentType string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, err
@@ -41,7 +63,7 @@ func (c *Client) do(ctx context.Context, method, url, token string, body io.Read
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	resp, err := c.http().Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +179,7 @@ func (c *Client) Hosts(ctx context.Context) ([]api.Host, error) {
 func (c *Client) Upload(ctx context.Context, sb *api.Sandbox, dir string, files []string) error {
 	pr, pw := io.Pipe()
 	go func() { pw.CloseWithError(worktree.WriteTar(pw, dir, files)) }()
-	resp, err := c.do(ctx, http.MethodPut, sb.HostURL+"/v1/sandboxes/"+sb.ID+"/files", sb.Token, pr, "application/x-tar")
+	resp, err := c.hostDo(ctx, sb, http.MethodPut, "/v1/sandboxes/"+sb.ID+"/files", pr, "application/x-tar")
 	pr.Close()
 	if err != nil {
 		return fmt.Errorf("upload: %w", err)
@@ -168,7 +190,7 @@ func (c *Client) Upload(ctx context.Context, sb *api.Sandbox, dir string, files 
 
 // DeleteFiles removes files from the sandbox's workspace.
 func (c *Client) DeleteFiles(ctx context.Context, sb *api.Sandbox, paths []string) error {
-	resp, err := c.do(ctx, http.MethodPost, sb.HostURL+"/v1/sandboxes/"+sb.ID+"/files/delete", sb.Token,
+	resp, err := c.hostDo(ctx, sb, http.MethodPost, "/v1/sandboxes/"+sb.ID+"/files/delete",
 		jsonBody(api.DeleteFilesRequest{Paths: paths}), "application/json")
 	if err != nil {
 		return fmt.Errorf("delete files: %w", err)
@@ -180,7 +202,7 @@ func (c *Client) DeleteFiles(ctx context.Context, sb *api.Sandbox, paths []strin
 // Connections returns the sandbox's outbound connection attempts from
 // index since on, straight from its host.
 func (c *Client) Connections(ctx context.Context, sb *api.Sandbox, since int) ([]api.Connection, error) {
-	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/v1/sandboxes/%s/connections?since=%d", sb.HostURL, sb.ID, since), sb.Token, nil, "")
+	resp, err := c.hostDo(ctx, sb, http.MethodGet, fmt.Sprintf("/v1/sandboxes/%s/connections?since=%d", sb.ID, since), nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("connections: %w", err)
 	}
@@ -208,7 +230,11 @@ func (c *Client) DialPort(ctx context.Context, sb *api.Sandbox, port int) (io.Re
 	req.Header.Set("Authorization", "Bearer "+sb.Token)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", api.PortUpgrade)
-	resp, err := (&http.Client{Transport: upgradeTransport}).Do(req)
+	hc, err := c.forHost(sb)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +261,7 @@ var ErrStreamCut = errors.New("the connection to the sandbox ended before the co
 // Exec runs a command in the sandbox and copies its output to stdout and
 // stderr as it arrives. It returns the command's exit code.
 func (c *Client) Exec(ctx context.Context, sb *api.Sandbox, req api.ExecRequest, stdout, stderr io.Writer) (int, error) {
-	resp, err := c.do(ctx, http.MethodPost, sb.HostURL+"/v1/sandboxes/"+sb.ID+"/exec", sb.Token, jsonBody(req), "application/json")
+	resp, err := c.hostDo(ctx, sb, http.MethodPost, "/v1/sandboxes/"+sb.ID+"/exec", jsonBody(req), "application/json")
 	if err != nil {
 		return 0, fmt.Errorf("exec: %w", err)
 	}

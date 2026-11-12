@@ -6,17 +6,22 @@ package record
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/pyjeebz/ephemera/internal/api"
 )
@@ -111,10 +116,41 @@ func Fingerprint(publicKey string) (string, error) {
 	if err != nil || len(pub) != ed25519.PublicKeySize {
 		return "", errors.New("not an Ed25519 public key")
 	}
-	der, err := x509.MarshalPKIXPublicKey(ed25519.PublicKey(pub))
+	return FingerprintKey(ed25519.PublicKey(pub))
+}
+
+// FingerprintKey is Fingerprint for a parsed public key, such as a TLS
+// certificate's.
+func FingerprintKey(pub crypto.PublicKey) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(der)
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]), nil
+}
+
+// Certificate makes a self-signed TLS certificate for key, valid for 30
+// days. Hosts serve with one, and the CLI checks its public key against
+// the host's pinned fingerprint rather than any name or authority, so
+// the certificate can be made fresh at every start.
+func Certificate(key ed25519.PrivateKey) (tls.Certificate, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "ephemera host"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(30 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }

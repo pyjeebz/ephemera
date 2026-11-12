@@ -436,6 +436,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Host:      h.Name,
 		HostID:    h.ID,
 		HostURL:   strings.TrimRight(h.URL, "/"),
+		HostKey:   h.PublicKey,
 		Spec:      req.Spec,
 		CreatedAt: s.now().UTC(),
 		Owner:     p.Name,

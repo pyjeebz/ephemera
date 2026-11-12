@@ -49,8 +49,7 @@ func startHost(t *testing.T, cs *control.Server, server, name string) (*httptest
 	t.Helper()
 	_, key, _ := ed25519.GenerateKey(nil)
 	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Name: name, Key: key}
-	hts := httptest.NewServer(hs.Handler())
-	t.Cleanup(hts.Close)
+	hts := hosttest.Serve(t, hs)
 	code, err := cs.CreateJoinCode(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)

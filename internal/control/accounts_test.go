@@ -74,8 +74,7 @@ func TestAccountsSeeOnlyTheirOwn(t *testing.T) {
 	ts := httptest.NewServer(cs.Handler())
 	defer ts.Close()
 	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Name: "h1", Key: testKey(t)}
-	hts := httptest.NewServer(hs.Handler())
-	defer hts.Close()
+	hts := hosttest.Serve(t, hs)
 	code, err := cs.CreateJoinCode(context.Background(), "alice")
 	if err != nil {
 		t.Fatal(err)

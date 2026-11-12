@@ -3,6 +3,7 @@ package hosttest
 
 import (
 	"context"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -50,4 +51,19 @@ func ConnectAs(t testing.TB, hs *host.Server, serverURL, hostID string, hello ap
 		t.Fatalf("host %s never connected to %s", hello.Name, serverURL)
 	}
 	return disconnect
+}
+
+// Serve starts hs's API over TLS, with its own certificate, the way
+// ephemera-host serves it. It stops when the test ends.
+func Serve(t testing.TB, hs *host.Server) *httptest.Server {
+	t.Helper()
+	cfg, err := hs.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewUnstartedServer(hs.Handler())
+	ts.TLS = cfg
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+	return ts
 }

@@ -157,7 +157,7 @@ cat >"$ENV_FILE.tmp" <<EOF
 EPHEMERA_SERVER_LISTEN=$LISTEN_IP:7700
 EPHEMERA_SERVER_URL=$SERVER_URL
 EPHEMERA_HOST_LISTEN=$LISTEN_IP:7701
-EPHEMERA_HOST_URL=http://$LISTEN_IP:7701
+EPHEMERA_HOST_URL=https://$LISTEN_IP:7701
 EPHEMERA_HOST_ARGS=$HOST_ARGS
 EOF
 mv "$ENV_FILE.tmp" "$ENV_FILE"
@@ -232,7 +232,7 @@ cat <<EOF
 
 install: done
   role          $ROLE
-  host          $HOST_NAME at http://$LISTEN_IP:7701
+  host          $HOST_NAME at https://$LISTEN_IP:7701
   server        $SERVER_URL
   services      ${services[*]} (systemctl status ${services[*]})
 EOF

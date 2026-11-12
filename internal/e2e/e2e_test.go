@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -44,8 +45,7 @@ func newStack(t *testing.T, be sandbox.Backend, image string) *stack {
 	t.Cleanup(cts.Close)
 
 	hs := &host.Server{Backend: be, DefaultImage: image, Log: discardLog(), Name: "test-host", BackendName: "test", Key: testKey()}
-	hts := httptest.NewServer(hs.Handler())
-	t.Cleanup(hts.Close)
+	hts := hosttest.Serve(t, hs)
 	t.Cleanup(func() { hs.DestroyAll(context.Background()) })
 
 	servers.Store(cts.URL, cs)
@@ -188,7 +188,10 @@ func TestHostRefusesUnsafeUpload(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPut, sb.HostURL+"/v1/sandboxes/"+sb.ID+"/files", &raw)
 	req.Header.Set("Authorization", "Bearer "+sb.Token)
-	resp, err := http.DefaultClient.Do(req)
+	// A raw request, past the CLI's checks, to see the host's own. The
+	// host's certificate is self-signed; the pinning tests cover it.
+	raw0 := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	resp, err := raw0.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

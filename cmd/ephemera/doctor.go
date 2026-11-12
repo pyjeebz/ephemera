@@ -99,7 +99,7 @@ func runDoctor(ctx context.Context) []check {
 	}
 
 	// 2. The central server answers.
-	srv := checkReach(ctx, "server", server, "the central server")
+	srv := checkReach(ctx, http.DefaultClient, "server", server, "the central server")
 	if srv.Status == "fail" {
 		out = append(out, srv)
 		skip("token", "hosts")
@@ -109,6 +109,10 @@ func runDoctor(ctx context.Context) []check {
 
 	// 3. The server accepts the token.
 	c := &client.Client{Server: strings.TrimRight(server, "/"), Token: token}
+	// The doctor reads the pins but never adds one.
+	if pins, err := loadPins(); err == nil {
+		c.Pins = pins
+	}
 	tctx, cancel := context.WithTimeout(ctx, doctorTimeout)
 	who, err := c.WhoAmI(tctx)
 	cancel()
@@ -160,7 +164,7 @@ func checkLogin() (check, string, string) {
 
 // checkReach asks an ephemera server or host for /healthz, which needs no
 // token, and explains a failure in network terms.
-func checkReach(ctx context.Context, name, base, what string) check {
+func checkReach(ctx context.Context, hc *http.Client, name, base, what string) check {
 	u, err := url.Parse(base)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return check{Name: name, Status: "fail", Detail: fmt.Sprintf("%q is not an http(s) URL", base),
@@ -170,7 +174,7 @@ func checkReach(ctx context.Context, name, base, what string) check {
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/healthz", nil)
 	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		detail, fix := explainNetErr(u, what, err)
 		return check{Name: name, Status: "fail", Detail: detail, Fix: fix}
@@ -252,10 +256,26 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 			out = append(out, check{Name: "hosts", Status: "ok", Detail: h.Name + " is online"})
 			continue
 		}
-		r := checkReach(ctx, "hosts", h.URL, "the host agent")
+		hc, err := c.HostClient(h)
+		if err != nil {
+			fail := check{Name: "hosts", Status: "fail", Detail: fmt.Sprintf("%s is online, but %v", h.Name, err)}
+			if keyChanged(err) {
+				fail.Detail = err.Error()
+				fail.Fix = "If you rebuilt or re-joined it, accept the new key: ephemera hosts trust " + h.Name
+			}
+			out = append(out, fail)
+			continue
+		}
+		r := checkReach(ctx, hc, "hosts", h.URL, "the host agent")
 		if r.Status == "ok" {
 			reachable = true
-			r.Detail = fmt.Sprintf("%s is online, and %s", h.Name, r.Detail)
+			pinned := "its key isn't pinned yet; the first run pins it"
+			if c.Pins != nil {
+				if _, ok := c.Pins.Get(h.ID); ok {
+					pinned = "its key is pinned"
+				}
+			}
+			r.Detail = fmt.Sprintf("%s is online, %s, and %s", h.Name, pinned, r.Detail)
 		} else {
 			r.Detail = fmt.Sprintf("%s is online, but this machine can't reach it: %s", h.Name, r.Detail)
 			r.Fix = "Files and commands go straight to the host, so this machine must reach " + h.URL + ". " + r.Fix

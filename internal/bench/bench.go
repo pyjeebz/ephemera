@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -219,11 +220,16 @@ func newStack(ctx context.Context, be *firecracker.Backend, workDir string) (*st
 	}
 	cs := &control.Server{Tokens: control.StaticToken{Name: "bench", Token: token}, Log: quiet}
 	hs := &host.Server{Backend: be, Log: quiet, DefaultImage: "default", Name: "bench", BackendName: "firecracker", Key: key}
-	cURL, cStop, err := serve(cs.Handler())
+	cURL, cStop, err := serve(cs.Handler(), nil)
 	if err != nil {
 		return nil, err
 	}
-	hURL, hStop, err := serve(hs.Handler())
+	tlsConfig, err := hs.TLSConfig()
+	if err != nil {
+		cStop()
+		return nil, err
+	}
+	hURL, hStop, err := serve(hs.Handler(), tlsConfig)
 	if err != nil {
 		cStop()
 		return nil, err
@@ -264,14 +270,20 @@ func newStack(ctx context.Context, be *firecracker.Backend, workDir string) (*st
 
 func (s *stack) close() { s.stop() }
 
-func serve(h http.Handler) (string, func(), error) {
+// serve serves h on a free local port, over TLS with cfg when it's set,
+// as the host agent serves the CLI.
+func serve(h http.Handler, cfg *tls.Config) (string, func(), error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, err
 	}
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	scheme := "http://"
+	if cfg != nil {
+		ln, scheme = tls.NewListener(ln, cfg), "https://"
+	}
 	go srv.Serve(ln)
-	return "http://" + ln.Addr().String(), func() { srv.Close() }, nil
+	return scheme + ln.Addr().String(), func() { srv.Close() }, nil
 }
 
 // measureRun times `ephemera run -- true` from the client: create, sync,

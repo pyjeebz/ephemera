@@ -114,6 +114,16 @@ func Remove() error {
 	return nil
 }
 
+// KnownHostsPath is where the CLI keeps the host keys it has pinned:
+// known_hosts.json next to the saved login.
+func KnownHostsPath() (string, error) {
+	p, err := Path()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(p), "known_hosts.json"), nil
+}
+
 // RecordsDir is where sandbox records are saved: $EPHEMERA_RECORDS, or
 // ephemera/records in the user's config directory.
 func RecordsDir() (string, error) {

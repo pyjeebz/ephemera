@@ -102,10 +102,13 @@ func HashSandboxToken(token string) string {
 // to the host directly, so files and output never pass through the central
 // server. The central server only ever sees its hash, and never sends it.
 type Sandbox struct {
-	ID        string    `json:"id"`
-	Host      string    `json:"host"`    // its name
-	HostID    string    `json:"host_id"` // unique; names are only unique within an account
-	HostURL   string    `json:"host_url"`
+	ID      string `json:"id"`
+	Host    string `json:"host"`    // its name
+	HostID  string `json:"host_id"` // unique; names are only unique within an account
+	HostURL string `json:"host_url"`
+	// HostKey is the key the host joined with (Ed25519, base64). Its TLS
+	// certificate must carry this key; the CLI also pins it.
+	HostKey   string    `json:"host_key,omitempty"`
 	Token     string    `json:"token,omitempty"`
 	Spec      Spec      `json:"spec"`
 	CreatedAt time.Time `json:"created_at"`

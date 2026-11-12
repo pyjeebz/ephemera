@@ -244,8 +244,7 @@ func TestServerNeverSeesSandboxToken(t *testing.T) {
 	ts := httptest.NewServer(cs.Handler())
 	defer ts.Close()
 	hs, _ := newHost(t, "h1")
-	hts := httptest.NewServer(hs.Handler())
-	defer hts.Close()
+	hts := hosttest.Serve(t, hs)
 	hosttest.Connect(t, hs, ts.URL, joinCode(t, cs, ""), api.HostHello{Name: "h1", URL: hts.URL, Capacity: 5})
 	ctx := context.Background()
 	c := &client.Client{Server: ts.URL, Token: "eph_good"}

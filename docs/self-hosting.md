@@ -10,7 +10,7 @@ One machine can run both. Add more hosts later and point them at the same centra
 ## What you need
 
 - An x86_64 machine running Ubuntu 24.04, with hardware virtualization (Intel VT-x or AMD-V) turned on. A bare-metal server, a spare PC, or a cloud VM with nested virtualization all work.
-- A Tailscale account, or another private network between your laptop and the machine. ephemera serves plain HTTP and has no TLS yet, so the installer refuses to serve on a public address.
+- A Tailscale account, or another private network between your laptop and the machine. Your laptop talks to hosts over TLS, checked against each host's own key, but the central server still serves plain HTTP, so the installer refuses to serve on a public address.
 - About 2 GB of disk for the guest image, plus room for sandboxes. Each sandbox's disk is sparse, so it takes only what the sandbox writes.
 
 Memory sets how many sandboxes fit. An idle sandbox costs the host about 50–60 MB, so a 16 GB machine holds well over a hundred idle ones. Busy sandboxes use what their workload uses, up to their limit (1 GB by default).
@@ -194,7 +194,8 @@ This stops the services and removes the binaries, but keeps `/var/lib/ephemera` 
 
 ## Security notes
 
-- **Traffic between your laptop and the machine is not encrypted by ephemera.** Tailscale encrypts it. Don't serve ephemera on a public address; the installer refuses to.
+- **Files, commands and output go from your laptop to a host over TLS 1.3**, with a certificate made from the host's own key. The CLI checks that key against the one the host joined with, and pins it in `known_hosts.json` next to your login the first time, like ssh. If a host's key ever changes, the CLI refuses to connect and says so; `ephemera hosts trust <host>` accepts the new key on purpose. Set `EPHEMERA_STRICT_HOSTS=1` to refuse hosts not pinned yet, for CI. `ephemera hosts` lists each host's key and whether it's pinned.
+- **The central server still serves plain HTTP**, including API tokens. Keep it on a private network, or put a TLS proxy in front of it. Don't serve it on a public address; the installer refuses to.
 - **A join code lets a machine become a host in your account.** Anyone who uses it first can receive your sandboxes, and the code in them. It works once, for 15 minutes; hand it over the way you would a password.
 - **A host's key is its identity.** `/var/lib/ephemera/host.key` signs the host in and signs its records. Keep it root-only. If it leaks, remove the host and join again with a new key.
 - **A record is only as trustworthy as its host's key.** `ephemera verify` checks a record against the key the central server has for that host.

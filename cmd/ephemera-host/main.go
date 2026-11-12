@@ -32,7 +32,7 @@ var version = "dev"
 func main() {
 	var (
 		listen    = flag.String("listen", "127.0.0.1:7701", "address to listen on")
-		advertise = flag.String("url", "http://127.0.0.1:7701", "URL the CLI uses to reach this host")
+		advertise = flag.String("url", "https://127.0.0.1:7701", "URL the CLI uses to reach this host; it serves TLS with its own key")
 		server    = flag.String("server", "", "central server URL (default: the one the host joined)")
 		identity  = flag.String("identity", defaultIdentity, "where the host keeps the result of ephemera-host join")
 		backend   = flag.String("backend", "docker", "sandbox backend: docker or firecracker")
@@ -87,7 +87,12 @@ func main() {
 	srv := &host.Server{Backend: be, DefaultImage: *image, Log: log,
 		Name: id.Name, BackendName: *backend, Key: key, MaxLifetime: *maxLife}
 	log.Info("records are signed with this host's key", "public_key", record.PublicKey(key))
-	hs := &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	tlsConfig, err := srv.TLSConfig()
+	if err != nil {
+		log.Error("tls", "err", err)
+		os.Exit(2)
+	}
+	hs := &http.Server{Addr: *listen, Handler: srv.Handler(), TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -107,7 +112,9 @@ func main() {
 	}()
 
 	log.Info("host agent listening", "addr", *listen, "backend", *backend, "version", ver.String(version))
-	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	fp, _ := record.Fingerprint(record.PublicKey(key))
+	log.Info("serving TLS with this host's key", "fingerprint", fp)
+	if err := hs.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("serve", "err", err)
 		os.Exit(1)
 	}

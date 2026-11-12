@@ -123,8 +123,7 @@ func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "sandboxes.json")
 	be := &sandboxtest.Local{Root: t.TempDir()}
 	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
-	hts := httptest.NewServer(hs.Handler())
-	defer hts.Close()
+	hts := hosttest.Serve(t, hs)
 
 	// First central server: create a sandbox.
 	_, url1 := centralServer(t, state, nil)
@@ -186,8 +185,7 @@ func TestStateSurvivesRestartOnPostgres(t *testing.T) {
 	db, _ := pgtest.Open(t)
 	be := &sandboxtest.Local{Root: t.TempDir()}
 	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
-	hts := httptest.NewServer(hs.Handler())
-	defer hts.Close()
+	hts := hosttest.Serve(t, hs)
 
 	start := func() string {
 		cs := &control.Server{Tokens: control.StaticToken{Name: "test", Token: userToken}, State: db, Hosts: db, Log: discardLog()}
@@ -232,8 +230,7 @@ func TestRecordDroppedWhenHostLostSandbox(t *testing.T) {
 	ctx := context.Background()
 	be := &sandboxtest.Local{Root: t.TempDir()}
 	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
-	hts := httptest.NewServer(hs.Handler())
-	defer hts.Close()
+	hts := hosttest.Serve(t, hs)
 
 	clock := newClock()
 	_, url := centralServer(t, filepath.Join(t.TempDir(), "s.json"), clock.now)
@@ -262,7 +259,7 @@ func TestDestroyWhenHostOffline(t *testing.T) {
 	ctx := context.Background()
 	be := &sandboxtest.Local{Root: t.TempDir()}
 	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
-	hts := httptest.NewServer(hs.Handler())
+	hts := hosttest.Serve(t, hs)
 
 	clock := newClock()
 	_, url := centralServer(t, filepath.Join(t.TempDir(), "s.json"), clock.now)
