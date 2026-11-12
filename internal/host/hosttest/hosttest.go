@@ -10,17 +10,28 @@ import (
 	"github.com/pyjeebz/ephemera/internal/host"
 )
 
-// Connect connects hs to the central server at serverURL and waits until
-// the server has welcomed it. The connection closes when the test ends;
-// the returned func closes it sooner and waits until the host has let go.
-func Connect(t testing.TB, hs *host.Server, serverURL, secret string, hello api.HostHello) (disconnect func()) {
+// Connect joins hs to the central server at serverURL with a join code, as
+// a host named hello.Name, then connects it and waits until the server has
+// welcomed it. The connection closes when the test ends; the returned func
+// closes it sooner and waits until the host has let go.
+func Connect(t testing.TB, hs *host.Server, serverURL, code string, hello api.HostHello) (disconnect func()) {
+	t.Helper()
+	id, err := host.Join(context.Background(), serverURL, code, hello.Name, hs.Key)
+	if err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	return ConnectAs(t, hs, serverURL, id.HostID, hello)
+}
+
+// ConnectAs connects a host that already joined, as host id.
+func ConnectAs(t testing.TB, hs *host.Server, serverURL, hostID string, hello api.HostHello) (disconnect func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	welcomed := make(chan struct{}, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		hs.Connect(ctx, host.ConnectConfig{ServerURL: serverURL, Secret: secret, Hello: hello,
+		hs.Connect(ctx, host.ConnectConfig{ServerURL: serverURL, HostID: hostID, Hello: hello,
 			OnWelcome: func() {
 				select {
 				case welcomed <- struct{}{}:

@@ -8,11 +8,13 @@ import (
 	"flag"
 	"fmt"
 	ver "github.com/pyjeebz/ephemera/internal/version"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,12 +30,11 @@ import (
 var version = "dev"
 
 func main() {
-	hostname, _ := os.Hostname()
 	var (
 		listen    = flag.String("listen", "127.0.0.1:7701", "address to listen on")
 		advertise = flag.String("url", "http://127.0.0.1:7701", "URL the CLI uses to reach this host")
-		server    = flag.String("server", "http://127.0.0.1:7700", "central server URL")
-		name      = flag.String("name", hostname, "host name")
+		server    = flag.String("server", "", "central server URL (default: the one the host joined)")
+		identity  = flag.String("identity", defaultIdentity, "where the host keeps the result of ephemera-host join")
 		backend   = flag.String("backend", "docker", "sandbox backend: docker or firecracker")
 		image     = flag.String("image", "ubuntu:24.04", "default sandbox image (docker backend)")
 		imageDir  = flag.String("image-dir", "/var/lib/ephemera/image", "guest image from deploy/guest/build-image.sh (firecracker backend)")
@@ -45,11 +46,14 @@ func main() {
 		snapDir   = flag.String("snapshot-dir", "/var/lib/ephemera/snapshots", "encrypted project snapshots (firecracker backend)")
 		snapMax   = flag.Int64("max-snapshot-bytes", 20<<30, "total size of project snapshots; the least recently used go first")
 		capacity  = flag.Int("capacity", 20, "maximum sandboxes on this host")
-		keyFile   = flag.String("key-file", "/var/lib/ephemera/host.key", "Ed25519 key that signs sandbox records; created if missing")
+		keyFile   = flag.String("key-file", defaultKey, "Ed25519 key the host signs in and signs records with")
 		maxLife   = flag.Duration("max-lifetime", 24*time.Hour, "destroy any sandbox this long after it was created (0: no limit)")
 	)
 	if len(os.Args) > 1 && os.Args[1] == "bench" {
 		os.Exit(benchMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "join" {
+		os.Exit(joinMain(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
 		fmt.Println("ephemera-host", ver.String(version))
@@ -58,10 +62,13 @@ func main() {
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	secret := os.Getenv("EPHEMERA_HOST_SECRET")
-	if secret == "" {
-		log.Error("EPHEMERA_HOST_SECRET must be set")
+	id, err := host.LoadIdentity(*identity)
+	if err != nil {
+		log.Error("identity", "err", err)
 		os.Exit(2)
+	}
+	if *server == "" {
+		*server = id.Server
 	}
 	be, err := newBackend(*backend, *imageDir, *stateDir, *jail, *jailDir, *snapshots, *tmplDir, log)
 	if fc, ok := be.(*firecracker.Backend); ok {
@@ -78,14 +85,14 @@ func main() {
 		os.Exit(2)
 	}
 	srv := &host.Server{Backend: be, DefaultImage: *image, Log: log,
-		Name: *name, BackendName: *backend, Key: key, MaxLifetime: *maxLife}
+		Name: id.Name, BackendName: *backend, Key: key, MaxLifetime: *maxLife}
 	log.Info("records are signed with this host's key", "public_key", record.PublicKey(key))
 	hs := &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go srv.Connect(ctx, host.ConnectConfig{ServerURL: *server, Secret: secret,
-		Hello: api.HostHello{Name: *name, URL: *advertise, Capacity: *capacity, Version: ver.String(version)}})
+	go srv.Connect(ctx, host.ConnectConfig{ServerURL: *server, HostID: id.HostID,
+		Hello: api.HostHello{URL: *advertise, Capacity: *capacity, Version: ver.String(version)}})
 	cleaned := make(chan struct{})
 	go func() {
 		defer close(cleaned)
@@ -106,6 +113,67 @@ func main() {
 	}
 	<-cleaned
 	log.Info("host agent stopped; all sandboxes destroyed")
+}
+
+const (
+	defaultIdentity = "/var/lib/ephemera/host.json"
+	defaultKey      = "/var/lib/ephemera/host.key"
+)
+
+// joinMain joins this host to a central server's account with a one-time
+// code from the server (ephemera-server join-code create, or the
+// dashboard). The code is an argument, or read from stdin.
+func joinMain(args []string) int {
+	hostname, _ := os.Hostname()
+	fs := flag.NewFlagSet("join", flag.ContinueOnError)
+	server := fs.String("server", "", "central server URL, e.g. https://api.ephemera.run")
+	name := fs.String("name", hostname, "this host's name in its account")
+	keyFile := fs.String("key-file", defaultKey, "Ed25519 key this host signs in and signs records with; created if missing")
+	identity := fs.String("identity", defaultIdentity, "where to keep the result")
+	fs.Usage = func() {
+		fmt.Fprint(os.Stderr, "Usage: ephemera-host join --server URL [--name NAME] [CODE]\n\n"+
+			"Joins this host to an account with a one-time code. Without CODE, it is read from stdin.\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *server == "" {
+		fs.Usage()
+		return 2
+	}
+	code := fs.Arg(0)
+	if code == "" {
+		b, _ := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+		code = strings.TrimSpace(string(b))
+	}
+	if code == "" {
+		fmt.Fprintln(os.Stderr, "ephemera-host: no join code; make one with: ephemera-server join-code create")
+		return 2
+	}
+	if old, err := host.LoadIdentity(*identity); err == nil {
+		fmt.Fprintf(os.Stderr, "ephemera-host: already joined %s as %s (%s); remove %s first to join again\n", old.Server, old.Name, old.HostID, *identity)
+		return 1
+	}
+	key, err := record.LoadOrCreateKey(*keyFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ephemera-host:", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	id, err := host.Join(ctx, *server, code, *name, key)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ephemera-host: join:", err)
+		return 1
+	}
+	if err := host.SaveIdentity(*identity, id); err != nil {
+		fmt.Fprintln(os.Stderr, "ephemera-host:", err)
+		return 1
+	}
+	fp, _ := record.Fingerprint(record.PublicKey(key))
+	fmt.Printf("Joined %s as %s, host %s, in account %s.\nKey fingerprint: %s\n", id.Server, id.Name, id.HostID, id.Account, fp)
+	return 0
 }
 
 func newBackend(name, imageDir, stateDir string, jail bool, jailDir string, snapshots bool, tmplDir string, log *slog.Logger) (sandbox.Backend, error) {

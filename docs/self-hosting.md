@@ -37,7 +37,7 @@ sudo deploy/host/install.sh
 
 1. Builds `ephemera`, `ephemera-server` and `ephemera-host` into `/usr/local/bin`.
 2. Builds the guest image into `/var/lib/ephemera/image`. This takes a few minutes and needs network.
-3. Writes `/etc/ephemera/ephemera.env` with a random host secret and the machine's Tailscale address.
+3. Writes `/etc/ephemera/ephemera.env` with the machine's addresses.
 4. Starts both parts as systemd services, `ephemera-server` and `ephemera-host`, and waits until the host has connected.
 5. Creates the first API token, named `admin`, and prints it once.
 
@@ -89,24 +89,32 @@ Every token belongs to an account, and a token only sees and destroys its own ac
 sudo ephemera-server token create sam-laptop --account sam
 ```
 
-Hosts are shared by every account for now.
+Each host belongs to the account whose join code it used, and runs only that account's sandboxes.
 
 ## Add another host
 
-On the new machine, run `bootstrap.sh` as above. Then copy the host secret over from the first machine; it is the `EPHEMERA_HOST_SECRET` line in `/etc/ephemera/ephemera.env`. Put it in a file only root can read, and point the installer at the central server:
+A new host joins the central server once, with a one-time code. On the server machine, make one; it works once, for 15 minutes:
 
 ```bash
-sudo deploy/host/install.sh --role host --server-url http://100.64.0.1:7700 --secret-file /root/ephemera-host-secret
+sudo ephemera-server join-code create
 ```
 
-Delete the secret file afterwards; the installer has copied it into `/etc/ephemera/ephemera.env`.
+Add `--account NAME` to join the host to that account instead of `local`. On the new machine, run `bootstrap.sh` as above, save the code to a file, and point the installer at the central server:
+
+```bash
+sudo deploy/host/install.sh --role host --server-url http://100.64.0.1:7700 --join-code-file /root/join-code
+```
+
+The host makes its own key, joins with the code, and from then on signs in with that key. Delete the code file afterwards; it can't be used again anyway. `ephemera-host join` prints the key's fingerprint, so you can check it against `ephemera-server` logs or the dashboard.
+
+To take a host out of an account, `DELETE /v1/hosts/<id>` with one of the account's tokens. Its sandboxes are destroyed, and it can't sign in again until it joins with a new code.
 
 ## Settings
 
-`/etc/ephemera/ephemera.env` holds the addresses, the host name and the secret. To change them, run `deploy/host/install.sh` again with new options rather than editing the file. Useful options:
+`/etc/ephemera/ephemera.env` holds the addresses and settings. To change them, run `deploy/host/install.sh` again with new options rather than editing the file. Useful options:
 
 - `--listen-ip IP`: serve on another private address instead of the Tailscale one.
-- `--name NAME`: the host's name in records and `ephemera ls`.
+- `--name NAME`: the host's name in its account, in records and in `ephemera ls`. It is set when the host joins.
 - `--host-args "..."`: extra `ephemera-host` flags, for example `--capacity 40` (most sandboxes at once; default 20), `--max-lifetime 8h` (oldest a sandbox may get; default 24h) or `--max-snapshot-bytes` (space for setup snapshots; default 20 GB).
 
 ## Postgres instead of files
@@ -166,7 +174,9 @@ What lives where:
 
 | Path | What |
 | --- | --- |
-| `/etc/ephemera/ephemera.env` | addresses and the host secret (root only) |
+| `/etc/ephemera/ephemera.env` | addresses and settings (root only) |
+| `/var/lib/ephemera/host.json` | which server and account the host joined, and its host id |
+| `/var/lib/ephemera/server/hosts.json` | the hosts that joined, and unused join codes (as hashes) |
 | `/var/lib/ephemera/server/` | API tokens, stored as hashes, and the central server's state |
 | `/var/lib/ephemera/host.key` | the key the host signs records with; keep it to keep verifying old records |
 | `/var/lib/ephemera/image/` | the guest kernel and root filesystem |
@@ -185,5 +195,6 @@ This stops the services and removes the binaries, but keeps `/var/lib/ephemera` 
 ## Security notes
 
 - **Traffic between your laptop and the machine is not encrypted by ephemera.** Tailscale encrypts it. Don't serve ephemera on a public address; the installer refuses to.
-- **The host secret lets a machine connect as a host.** Anyone who has it can receive sandboxes, and the code in them. Keep it root-only and share it only with your own hosts.
+- **A join code lets a machine become a host in your account.** Anyone who uses it first can receive your sandboxes, and the code in them. It works once, for 15 minutes; hand it over the way you would a password.
+- **A host's key is its identity.** `/var/lib/ephemera/host.key` signs the host in and signs its records. Keep it root-only. If it leaks, remove the host and join again with a new key.
 - **A record is only as trustworthy as its host's key.** `ephemera verify` checks a record against the key the central server has for that host.

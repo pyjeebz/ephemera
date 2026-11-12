@@ -238,9 +238,12 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 			h.Online = time.Since(h.LastSeen) <= hostTimeout
 		}
 		if !h.Online {
-			ago := time.Since(h.LastSeen).Round(time.Second)
+			detail := fmt.Sprintf("%s is offline, last seen %s ago", h.Name, time.Since(h.LastSeen).Round(time.Second))
+			if h.LastSeen.IsZero() {
+				detail = h.Name + " joined but hasn't connected since the central server started"
+			}
 			out = append(out, check{Name: "hosts", Status: "fail",
-				Detail: fmt.Sprintf("%s is offline, last seen %s ago", h.Name, ago),
+				Detail: detail,
 				Fix:    "On that machine, check the host agent: systemctl status ephemera-host"})
 			continue
 		}

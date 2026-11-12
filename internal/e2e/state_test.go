@@ -22,22 +22,40 @@ import (
 func centralServer(t *testing.T, path string, now func() time.Time) (*control.Server, string) {
 	t.Helper()
 	cs := &control.Server{
-		Tokens:     control.StaticToken{Name: "test", Token: userToken},
-		HostSecret: hostSecret,
-		StatePath:  path,
-		Log:        discardLog(),
-		Now:        now,
+		Tokens:    control.StaticToken{Name: "test", Token: userToken},
+		StatePath: path,
+		Log:       discardLog(),
+		Now:       now,
 	}
 	if err := cs.Load(); err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(cs.Handler())
 	t.Cleanup(ts.Close)
+	servers.Store(ts.URL, cs)
 	return cs, ts.URL
 }
 
 // links are the open host connections, by host and server.
 var links sync.Map // linkKey -> func() (disconnect)
+
+// servers are the central servers tests started, by URL, so a host can be
+// given a join code for one.
+var servers sync.Map // string -> *control.Server
+
+// joinCode makes a join code on cs for the default account.
+func joinCode(t *testing.T, cs *control.Server) string {
+	t.Helper()
+	code, err := cs.CreateJoinCode(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code
+}
+
+// hostIDs are the ids hosts joined as. A host joins once; servers that
+// share its state (a restart, or one database) know it by the same id.
+var hostIDs sync.Map // *host.Server -> string
 
 type linkKey struct {
 	hs  *host.Server
@@ -59,7 +77,25 @@ func heartbeat(t *testing.T, hs *host.Server, serverURL, hostURL string) {
 		}
 		return
 	}
-	disconnect := hosttest.Connect(t, hs, serverURL, hostSecret, api.HostHello{Name: "test-host", URL: hostURL, Capacity: 10})
+	hello := api.HostHello{Name: "test-host", URL: hostURL, Capacity: 10}
+	var disconnect func()
+	if id, ok := hostIDs.Load(hs); ok {
+		// Joined before; connecting again, as after a dropped connection.
+		disconnect = hosttest.ConnectAs(t, hs, serverURL, id.(string), hello)
+	} else {
+		cs, ok := servers.Load(serverURL)
+		if !ok {
+			t.Fatalf("no test server at %s", serverURL)
+		}
+		code := joinCode(t, cs.(*control.Server))
+		joined, err := host.Join(context.Background(), serverURL, code, hello.Name, hs.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hostIDs.Store(hs, joined.HostID)
+		t.Cleanup(func() { hostIDs.Delete(hs) })
+		disconnect = hosttest.ConnectAs(t, hs, serverURL, joined.HostID, hello)
+	}
 	links.Store(key, disconnect)
 	t.Cleanup(func() { links.Delete(key) })
 }
@@ -128,10 +164,18 @@ func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// It doesn't know the host either, refuses it, and the host destroys
+	// what no one can see any more.
 	_, url3 := centralServer(t, filepath.Join(t.TempDir(), "empty.json"), nil)
-	heartbeat(t, hs, url3, hts.URL)
+	id, _ := hostIDs.Load(hs)
+	ctx3, cancel3 := context.WithCancel(ctx)
+	defer cancel3()
+	go hs.Connect(ctx3, host.ConnectConfig{ServerURL: url3, HostID: id.(string), Hello: api.HostHello{URL: hts.URL}})
+	for deadline := time.Now().Add(5 * time.Second); be.Live() != 0 && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if be.Live() != 0 || hs.Live() != 0 {
-		t.Errorf("unknown sandbox %s was not destroyed", sb2.ID)
+		t.Errorf("sandbox %s on a host the server doesn't know was not destroyed", sb2.ID)
 	}
 }
 
@@ -146,13 +190,13 @@ func TestStateSurvivesRestartOnPostgres(t *testing.T) {
 	defer hts.Close()
 
 	start := func() string {
-		cs := &control.Server{Tokens: control.StaticToken{Name: "test", Token: userToken},
-			HostSecret: hostSecret, State: db, Log: discardLog()}
+		cs := &control.Server{Tokens: control.StaticToken{Name: "test", Token: userToken}, State: db, Hosts: db, Log: discardLog()}
 		if err := cs.Load(); err != nil {
 			t.Fatal(err)
 		}
 		ts := httptest.NewServer(cs.Handler())
 		t.Cleanup(ts.Close)
+		servers.Store(ts.URL, cs)
 		return ts.URL
 	}
 	url1 := start()

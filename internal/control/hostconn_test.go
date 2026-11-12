@@ -31,12 +31,12 @@ func newHost(t *testing.T, name string) (*host.Server, *sandboxtest.Local) {
 // The central server sends work down the host's own connection: a host
 // whose address leads nowhere still gets sandboxes made and destroyed.
 func TestServerNeverDialsHost(t *testing.T) {
-	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}, HostSecret: "s"}
+	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}}
 	ts := httptest.NewServer(cs.Handler())
 	defer ts.Close()
 	hs, be := newHost(t, "behind-nat")
 	// 192.0.2.0/24 is reserved for documentation: nothing answers there.
-	hosttest.Connect(t, hs, ts.URL, "s", api.HostHello{Name: "behind-nat", URL: "http://192.0.2.1:7701", Capacity: 5})
+	hosttest.Connect(t, hs, ts.URL, joinCode(t, cs, ""), api.HostHello{Name: "behind-nat", URL: "http://192.0.2.1:7701", Capacity: 5})
 
 	ctx := context.Background()
 	c := &client.Client{Server: ts.URL, Token: "eph_good"}
@@ -66,22 +66,37 @@ func TestServerNeverDialsHost(t *testing.T) {
 	}
 }
 
-// A host started before its central server keeps trying, and connects
-// once the server is up.
+// A host whose server is down keeps trying, and connects once the server
+// is back.
 func TestHostReconnects(t *testing.T) {
+	hosts := &control.FileHosts{} // shared by both servers, like a database
+	tokens := control.StaticToken{Name: "laptop", Token: "eph_good"}
+
+	// Join through one server.
+	first := httptest.NewServer((&control.Server{Tokens: tokens, Hosts: hosts}).Handler())
+	code, err := (&control.Server{Hosts: hosts}).CreateJoinCode(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs, _ := newHost(t, "early")
+	id, err := host.Join(context.Background(), first.URL, code, "early", hs.Key)
+	first.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then connect to an address where nothing listens yet.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close() // nothing listens here yet
-
-	hs, _ := newHost(t, "early")
+	ln.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	welcomed := make(chan struct{}, 1)
-	go hs.Connect(ctx, host.ConnectConfig{ServerURL: "http://" + addr, Secret: "s",
-		Hello:     api.HostHello{Name: "early", URL: "http://192.0.2.1:7701"},
+	go hs.Connect(ctx, host.ConnectConfig{ServerURL: "http://" + addr, HostID: id.HostID,
+		Hello:     api.HostHello{URL: "http://192.0.2.1:7701"},
 		OnWelcome: func() { welcomed <- struct{}{} }})
 
 	time.Sleep(1500 * time.Millisecond) // at least one failed try
@@ -89,8 +104,7 @@ func TestHostReconnects(t *testing.T) {
 	if err != nil {
 		t.Skipf("port %s was taken meanwhile: %v", addr, err)
 	}
-	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}, HostSecret: "s"}
-	srv := &http.Server{Handler: cs.Handler()}
+	srv := &http.Server{Handler: (&control.Server{Tokens: tokens, Hosts: hosts}).Handler()}
 	go srv.Serve(ln)
 	defer srv.Close()
 
@@ -101,33 +115,123 @@ func TestHostReconnects(t *testing.T) {
 	}
 }
 
-// A host with the wrong secret, or speaking another protocol version, is
-// turned away.
-func TestHostRefused(t *testing.T) {
-	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}, HostSecret: "s"}
+func joinCode(t *testing.T, cs *control.Server, account string) string {
+	t.Helper()
+	code, err := cs.CreateJoinCode(context.Background(), account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code
+}
+
+// connectOnce tries one connection as host id and returns the server's
+// first answer to the hello.
+func connectOnce(t *testing.T, serverURL, id string, key ed25519.PrivateKey) api.HostMessage {
+	t.Helper()
+	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Key: key}
+	got := make(chan api.HostMessage, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go hs.Connect(ctx, host.ConnectConfig{ServerURL: serverURL, HostID: id,
+		Hello:     api.HostHello{URL: "http://192.0.2.1:7701"},
+		OnWelcome: func() { got <- api.HostMessage{Type: "welcome"} }})
+	select {
+	case m := <-got:
+		return m
+	case <-ctx.Done():
+		return api.HostMessage{Type: "refused"}
+	}
+}
+
+// Joining: a code works once, and a host signs in only with the key it
+// joined with, until it is removed.
+func TestJoinAndSignIn(t *testing.T) {
+	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}}
 	ts := httptest.NewServer(cs.Handler())
 	defer ts.Close()
+	ctx := context.Background()
+	hs, _ := newHost(t, "h1")
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/hosts/connect", nil)
-	req.Header.Set("Authorization", "Bearer wrong")
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", api.HostUpgrade)
+	code := joinCode(t, cs, "")
+	id, err := host.Join(ctx, ts.URL, code, "h1", hs.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Account != control.DefaultAccount || id.HostID == "" {
+		t.Errorf("joined as %+v", id)
+	}
+	_, other, _ := ed25519.GenerateKey(nil)
+	if _, err := host.Join(ctx, ts.URL, code, "h2", other); err == nil {
+		t.Error("a join code worked twice")
+	}
+	if _, err := host.Join(ctx, ts.URL, joinCode(t, cs, ""), "H1", other); err == nil {
+		t.Error("a second host named h1 joined the same account")
+	}
+	if _, err := host.Join(ctx, ts.URL, "ej_madeup", "h3", other); err == nil {
+		t.Error("a made-up code worked")
+	}
+
+	if m := connectOnce(t, ts.URL, id.HostID, other); m.Type == "welcome" {
+		t.Error("a host signed in with a key it didn't join with")
+	}
+	if m := connectOnce(t, ts.URL, id.HostID, hs.Key); m.Type != "welcome" {
+		t.Fatal("the joined host could not sign in")
+	}
+
+	// Removing it from the account keeps it out.
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/hosts/"+id.HostID, nil)
+	req.Header.Set("Authorization", "Bearer eph_good")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("wrong secret: %s, want 401", resp.Status)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("remove host: %s", resp.Status)
 	}
+	if m := connectOnce(t, ts.URL, id.HostID, hs.Key); m.Type == "welcome" {
+		t.Error("a removed host signed in")
+	}
+}
 
-	req.Header.Set("Authorization", "Bearer s")
-	req.Header.Del("Upgrade")
-	if resp, err = http.DefaultClient.Do(req); err != nil {
+// Sandboxes go only to the account's own hosts, and each account lists
+// only its own.
+func TestHostsBelongToAnAccount(t *testing.T) {
+	tf := &control.TokenFile{Path: t.TempDir() + "/tokens.json"}
+	ctx := context.Background()
+	_, alice, _ := tf.CreateToken(ctx, "a", "alice", control.Limits{})
+	_, bob, _ := tf.CreateToken(ctx, "b", "bob", control.Limits{})
+	cs := &control.Server{Tokens: tf}
+	ts := httptest.NewServer(cs.Handler())
+	defer ts.Close()
+	hs, be := newHost(t, "alices")
+	hosttest.Connect(t, hs, ts.URL, joinCode(t, cs, "alice"), api.HostHello{Name: "alices", URL: "http://192.0.2.1:7701", Capacity: 5})
+
+	if hosts, _ := (&client.Client{Server: ts.URL, Token: bob}).Hosts(ctx); len(hosts) != 0 {
+		t.Errorf("bob lists %d of alice's hosts", len(hosts))
+	}
+	if _, err := (&client.Client{Server: ts.URL, Token: bob}).Create(ctx, api.Spec{}); err == nil {
+		t.Error("bob's sandbox was placed on alice's host")
+	}
+	if be.Live() != 0 {
+		t.Fatal("alice's host runs a sandbox for bob")
+	}
+	hosts, _ := (&client.Client{Server: ts.URL, Token: alice}).Hosts(ctx)
+	if len(hosts) != 1 || !hosts[0].Online || hosts[0].Name != "alices" {
+		t.Errorf("alice's hosts = %+v", hosts)
+	}
+	if _, err := (&client.Client{Server: ts.URL, Token: alice}).Create(ctx, api.Spec{}); err != nil {
+		t.Errorf("alice's sandbox: %v", err)
+	}
+	// Bob can't remove alice's host either.
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/hosts/"+hosts[0].ID, nil)
+	req.Header.Set("Authorization", "Bearer "+bob)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusUpgradeRequired {
-		t.Errorf("no Upgrade header: %s, want 426", resp.Status)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("bob removing alice's host: %s, want 404", resp.Status)
 	}
 }

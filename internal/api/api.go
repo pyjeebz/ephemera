@@ -90,7 +90,8 @@ type CreateSandboxRequest struct {
 // directly, so files and output never pass through the central server.
 type Sandbox struct {
 	ID        string    `json:"id"`
-	Host      string    `json:"host"`
+	Host      string    `json:"host"`    // its name
+	HostID    string    `json:"host_id"` // unique; names are only unique within an account
 	HostURL   string    `json:"host_url"`
 	Token     string    `json:"token,omitempty"`
 	Spec      Spec      `json:"spec"`
@@ -197,6 +198,7 @@ type ProjectSnapshotResult struct {
 
 // Host is a host as the central server knows it.
 type Host struct {
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	PublicKey string    `json:"public_key"`
 	LastSeen  time.Time `json:"last_seen"`
@@ -228,8 +230,12 @@ const HostProtocol = 1
 // HostMessage is one message on a host's connection, sent as one line of
 // JSON either way. Type says which fields are set:
 //
-//	hello      host to server, first: Hello and Sandboxes
+//	challenge  server to host, first: Nonce, which the host signs
+//	hello      host to server, the reply: Hello and Sandboxes
 //	welcome    server to host, the reply: Destroy
+//	refused    server to host, instead of welcome: Error. Removed is set
+//	           when the server doesn't know the host, and the host then
+//	           destroys its sandboxes, since no one can see or stop them
 //	heartbeat  host to server, every 15 s: Req and Sandboxes
 //	ack        server to host, the reply: Req and Destroy
 //	create     server to host: Req and Create
@@ -243,19 +249,25 @@ const HostProtocol = 1
 type HostMessage struct {
 	Type      string             `json:"type"`
 	Req       string             `json:"req,omitempty"`
+	Nonce     string             `json:"nonce,omitempty"`
 	Hello     *HostHello         `json:"hello,omitempty"`
 	Sandboxes []string           `json:"sandboxes,omitempty"`
 	Destroy   []string           `json:"destroy,omitempty"`
 	Create    *HostCreateRequest `json:"create,omitempty"`
 	Sandbox   string             `json:"sandbox,omitempty"`
 	OK        bool               `json:"ok,omitempty"`
+	Removed   bool               `json:"removed,omitempty"`
 	Error     string             `json:"error,omitempty"`
 	Record    *SignedRecord      `json:"record,omitempty"`
 }
 
-// HostHello introduces a host when it connects.
+// HostHello introduces a host when it connects. Signature is the host
+// key's Ed25519 signature over HostSignedText, base64: it proves the host
+// holds the key it joined with.
 type HostHello struct {
-	Name string `json:"name"`
+	HostID    string `json:"host_id"`
+	Signature string `json:"signature"`
+	Name      string `json:"name,omitempty"` // from the join; this is ignored
 	// URL is where the CLI reaches the host for files and commands.
 	URL      string `json:"url"`
 	Capacity int    `json:"capacity"`
@@ -292,6 +304,33 @@ func NewToken() string {
 		panic(err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// HostSignedText is what a host signs to connect: the protocol, the
+// server's host name as the host dialed it, and the server's fresh
+// challenge. Naming the server keeps a signature made for one server from
+// working on another.
+func HostSignedText(serverHost, nonce string) []byte {
+	return []byte("ephemera-host-connect-v1\n" + serverHost + "\n" + nonce)
+}
+
+// JoinRequest is a new host joining an account with a one-time code.
+type JoinRequest struct {
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	PublicKey string `json:"public_key"` // Ed25519, base64
+}
+
+// JoinResponse says which host the server made, in which account.
+type JoinResponse struct {
+	HostID  string `json:"host_id"`
+	Account string `json:"account"`
+}
+
+// JoinCode is a one-time code for a new host.
+type JoinCode struct {
+	Code    string    `json:"code"`
+	Expires time.Time `json:"expires"`
 }
 
 // Account is a person signed in on the web.

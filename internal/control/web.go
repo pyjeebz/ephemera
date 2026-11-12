@@ -127,6 +127,18 @@ func (s *Server) webRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/tokens", s.session(s.tokenList))
 	mux.HandleFunc("POST /v1/tokens", s.session(s.tokenCreate))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.session(s.tokenRevoke))
+	mux.HandleFunc("POST /v1/join-codes", s.session(s.joinCodeCreate))
+}
+
+// joinCodeCreate makes a one-time code for adding a host to the account.
+func (s *Server) joinCodeCreate(w http.ResponseWriter, r *http.Request) {
+	code, err := s.hostRecords().CreateJoinCode(r.Context(), account(r).ID, JoinCodeTTL)
+	if err != nil {
+		s.log().Error("store: join code", "err", err)
+		host.WriteError(w, http.StatusServiceUnavailable, "could not make a join code; try again")
+		return
+	}
+	writeJSON(w, http.StatusCreated, api.JoinCode{Code: code, Expires: time.Now().Add(JoinCodeTTL).UTC()})
 }
 
 // cors lets the dashboard's origin call the API with the session cookie.

@@ -18,4 +18,7 @@ func TestFileStores(t *testing.T) {
 		now := func() time.Time { return time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC) }
 		return &control.FileState{Path: filepath.Join(t.TempDir(), "sandboxes.json"), Now: now}
 	})
+	storetest.Hosts(t, func(t *testing.T) control.HostStore {
+		return &control.FileHosts{Path: filepath.Join(t.TempDir(), "hosts.json")}
+	})
 }

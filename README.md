@@ -50,15 +50,21 @@ reach ports inside sandboxes.
 
 ```sh
 go build -o bin/ ./cmd/...
-export EPHEMERA_HOST_SECRET=dev-secret   # shared by the server and its hosts
 
 bin/ephemera-server token create my-laptop > token.txt
 bin/ephemera-server &
-bin/ephemera-host &
+
+# The host joins the server once, with a one-time code.
+bin/ephemera-server join-code create | sudo bin/ephemera-host join --server http://127.0.0.1:7700
+sudo bin/ephemera-host &
 
 bin/ephemera login < token.txt && rm token.txt
 bin/ephemera run -- sh -c 'ls && uname -a'
 ```
+
+`ephemera-host join` keeps the host's key in `/var/lib/ephemera/host.key`
+and what it joined as in `/var/lib/ephemera/host.json`. From then on the
+host signs in to the server with that key; there is no shared secret.
 
 `ephemera login` checks the token and saves it, readable only by you, in
 your user config directory. `ephemera logout` removes it. The variables
@@ -260,7 +266,7 @@ Downloads are checked against pinned SHA-256 sums; the build needs network
 for Ubuntu's packages. Then run the host agent on microVMs:
 
 ```sh
-sudo -E bin/ephemera-host --backend firecracker
+sudo bin/ephemera-host --backend firecracker
 ```
 
 Every sandbox boots that image read-only, with a disk of its own that

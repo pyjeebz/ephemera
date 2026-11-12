@@ -31,6 +31,7 @@ Usage:
   ephemera-server token limits <id-or-name> [--max-sandboxes N] [--max-minutes N] [--state DIR]
   ephemera-server token ls [--state DIR]
   ephemera-server token revoke <id-or-name> [--state DIR]
+  ephemera-server join-code create [--account NAME] [--state DIR]
   ephemera-server version
 
 Limits: --max-sandboxes caps sandboxes running at once, --max-minutes caps
@@ -43,7 +44,8 @@ The state directory holds API tokens (tokens.json) and the list of running
 sandboxes (sandboxes.json). With --database, or EPHEMERA_DATABASE_URL, they
 are kept in that Postgres database instead (postgres://...), along with a
 history of finished sandboxes; the token commands then use it too.
-EPHEMERA_HOST_SECRET must be set for serve.
+A new host joins with a one-time code from "join-code create", valid for
+15 minutes: ephemera-host join --server URL CODE.
 
 Web sign-in with GitHub needs the database and a GitHub OAuth app:
   EPHEMERA_GITHUB_CLIENT_ID, EPHEMERA_GITHUB_CLIENT_SECRET
@@ -77,6 +79,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "token" {
 		return tokenCmd(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "join-code" {
+		return joinCodeCmd(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "serve" {
 		args = args[1:]
 	}
@@ -98,14 +103,7 @@ func serve(args []string, stderr io.Writer) int {
 	}
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 
-	srv := &control.Server{
-		HostSecret: os.Getenv("EPHEMERA_HOST_SECRET"),
-		Log:        log,
-	}
-	if srv.HostSecret == "" {
-		log.Error("EPHEMERA_HOST_SECRET must be set")
-		return 2
-	}
+	srv := &control.Server{Log: log}
 	tokens, closeStore, err := openStores(*state, *database, srv)
 	if err != nil {
 		log.Error("open storage", "err", err)
@@ -189,7 +187,7 @@ func openStores(state, database string, srv *control.Server) (control.TokenStore
 			return nil, nil, err
 		}
 		if srv != nil {
-			srv.Tokens, srv.State = db, db
+			srv.Tokens, srv.State, srv.Hosts = db, db, db
 		}
 		return db, db.Close, nil
 	}
@@ -197,8 +195,46 @@ func openStores(state, database string, srv *control.Server) (control.TokenStore
 	if srv != nil {
 		srv.Tokens = tf
 		srv.StatePath = filepath.Join(state, "sandboxes.json")
+		srv.Hosts = &control.FileHosts{Path: filepath.Join(state, "hosts.json")}
 	}
 	return tf, func() {}, nil
+}
+
+// joinCodeCmd makes a one-time code for a new host. The code goes to
+// stdout alone, so scripts can pipe it to ephemera-host join.
+func joinCodeCmd(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "create" {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	fs := flag.NewFlagSet("join-code create", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	state := fs.String("state", defaultStateDir(), "state directory")
+	database := fs.String("database", os.Getenv("EPHEMERA_DATABASE_URL"), "Postgres URL; instead of the state directory")
+	account := fs.String("account", "", `account the host joins (default "local")`)
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	var hosts control.HostStore = &control.FileHosts{Path: filepath.Join(*state, "hosts.json")}
+	if *database != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		db, err := pgstore.Open(ctx, *database)
+		if err != nil {
+			fmt.Fprintln(stderr, "ephemera-server:", err)
+			return 1
+		}
+		defer db.Close()
+		hosts = db
+	}
+	code, err := hosts.CreateJoinCode(context.Background(), *account, control.JoinCodeTTL)
+	if err != nil {
+		fmt.Fprintln(stderr, "ephemera-server:", err)
+		return 1
+	}
+	fmt.Fprintf(stderr, "Join code for a new host, valid once for %d minutes. On the host:\n  sudo ephemera-host join --server <this server's URL> CODE\n", int(control.JoinCodeTTL.Minutes()))
+	fmt.Fprintln(stdout, code)
+	return 0
 }
 
 func tokenCmd(args []string, stdout, stderr io.Writer) int {

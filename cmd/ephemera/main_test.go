@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"net/http/httptest"
 	"os"
@@ -19,7 +20,7 @@ import (
 )
 
 func TestLoginLsLogout(t *testing.T) {
-	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}, HostSecret: "s"}
+	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}}
 	ts := httptest.NewServer(cs.Handler())
 	defer ts.Close()
 
@@ -66,7 +67,7 @@ func TestLoginLsLogout(t *testing.T) {
 }
 
 func TestVerify(t *testing.T) {
-	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}, HostSecret: "s"}
+	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}}
 	ts := httptest.NewServer(cs.Handler())
 	defer ts.Close()
 	t.Setenv("EPHEMERA_SERVER", ts.URL)
@@ -76,7 +77,11 @@ func TestVerify(t *testing.T) {
 	key := newKey(t)
 	// The host tells the central server its public key when it connects.
 	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Name: "h1", Key: key}
-	hosttest.Connect(t, hs, ts.URL, "s", api.HostHello{Name: "h1", URL: "http://h1"})
+	code, err := cs.CreateJoinCode(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosttest.Connect(t, hs, ts.URL, code, api.HostHello{Name: "h1", URL: "http://h1"})
 
 	// Records are written the way the CLI saves them.
 	write := func(sr api.SignedRecord) string {

@@ -11,7 +11,7 @@ After=network-online.target tailscaled.service ephemera-server.service
 [Service]
 Type=simple
 EnvironmentFile=/etc/ephemera/ephemera.env
-ExecStart=/usr/local/bin/ephemera-host --backend firecracker --listen ${EPHEMERA_HOST_LISTEN} --url ${EPHEMERA_HOST_URL} --server ${EPHEMERA_SERVER_URL} --name ${EPHEMERA_HOST_NAME} $EPHEMERA_HOST_ARGS
+ExecStart=/usr/local/bin/ephemera-host --backend firecracker --listen ${EPHEMERA_HOST_LISTEN} --url ${EPHEMERA_HOST_URL} --server ${EPHEMERA_SERVER_URL} $EPHEMERA_HOST_ARGS
 Restart=always
 RestartSec=5
 # Time to destroy every sandbox, then stop whatever is left.

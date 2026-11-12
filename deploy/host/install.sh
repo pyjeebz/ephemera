@@ -6,14 +6,14 @@
 # Usage:
 #   sudo deploy/host/install.sh                       # server and host on this machine
 #   sudo deploy/host/install.sh --role host --server-url http://100.64.0.1:7700 \
-#        --secret-file /root/ephemera-host-secret      # another host for that server
+#        --join-code-file /root/join-code               # another host for that server
 #   sudo deploy/host/install.sh --uninstall [--purge]
 set -euo pipefail
 
 ROLE="all"
 LISTEN_IP=""
 SERVER_URL=""
-SECRET_FILE=""
+JOIN_CODE_FILE=""
 HOST_NAME="$(hostname -s)"
 HOST_ARGS=""
 SKIP_IMAGE=0
@@ -25,6 +25,7 @@ DATA=/var/lib/ephemera
 BIN=/usr/local/bin
 UNITS=/etc/systemd/system
 SERVER_USER=ephemera-server
+IDENTITY=/var/lib/ephemera/host.json
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
 log() { echo "install: $*"; }
@@ -38,8 +39,8 @@ Usage: sudo deploy/host/install.sh [options]
                         host: only a host agent, joining --server-url
   --listen-ip IP        address to serve on (default: this machine's Tailscale IPv4)
   --server-url URL      central server for --role host, e.g. http://100.64.0.1:7700
-  --secret-file PATH    file holding the host secret, for --role host
-                        (on the server machine it is EPHEMERA_HOST_SECRET in /etc/ephemera/ephemera.env)
+  --join-code-file PATH file holding a one-time join code, for --role host
+                        (make one on the server: sudo ephemera-server join-code create)
   --name NAME           host name (default: this machine's hostname)
   --host-args "ARGS"    extra ephemera-host flags, e.g. "--capacity 40 --max-lifetime 8h"
   --skip-image          don't build the guest image (it must already be in /var/lib/ephemera/image)
@@ -53,7 +54,7 @@ while [ $# -gt 0 ]; do
 	--role) ROLE="${2:-}"; shift 2 ;;
 	--listen-ip) LISTEN_IP="${2:-}"; shift 2 ;;
 	--server-url) SERVER_URL="${2:-}"; shift 2 ;;
-	--secret-file) SECRET_FILE="${2:-}"; shift 2 ;;
+	--join-code-file) JOIN_CODE_FILE="${2:-}"; shift 2 ;;
 	--name) HOST_NAME="${2:-}"; shift 2 ;;
 	--host-args) HOST_ARGS="${2:-}"; shift 2 ;;
 	--skip-image) SKIP_IMAGE=1; shift ;;
@@ -91,8 +92,8 @@ case "$ROLE" in
 all) ;;
 host)
 	[ -n "$SERVER_URL" ] || die "--role host needs --server-url"
-	[ -n "$SECRET_FILE" ] || [ -n "${EPHEMERA_HOST_SECRET:-}" ] || grep -q '^EPHEMERA_HOST_SECRET=.' "$ENV_FILE" 2>/dev/null ||
-		die "--role host needs the server's host secret: --secret-file PATH, or EPHEMERA_HOST_SECRET in the environment"
+	[ -n "$JOIN_CODE_FILE" ] || [ -f "$IDENTITY" ] ||
+		die "--role host needs a join code: make one on the server (sudo ephemera-server join-code create), save it to a file, and pass --join-code-file PATH"
 	;;
 *) die "--role must be all or host" ;;
 esac
@@ -150,33 +151,17 @@ fi
 
 mkdir -p /etc/ephemera
 chmod 0700 /etc/ephemera
-secret=""
-if [ -n "$SECRET_FILE" ]; then
-	secret="$(tr -d '[:space:]' <"$SECRET_FILE")"
-elif [ -n "${EPHEMERA_HOST_SECRET:-}" ]; then
-	secret="$EPHEMERA_HOST_SECRET"
-elif [ -f "$ENV_FILE" ]; then
-	# An upgrade keeps the secret every host already uses.
-	secret="$(sed -n 's/^EPHEMERA_HOST_SECRET=//p' "$ENV_FILE")"
-fi
-if [ -z "$secret" ]; then
-	[ "$ROLE" = all ] || die "the host secret is empty"
-	secret="$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n')"
-fi
 umask 077
 cat >"$ENV_FILE.tmp" <<EOF
 # Written by deploy/host/install.sh; run it again to change these.
-EPHEMERA_HOST_SECRET=$secret
 EPHEMERA_SERVER_LISTEN=$LISTEN_IP:7700
 EPHEMERA_SERVER_URL=$SERVER_URL
 EPHEMERA_HOST_LISTEN=$LISTEN_IP:7701
 EPHEMERA_HOST_URL=http://$LISTEN_IP:7701
-EPHEMERA_HOST_NAME=$HOST_NAME
 EPHEMERA_HOST_ARGS=$HOST_ARGS
 EOF
 mv "$ENV_FILE.tmp" "$ENV_FILE"
 umask 022
-unset secret
 
 # --- Services ---------------------------------------------------------------
 
@@ -192,10 +177,12 @@ done
 systemctl daemon-reload
 for s in "${services[@]}"; do
 	systemctl enable --quiet "$s.service"
-	systemctl restart "$s.service"
 done
+# The host joins before it starts, and it joins a running server.
+systemctl stop ephemera-host.service 2>/dev/null || true
 
 if [ "$ROLE" = all ]; then
+	systemctl restart ephemera-server.service
 	log "waiting for the central server"
 	for _ in $(seq 1 30); do
 		curl -fsS -o /dev/null "$SERVER_URL/healthz" 2>/dev/null && break
@@ -203,6 +190,24 @@ if [ "$ROLE" = all ]; then
 	done
 	curl -fsS -o /dev/null "$SERVER_URL/healthz" || die "the central server did not start: journalctl -u ephemera-server"
 fi
+
+# --- Join -------------------------------------------------------------------
+
+if [ -f "$IDENTITY" ]; then
+	log "host already joined; keeping $IDENTITY"
+else
+	if [ "$ROLE" = all ]; then
+		code="$("$BIN/ephemera-server" join-code create --state "$DATA/server" 2>/dev/null)"
+	else
+		code="$(tr -d '[:space:]' <"$JOIN_CODE_FILE")"
+	fi
+	[ -n "$code" ] || die "no join code"
+	printf '%s\n' "$code" | "$BIN/ephemera-host" join --server "$SERVER_URL" --name "$HOST_NAME" ||
+		die "the host could not join $SERVER_URL"
+	unset code
+fi
+systemctl start ephemera-host.service
+
 log "waiting for the host agent to connect (it builds a snapshot first, about 10 s)"
 since="$(date '+%Y-%m-%d %H:%M:%S' -d '-5 sec' 2>/dev/null || date '+%Y-%m-%d %H:%M:%S')"
 connected=0

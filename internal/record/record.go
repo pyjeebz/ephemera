@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -98,4 +100,21 @@ func LoadOrCreateKey(path string) (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	return key, f.Close()
+}
+
+// Fingerprint is a short, stable name for a public key (base64 Ed25519, as
+// PublicKey writes it): "SHA256:" and the unpadded base64 of the SHA-256 of
+// its DER SubjectPublicKeyInfo. People compare it to check a host is the
+// one they joined.
+func Fingerprint(publicKey string) (string, error) {
+	pub, err := base64.StdEncoding.DecodeString(publicKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return "", errors.New("not an Ed25519 public key")
+	}
+	der, err := x509.MarshalPKIXPublicKey(ed25519.PublicKey(pub))
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(der)
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]), nil
 }

@@ -228,9 +228,9 @@ func (s *Store) StartSandbox(ctx context.Context, sb api.Sandbox) error {
 	}
 	_, err = s.pool.Exec(ctx, `
 		WITH a AS (INSERT INTO accounts (id) VALUES ($2) ON CONFLICT DO NOTHING)
-		INSERT INTO sandboxes (id, account_id, owner, host, host_url, spec, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		sb.ID, accountOr(sb.Account), sb.Owner, sb.Host, sb.HostURL, spec, sb.CreatedAt)
+		INSERT INTO sandboxes (id, account_id, owner, host, host_id, host_url, spec, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		sb.ID, accountOr(sb.Account), sb.Owner, sb.Host, sb.HostID, sb.HostURL, spec, sb.CreatedAt)
 	return err
 }
 
@@ -252,7 +252,7 @@ func (s *Store) EndSandbox(ctx context.Context, id string, at time.Time, reason 
 // RunningSandboxes implements control.StateStore.
 func (s *Store) RunningSandboxes(ctx context.Context) ([]api.Sandbox, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, account_id, owner, host, host_url, spec, created_at
+		SELECT id, account_id, owner, host, host_id, host_url, spec, created_at
 		FROM sandboxes WHERE ended_at IS NULL ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
@@ -260,7 +260,7 @@ func (s *Store) RunningSandboxes(ctx context.Context) ([]api.Sandbox, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (api.Sandbox, error) {
 		var sb api.Sandbox
 		var spec []byte
-		if err := r.Scan(&sb.ID, &sb.Account, &sb.Owner, &sb.Host, &sb.HostURL, &spec, &sb.CreatedAt); err != nil {
+		if err := r.Scan(&sb.ID, &sb.Account, &sb.Owner, &sb.Host, &sb.HostID, &sb.HostURL, &spec, &sb.CreatedAt); err != nil {
 			return sb, err
 		}
 		sb.CreatedAt = sb.CreatedAt.UTC()
@@ -366,6 +366,103 @@ func (s *Store) AccountTokens(ctx context.Context, accountID string) ([]control.
 // RevokeAccountToken implements control.AccountStore.
 func (s *Store) RevokeAccountToken(ctx context.Context, accountID, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM tokens WHERE id = $1 AND account_id = $2`, id, accountID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return control.ErrNotFound
+	}
+	return nil
+}
+
+var _ control.HostStore = (*Store)(nil)
+
+// CreateJoinCode implements control.HostStore. It also clears out codes
+// that have expired.
+func (s *Store) CreateJoinCode(ctx context.Context, account string, ttl time.Duration) (string, error) {
+	account = accountOr(account)
+	if !control.ValidAccount(account) {
+		return "", fmt.Errorf("account %q: use lowercase letters, digits and dashes, at most 39", account)
+	}
+	code, err := control.NewJoinCode()
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM join_codes WHERE expires_at < now()`); err != nil {
+		return "", err
+	}
+	_, err = s.pool.Exec(ctx, `
+		WITH a AS (INSERT INTO accounts (id) VALUES ($2) ON CONFLICT DO NOTHING)
+		INSERT INTO join_codes (sha256, account_id, expires_at) VALUES ($1, $2, $3)`,
+		control.HashToken(code), account, time.Now().Add(ttl))
+	return code, err
+}
+
+// JoinHost implements control.HostStore. Using the code and adding the host
+// happen in one transaction, so a code works once.
+func (s *Store) JoinHost(ctx context.Context, code string, h control.HostRecord) (control.HostRecord, error) {
+	if err := control.CheckHost(h); err != nil {
+		return control.HostRecord{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return control.HostRecord{}, err
+	}
+	defer tx.Rollback(ctx)
+	err = tx.QueryRow(ctx, `DELETE FROM join_codes WHERE sha256 = $1 AND expires_at > now() RETURNING account_id`,
+		control.HashToken(code)).Scan(&h.Account)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return control.HostRecord{}, control.ErrBadCode
+	}
+	if err != nil {
+		return control.HostRecord{}, err
+	}
+	h.ID = control.NewHostID()
+	err = tx.QueryRow(ctx, `INSERT INTO hosts (id, account_id, name, public_key) VALUES ($1, $2, $3, $4) RETURNING joined_at`,
+		h.ID, h.Account, h.Name, h.PublicKey).Scan(&h.Joined)
+	if isUnique(err) {
+		return control.HostRecord{}, control.ErrNameTaken
+	}
+	if err != nil {
+		return control.HostRecord{}, err
+	}
+	h.Joined = h.Joined.UTC()
+	return h, tx.Commit(ctx)
+}
+
+func scanHost(r pgx.CollectableRow) (control.HostRecord, error) {
+	var h control.HostRecord
+	err := r.Scan(&h.ID, &h.Account, &h.Name, &h.PublicKey, &h.Joined)
+	h.Joined = h.Joined.UTC()
+	return h, err
+}
+
+// Host implements control.HostStore.
+func (s *Store) Host(ctx context.Context, id string) (control.HostRecord, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, account_id, name, public_key, joined_at FROM hosts WHERE id = $1`, id)
+	if err != nil {
+		return control.HostRecord{}, err
+	}
+	h, err := pgx.CollectExactlyOneRow(rows, scanHost)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return h, control.ErrNotFound
+	}
+	return h, err
+}
+
+// AccountHosts implements control.HostStore.
+func (s *Store) AccountHosts(ctx context.Context, account string) ([]control.HostRecord, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, account_id, name, public_key, joined_at FROM hosts
+		WHERE account_id = $1 ORDER BY name, id`, account)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanHost)
+}
+
+// RemoveHost implements control.HostStore.
+func (s *Store) RemoveHost(ctx context.Context, account, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM hosts WHERE id = $1 AND account_id = $2`, id, account)
 	if err != nil {
 		return err
 	}

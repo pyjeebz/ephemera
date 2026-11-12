@@ -39,7 +39,7 @@ type stack struct {
 
 func newStack(t *testing.T, be sandbox.Backend, image string) *stack {
 	t.Helper()
-	cs := &control.Server{Tokens: control.StaticToken{Name: "test", Token: userToken}, HostSecret: hostSecret, Log: discardLog()}
+	cs := &control.Server{Tokens: control.StaticToken{Name: "test", Token: userToken}, Log: discardLog()}
 	cts := httptest.NewServer(cs.Handler())
 	t.Cleanup(cts.Close)
 
@@ -48,7 +48,8 @@ func newStack(t *testing.T, be sandbox.Backend, image string) *stack {
 	t.Cleanup(hts.Close)
 	t.Cleanup(func() { hs.DestroyAll(context.Background()) })
 
-	hosttest.Connect(t, hs, cts.URL, hostSecret, api.HostHello{Name: "test-host", URL: hts.URL, Capacity: 10})
+	servers.Store(cts.URL, cs)
+	hosttest.Connect(t, hs, cts.URL, joinCode(t, cs), api.HostHello{Name: "test-host", URL: hts.URL, Capacity: 10})
 	return &stack{control: cs, host: hs, client: &client.Client{Server: cts.URL, Token: userToken}}
 }
 

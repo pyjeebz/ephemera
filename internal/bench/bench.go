@@ -212,12 +212,12 @@ type stack struct {
 
 func newStack(ctx context.Context, be *firecracker.Backend, workDir string) (*stack, error) {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	secret, token := randHex(16), randHex(16)
+	token := randHex(16)
 	key, err := record.LoadOrCreateKey(filepath.Join(workDir, "host.key"))
 	if err != nil {
 		return nil, err
 	}
-	cs := &control.Server{Tokens: control.StaticToken{Name: "bench", Token: token}, HostSecret: secret, Log: quiet}
+	cs := &control.Server{Tokens: control.StaticToken{Name: "bench", Token: token}, Log: quiet}
 	hs := &host.Server{Backend: be, Log: quiet, DefaultImage: "default", Name: "bench", BackendName: "firecracker", Key: key}
 	cURL, cStop, err := serve(cs.Handler())
 	if err != nil {
@@ -228,9 +228,21 @@ func newStack(ctx context.Context, be *firecracker.Backend, workDir string) (*st
 		cStop()
 		return nil, err
 	}
+	code, err := cs.CreateJoinCode(ctx, "")
+	if err != nil {
+		cStop()
+		hStop()
+		return nil, err
+	}
+	id, err := host.Join(ctx, cURL, code, "bench", key)
+	if err != nil {
+		cStop()
+		hStop()
+		return nil, fmt.Errorf("join: %w", err)
+	}
 	rctx, cancel := context.WithCancel(ctx)
-	go hs.Connect(rctx, host.ConnectConfig{ServerURL: cURL, Secret: secret,
-		Hello: api.HostHello{Name: "bench", URL: hURL, Capacity: 1000}})
+	go hs.Connect(rctx, host.ConnectConfig{ServerURL: cURL, HostID: id.HostID,
+		Hello: api.HostHello{URL: hURL, Capacity: 1000}})
 	st := &stack{host: hs, client: &client.Client{Server: cURL, Token: token}, stop: func() {
 		cancel()
 		dctx, c := context.WithTimeout(context.Background(), time.Minute)

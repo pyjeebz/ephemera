@@ -3,7 +3,9 @@ package host
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,11 +22,11 @@ import (
 	"github.com/pyjeebz/ephemera/internal/record"
 )
 
-// ConnectConfig says how to reach the central server.
+// ConnectConfig says how to reach the central server, and as which host.
 type ConnectConfig struct {
 	ServerURL string
-	Secret    string        // the host secret, shared with the central server
-	Hello     api.HostHello // Name, URL and Capacity; the rest is filled in
+	HostID    string        // from the join
+	Hello     api.HostHello // URL and Capacity; the rest is filled in
 	// Heartbeat is how often the host says it's alive; 15 s if zero.
 	Heartbeat time.Duration
 	// OnWelcome, if set, runs each time the server accepts the host, after
@@ -60,7 +62,7 @@ func (s *Server) Connect(ctx context.Context, cfg ConnectConfig) {
 	if cfg.Heartbeat == 0 {
 		cfg.Heartbeat = 15 * time.Second
 	}
-	cfg.Hello.Protocol = api.HostProtocol
+	cfg.Hello.Protocol, cfg.Hello.HostID = api.HostProtocol, cfg.HostID
 	if s.Key != nil {
 		cfg.Hello.PublicKey = record.PublicKey(s.Key)
 	}
@@ -102,7 +104,6 @@ func (s *Server) connectOnce(ctx context.Context, cfg ConnectConfig) error {
 		cancel()
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+cfg.Secret)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", api.HostUpgrade)
 	resp, err := (&http.Client{Transport: upgradeTransport}).Do(req)
@@ -127,19 +128,42 @@ func (s *Server) connectOnce(ctx context.Context, cfg ConnectConfig) error {
 	stop := context.AfterFunc(ctx, func() { rw.Close() })
 	defer stop()
 
-	if err := c.send(api.HostMessage{Type: "hello", Hello: &cfg.Hello, Sandboxes: s.ids()}); err != nil {
+	// The server sends a fresh challenge; signing it, with the server's
+	// name as dialed, proves this host holds the key it joined with.
+	r := bufio.NewReaderSize(rw, 64<<10)
+	var challenge api.HostMessage
+	if err := readMessage(r, &challenge); err != nil {
 		return err
 	}
-	r := bufio.NewReaderSize(rw, 64<<10)
+	if challenge.Type != "challenge" || challenge.Nonce == "" {
+		return fmt.Errorf("server answered %q, not a challenge: %s", challenge.Type, challenge.Error)
+	}
+	if s.Key == nil {
+		return errors.New("host has no key")
+	}
+	hello := cfg.Hello
+	hello.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(s.Key, api.HostSignedText(req.URL.Host, challenge.Nonce)))
+	if err := c.send(api.HostMessage{Type: "hello", Hello: &hello, Sandboxes: s.ids()}); err != nil {
+		return err
+	}
 	var welcome api.HostMessage
 	if err := readMessage(r, &welcome); err != nil {
 		return err
+	}
+	if welcome.Type == "refused" && welcome.Removed {
+		// No one can see or stop these sandboxes any more.
+		if n := len(s.ids()); n > 0 {
+			s.log().Warn("central server has no record of this host; destroying its sandboxes", "count", n)
+			if err := s.DestroyAll(ctx); err != nil {
+				s.log().Error("destroy sandboxes", "err", err)
+			}
+		}
 	}
 	if welcome.Type != "welcome" {
 		return fmt.Errorf("server answered %q, not welcome: %s", welcome.Type, welcome.Error)
 	}
 	s.destroyUnknown(ctx, welcome.Destroy)
-	s.log().Info("connected to central server", "server", cfg.ServerURL, "name", cfg.Hello.Name)
+	s.log().Info("connected to central server", "server", cfg.ServerURL, "host_id", cfg.HostID)
 
 	s.mu.Lock()
 	if s.conns == nil {

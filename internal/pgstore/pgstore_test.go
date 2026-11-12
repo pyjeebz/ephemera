@@ -17,6 +17,7 @@ func TestStore(t *testing.T) {
 	storetest.Tokens(t, func(t *testing.T) control.TokenStore { s, _ := pgtest.Open(t); return s })
 	storetest.State(t, func(t *testing.T) control.StateStore { s, _ := pgtest.Open(t); return s })
 	storetest.Accounts(t, func(t *testing.T) control.AccountStore { s, _ := pgtest.Open(t); return s })
+	storetest.Hosts(t, func(t *testing.T) control.HostStore { s, _ := pgtest.Open(t); return s })
 }
 
 // Opening a database again applies each migration once.

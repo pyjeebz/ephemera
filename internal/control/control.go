@@ -10,12 +10,12 @@ package control
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -31,10 +31,10 @@ const HostTimeout = 45 * time.Second
 
 // Server serves the central API.
 type Server struct {
-	Tokens     Tokens     // API tokens for CLI requests
-	HostSecret string     // shared with every host
-	State      StateStore // where sandboxes and usage are kept
-	StatePath  string     // with no State: a FileState at this path; empty keeps it in memory
+	Tokens    Tokens     // API tokens for CLI requests
+	State     StateStore // where sandboxes and usage are kept
+	Hosts     HostStore  // hosts that joined, and join codes; nil is a FileHosts next to StatePath, or in memory
+	StatePath string     // with no State: a FileState at this path; empty keeps it in memory
 	// GitHub and Accounts turn on web sign-in and the dashboard's token
 	// endpoints. Without both, those routes don't exist.
 	GitHub   *GitHub
@@ -44,11 +44,13 @@ type Server struct {
 
 	stateOnce sync.Once
 	state     StateStore
+	hostsOnce sync.Once
+	hostStore HostStore
 
 	// The running sandboxes and recent usage, also in the StateStore, are
 	// kept here so requests don't wait on it. One server process per store.
 	mu        sync.Mutex
-	hosts     map[string]*hostState
+	hosts     map[string]*hostState // by host id
 	sandboxes map[string]*api.Sandbox
 	// usage is finished sandboxes' seconds, by owner and UTC day.
 	usage map[owner]map[string]float64
@@ -60,6 +62,20 @@ type Server struct {
 type owner struct{ Account, Name string }
 
 func ownerOf(sb *api.Sandbox) owner { return owner{accountOr(sb.Account), sb.Owner} }
+
+func (s *Server) hostRecords() HostStore {
+	s.hostsOnce.Do(func() {
+		switch {
+		case s.Hosts != nil:
+			s.hostStore = s.Hosts
+		case s.StatePath != "":
+			s.hostStore = &FileHosts{Path: filepath.Join(filepath.Dir(s.StatePath), "hosts.json")}
+		default:
+			s.hostStore = &FileHosts{}
+		}
+	})
+	return s.hostStore
+}
 
 func (s *Server) store() StateStore {
 	s.stateOnce.Do(func() {
@@ -87,6 +103,17 @@ func (s *Server) Load() error {
 	if err != nil {
 		return err
 	}
+	// Sandboxes from before hosts joined with keys have no host id, and no
+	// host can claim them.
+	keep := running[:0]
+	for _, sb := range running {
+		if sb.HostID == "" {
+			s.store().EndSandbox(ctx, sb.ID, s.now().UTC(), EndGone)
+			continue
+		}
+		keep = append(keep, sb)
+	}
+	running = keep
 	since := s.now().UTC().Add(-usageKeep).Format(dayFormat)
 	used, err := s.store().UsageSince(ctx, since)
 	if err != nil {
@@ -143,6 +170,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /v1/hosts/connect", s.hostConnect)
+	mux.HandleFunc("POST /v1/hosts/join", s.hostJoin)
+	mux.HandleFunc("DELETE /v1/hosts/{id}", s.user(s.hostRemove))
 	mux.HandleFunc("GET /v1/whoami", s.user(s.whoami))
 	mux.HandleFunc("GET /v1/usage", s.user(s.usageHandler))
 	mux.HandleFunc("GET /v1/hosts", s.user(s.hostList))
@@ -168,11 +197,6 @@ func (s *Server) log() *slog.Logger {
 		return s.Log
 	}
 	return slog.Default()
-}
-
-func tokenOK(r *http.Request, want string) bool {
-	got, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 type ctxKey struct{}
@@ -331,7 +355,7 @@ func (s *Server) enforceOnce(ctx context.Context) {
 	s.mu.Unlock()
 	for _, sb := range over {
 		s.log().Warn("daily minutes used up; stopping sandbox", "sandbox", sb.ID, "owner", sb.Owner)
-		if _, err := s.hostDo(ctx, sb.Host, api.HostMessage{Type: "destroy", Sandbox: sb.ID}); err != nil {
+		if _, err := s.hostDo(ctx, sb.HostID, api.HostMessage{Type: "destroy", Sandbox: sb.ID}); err != nil {
 			s.log().Warn("stopping sandbox", "sandbox", sb.ID, "host", sb.Host, "err", err)
 		}
 		s.end(ctx, sb, EndLimit)
@@ -344,38 +368,39 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func (s *Server) hostLive(name string) bool {
+func (s *Server) hostLive(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	h, ok := s.hosts[name]
+	h, ok := s.hosts[id]
 	return ok && h.conn != nil
 }
 
-// pick chooses the connected host with the fewest sandboxes and free
-// capacity.
-func (s *Server) pick() (*hostState, error) {
+// pick chooses, among the account's connected hosts, the one with the
+// fewest sandboxes and free capacity. Sandboxes only ever go to the
+// account's own hosts.
+func (s *Server) pick(account string) (*hostState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	load := map[string]int{}
 	for _, sb := range s.sandboxes {
-		load[sb.Host]++
+		load[sb.HostID]++
 	}
 	var live []*hostState
 	for _, h := range s.hosts {
-		if h.conn == nil {
+		if h.conn == nil || h.Account != account {
 			continue
 		}
-		if h.Capacity > 0 && load[h.Name] >= h.Capacity {
+		if h.Capacity > 0 && load[h.ID] >= h.Capacity {
 			continue
 		}
 		live = append(live, h)
 	}
 	if len(live) == 0 {
-		return nil, fmt.Errorf("no host has room for a sandbox")
+		return nil, fmt.Errorf("none of this account's hosts is connected with room for a sandbox; ephemera doctor says why")
 	}
 	sort.Slice(live, func(i, j int) bool {
-		if load[live[i].Name] != load[live[j].Name] {
-			return load[live[i].Name] < load[live[j].Name]
+		if load[live[i].ID] != load[live[j].ID] {
+			return load[live[i].ID] < load[live[j].ID]
 		}
 		return live[i].Name < live[j].Name
 	})
@@ -397,7 +422,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		host.WriteError(w, http.StatusTooManyRequests, "%s", msg)
 		return
 	}
-	h, err := s.pick()
+	h, err := s.pick(p.Account)
 	if err != nil {
 		host.WriteError(w, http.StatusServiceUnavailable, "%v", err)
 		return
@@ -405,6 +430,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	sb := &api.Sandbox{
 		ID:        api.NewID("sbx"),
 		Host:      h.Name,
+		HostID:    h.ID,
 		HostURL:   strings.TrimRight(h.URL, "/"),
 		Token:     api.NewToken(),
 		Spec:      req.Spec,
@@ -433,7 +459,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = s.hostDo(r.Context(), h.Name, api.HostMessage{Type: "create",
+	_, err = s.hostDo(r.Context(), h.ID, api.HostMessage{Type: "create",
 		Create: &api.HostCreateRequest{ID: sb.ID, Token: sb.Token, Spec: sb.Spec}})
 	if err != nil {
 		s.mu.Lock()
@@ -480,9 +506,9 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 	}
 	// The host answers with the sandbox's signed record. It is passed on
 	// to the caller and not kept here.
-	res, err := s.hostDo(r.Context(), sb.Host, api.HostMessage{Type: "destroy", Sandbox: id})
+	res, err := s.hostDo(r.Context(), sb.HostID, api.HostMessage{Type: "destroy", Sandbox: id})
 	if err != nil {
-		if s.hostLive(sb.Host) {
+		if s.hostLive(sb.HostID) {
 			host.WriteError(w, http.StatusBadGateway, "host %s: %v", sb.Host, err)
 			return
 		}
@@ -497,22 +523,4 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res.Record)
-}
-
-// hosts lists the hosts with their public keys, so records can be checked.
-func (s *Server) hostList(w http.ResponseWriter, _ *http.Request) {
-	s.mu.Lock()
-	out := make([]api.Host, 0, len(s.hosts))
-	for _, h := range s.hosts {
-		out = append(out, api.Host{
-			Name:      h.Name,
-			PublicKey: h.PublicKey,
-			LastSeen:  h.lastSeen.UTC(),
-			URL:       h.URL,
-			Online:    h.conn != nil,
-		})
-	}
-	s.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	writeJSON(w, http.StatusOK, out)
 }

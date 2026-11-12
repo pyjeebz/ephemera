@@ -5,6 +5,7 @@ package storetest
 
 import (
 	"context"
+	"crypto/ed25519"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/control"
+	"github.com/pyjeebz/ephemera/internal/record"
 )
 
 // Tokens checks a TokenStore. open returns a new, empty store.
@@ -260,6 +262,80 @@ func Accounts(t *testing.T, open func(t *testing.T) control.AccountStore) {
 		}
 		if recs, _ := as.AccountTokens(ctx, "gh-2"); len(recs) != 1 {
 			t.Error("gh-1's revoke touched gh-2's token")
+		}
+	})
+}
+
+// Hosts checks a HostStore. open returns a new, empty store.
+func Hosts(t *testing.T, open func(t *testing.T) control.HostStore) {
+	ctx := context.Background()
+	_, key, _ := ed25519.GenerateKey(nil)
+	pub := record.PublicKey(key)
+
+	t.Run("join codes", func(t *testing.T) {
+		hs := open(t)
+		code, err := hs.CreateJoinCode(ctx, "alice", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(code, control.JoinCodePrefix) || len(code) != len(control.JoinCodePrefix)+26 {
+			t.Errorf("code %q", code)
+		}
+		h, err := hs.JoinHost(ctx, code, control.HostRecord{Name: "box", PublicKey: pub})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.ID == "" || h.Account != "alice" || h.Name != "box" || h.PublicKey != pub || h.Joined.IsZero() {
+			t.Errorf("joined %+v", h)
+		}
+		if _, err := hs.JoinHost(ctx, code, control.HostRecord{Name: "other", PublicKey: pub}); err != control.ErrBadCode {
+			t.Errorf("a code used twice: %v, want ErrBadCode", err)
+		}
+		old, _ := hs.CreateJoinCode(ctx, "alice", -time.Minute)
+		if _, err := hs.JoinHost(ctx, old, control.HostRecord{Name: "late", PublicKey: pub}); err != control.ErrBadCode {
+			t.Errorf("an expired code: %v, want ErrBadCode", err)
+		}
+		again, _ := hs.CreateJoinCode(ctx, "alice", time.Hour)
+		if _, err := hs.JoinHost(ctx, again, control.HostRecord{Name: "BOX", PublicKey: pub}); err != control.ErrNameTaken {
+			t.Errorf("same name in the account: %v, want ErrNameTaken", err)
+		}
+		if _, err := hs.JoinHost(ctx, again, control.HostRecord{Name: "bad name!", PublicKey: pub}); err == nil {
+			t.Error("a bad host name was accepted")
+		}
+		// The same name is fine in another account.
+		bobs, _ := hs.CreateJoinCode(ctx, "bob", time.Hour)
+		if _, err := hs.JoinHost(ctx, bobs, control.HostRecord{Name: "box", PublicKey: pub}); err != nil {
+			t.Errorf("same name in another account: %v", err)
+		}
+	})
+
+	t.Run("lookup and removal", func(t *testing.T) {
+		hs := open(t)
+		code, _ := hs.CreateJoinCode(ctx, "alice", time.Hour)
+		h, err := hs.JoinHost(ctx, code, control.HostRecord{Name: "box", PublicKey: pub})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := hs.Host(ctx, h.ID); err != nil || got.ID != h.ID || got.Account != "alice" {
+			t.Errorf("Host = %+v, %v", got, err)
+		}
+		if _, err := hs.Host(ctx, "host_none"); err != control.ErrNotFound {
+			t.Errorf("unknown host: %v, want ErrNotFound", err)
+		}
+		if list, _ := hs.AccountHosts(ctx, "alice"); len(list) != 1 {
+			t.Errorf("alice's hosts = %+v", list)
+		}
+		if list, _ := hs.AccountHosts(ctx, "bob"); len(list) != 0 {
+			t.Errorf("bob's hosts = %+v", list)
+		}
+		if err := hs.RemoveHost(ctx, "bob", h.ID); err != control.ErrNotFound {
+			t.Errorf("bob removing alice's host: %v, want ErrNotFound", err)
+		}
+		if err := hs.RemoveHost(ctx, "alice", h.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := hs.Host(ctx, h.ID); err != control.ErrNotFound {
+			t.Errorf("removed host still found: %v", err)
 		}
 	})
 }

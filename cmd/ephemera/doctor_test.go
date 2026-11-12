@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
@@ -26,32 +27,35 @@ type doctorReport struct {
 
 // doctorEnv starts a central server and logs in to it through the
 // environment. now is the server's clock, so a test can age a host.
-func doctorEnv(t *testing.T) (*httptest.Server, *time.Time) {
+func doctorEnv(t *testing.T) (*httptest.Server, *control.Server) {
 	t.Helper()
 	now := time.Now()
 	cs := &control.Server{
-		Tokens:     control.StaticToken{Name: "laptop", Token: "eph_good"},
-		HostSecret: "s",
-		Now:        func() time.Time { return now },
+		Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"},
+		Now:    func() time.Time { return now },
 	}
 	ts := httptest.NewServer(cs.Handler())
 	t.Cleanup(ts.Close)
 	t.Setenv("EPHEMERA_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 	t.Setenv("EPHEMERA_SERVER", ts.URL)
 	t.Setenv("EPHEMERA_TOKEN", "eph_good")
-	return ts, &now
+	return ts, cs
 }
 
 // startHost runs a host agent connected to the server, and returns its
 // HTTP server and a func that disconnects it and waits until the server
 // lists it offline.
-func startHost(t *testing.T, server, name string) (*httptest.Server, func()) {
+func startHost(t *testing.T, cs *control.Server, server, name string) (*httptest.Server, func()) {
 	t.Helper()
 	_, key, _ := ed25519.GenerateKey(nil)
 	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Name: name, Key: key}
 	hts := httptest.NewServer(hs.Handler())
 	t.Cleanup(hts.Close)
-	disconnect := hosttest.Connect(t, hs, server, "s", api.HostHello{Name: name, URL: hts.URL, Capacity: 1})
+	code, err := cs.CreateJoinCode(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	disconnect := hosttest.Connect(t, hs, server, code, api.HostHello{Name: name, URL: hts.URL, Capacity: 1})
 	return hts, func() {
 		disconnect()
 		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
@@ -104,8 +108,8 @@ func statuses(rep doctorReport) string {
 }
 
 func TestDoctorAllOK(t *testing.T) {
-	ts, _ := doctorEnv(t)
-	startHost(t, ts.URL, "h1")
+	ts, cs := doctorEnv(t)
+	startHost(t, cs, ts.URL, "h1")
 
 	code, rep := runDoctorJSON(t)
 	if want := "login=ok server=ok token=ok hosts=ok"; code != 0 || !rep.OK || statuses(rep) != want {
@@ -184,8 +188,8 @@ func TestDoctorFailures(t *testing.T) {
 	})
 
 	t.Run("host offline", func(t *testing.T) {
-		ts, _ := doctorEnv(t)
-		_, disconnect := startHost(t, ts.URL, "h1")
+		ts, cs := doctorEnv(t)
+		_, disconnect := startHost(t, cs, ts.URL, "h1")
 		disconnect()
 		code, rep := runDoctorJSON(t)
 		if want := "login=ok server=ok token=ok hosts=fail"; code != 1 || statuses(rep) != want {
@@ -197,8 +201,8 @@ func TestDoctorFailures(t *testing.T) {
 	})
 
 	t.Run("host unreachable from here", func(t *testing.T) {
-		ts, _ := doctorEnv(t)
-		gone, _ := startHost(t, ts.URL, "h1")
+		ts, cs := doctorEnv(t)
+		gone, _ := startHost(t, cs, ts.URL, "h1")
 		gone.Close() // still connected, but its address answers nothing
 		code, rep := runDoctorJSON(t)
 		if want := "login=ok server=ok token=ok hosts=fail"; code != 1 || statuses(rep) != want {
@@ -210,16 +214,32 @@ func TestDoctorFailures(t *testing.T) {
 	})
 
 	t.Run("one host of two offline", func(t *testing.T) {
-		ts, _ := doctorEnv(t)
-		_, disconnect := startHost(t, ts.URL, "old")
+		ts, cs := doctorEnv(t)
+		_, disconnect := startHost(t, cs, ts.URL, "old")
 		disconnect()
-		startHost(t, ts.URL, "new")
+		startHost(t, cs, ts.URL, "new")
 		code, rep := runDoctorJSON(t)
 		if code != 0 || !rep.OK {
 			t.Fatalf("code %d, checks %s: one reachable host is enough", code, statuses(rep))
 		}
 		if !strings.Contains(statuses(rep), "hosts=warn") {
 			t.Errorf("checks %s: the offline host should be a warning", statuses(rep))
+		}
+	})
+
+	t.Run("host joined, never connected", func(t *testing.T) {
+		ts, cs := doctorEnv(t)
+		_, key, _ := ed25519.GenerateKey(nil)
+		code, _ := cs.CreateJoinCode(context.Background(), "")
+		if _, err := host.Join(context.Background(), ts.URL, code, "quiet", key); err != nil {
+			t.Fatal(err)
+		}
+		code2, rep := runDoctorJSON(t)
+		if want := "login=ok server=ok token=ok hosts=fail"; code2 != 1 || statuses(rep) != want {
+			t.Fatalf("code %d, checks %s, want %s", code2, statuses(rep), want)
+		}
+		if d := rep.Checks[3].Detail; !strings.Contains(d, "hasn't connected") {
+			t.Errorf("hosts detail %q", d)
 		}
 	})
 
