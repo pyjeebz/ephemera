@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,5 +234,54 @@ func TestHostsBelongToAnAccount(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("bob removing alice's host: %s, want 404", resp.Status)
+	}
+}
+
+// The CLI makes each sandbox's access token and the central server sees
+// only its hash: nothing the server has opens the sandbox on its host.
+func TestServerNeverSeesSandboxToken(t *testing.T) {
+	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}}
+	ts := httptest.NewServer(cs.Handler())
+	defer ts.Close()
+	hs, _ := newHost(t, "h1")
+	hts := httptest.NewServer(hs.Handler())
+	defer hts.Close()
+	hosttest.Connect(t, hs, ts.URL, joinCode(t, cs, ""), api.HostHello{Name: "h1", URL: hts.URL, Capacity: 5})
+	ctx := context.Background()
+	c := &client.Client{Server: ts.URL, Token: "eph_good"}
+
+	sb, err := c.Create(ctx, api.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb.Token == "" {
+		t.Fatal("the client has no token for its sandbox")
+	}
+	// The client's token works on the host.
+	if _, err := c.Connections(ctx, sb, 0); err != nil {
+		t.Errorf("the client's own token: %v", err)
+	}
+	// What the server knows doesn't.
+	list, _ := c.List(ctx)
+	if len(list) != 1 || list[0].Token != "" {
+		t.Fatalf("the server lists %+v", list)
+	}
+	for _, tok := range []string{api.HashSandboxToken(sb.Token), "eph_good", ""} {
+		stolen := *sb
+		stolen.Token = tok
+		if _, err := c.Connections(ctx, &stolen, 0); err == nil {
+			t.Errorf("token %q opened the sandbox", tok)
+		}
+	}
+	// A create without a hash, from a CLI older than the server, is refused.
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/sandboxes", strings.NewReader(`{"spec":{}}`))
+	req.Header.Set("Authorization", "Bearer eph_good")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("create without token_hash: %s, want 400", resp.Status)
 	}
 }

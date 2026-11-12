@@ -21,7 +21,9 @@ the command ends.
 
 `ephemera run` asks the central server for a sandbox, sends your files
 straight to the host, streams the command's output back, and destroys the
-sandbox, even if you press Ctrl-C.
+sandbox, even if you press Ctrl-C. The CLI makes each sandbox's access
+token itself and gives the central server only its hash, so the server
+can place a sandbox but can't open it.
 
 Only files git would track are sent: tracked files and untracked files that
 are not ignored. Ignored files such as `.env.local` stay on your machine

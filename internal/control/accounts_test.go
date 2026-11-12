@@ -89,7 +89,7 @@ func TestAccountsSeeOnlyTheirOwn(t *testing.T) {
 	}
 
 	var sb api.Sandbox
-	if code := call(t, http.MethodPost, ts.URL+"/v1/sandboxes", alice, api.CreateSandboxRequest{}, &sb); code != http.StatusCreated {
+	if code := call(t, http.MethodPost, ts.URL+"/v1/sandboxes", alice, api.CreateSandboxRequest{TokenHash: api.HashSandboxToken("t")}, &sb); code != http.StatusCreated {
 		t.Fatalf("create: %d", code)
 	}
 	if sb.Account != "alice" {

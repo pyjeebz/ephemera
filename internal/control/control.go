@@ -417,6 +417,10 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		host.WriteError(w, http.StatusBadRequest, "%v", err)
 		return
 	}
+	if !validHash(req.TokenHash) {
+		host.WriteError(w, http.StatusBadRequest, "token_hash is missing; this ephemera is older than the server, so upgrade it")
+		return
+	}
 	p := principal(r)
 	if msg, ok := s.admit(p, &req.Spec); !ok {
 		host.WriteError(w, http.StatusTooManyRequests, "%s", msg)
@@ -432,7 +436,6 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Host:      h.Name,
 		HostID:    h.ID,
 		HostURL:   strings.TrimRight(h.URL, "/"),
-		Token:     api.NewToken(),
 		Spec:      req.Spec,
 		CreatedAt: s.now().UTC(),
 		Owner:     p.Name,
@@ -441,7 +444,6 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	// Count it against the host before the slow call, so concurrent
 	// creates spread out.
 	rec := *sb
-	rec.Token = ""
 	s.mu.Lock()
 	if s.sandboxes == nil {
 		s.sandboxes = map[string]*api.Sandbox{}
@@ -460,7 +462,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err = s.hostDo(r.Context(), h.ID, api.HostMessage{Type: "create",
-		Create: &api.HostCreateRequest{ID: sb.ID, Token: sb.Token, Spec: sb.Spec}})
+		Create: &api.HostCreateRequest{ID: sb.ID, TokenHash: req.TokenHash, Spec: sb.Spec}})
 	if err != nil {
 		s.mu.Lock()
 		delete(s.sandboxes, sb.ID)
@@ -474,6 +476,19 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log().Info("sandbox placed", "sandbox", sb.ID, "host", h.Name)
 	writeJSON(w, http.StatusCreated, sb)
+}
+
+// validHash reports whether s looks like a hex SHA-256.
+func validHash(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // list returns the caller's account's sandboxes.

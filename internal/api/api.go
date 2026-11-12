@@ -4,6 +4,7 @@ package api
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -83,11 +84,23 @@ type Connection struct {
 // CreateSandboxRequest is sent by the CLI to the central server.
 type CreateSandboxRequest struct {
 	Spec Spec `json:"spec"`
+	// TokenHash is the hex SHA-256 of the sandbox's access token, which
+	// the CLI makes and keeps. The central server passes the hash to the
+	// host and never sees the token, so it can't open the sandbox.
+	TokenHash string `json:"token_hash"`
 }
 
-// Sandbox is the central server's view of a sandbox. Token is set only in the
-// response that creates the sandbox: the CLI uses it to talk to the host
-// directly, so files and output never pass through the central server.
+// HashSandboxToken is how a sandbox's access token is passed on and
+// checked: the hex SHA-256 of it.
+func HashSandboxToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// Sandbox is the central server's view of a sandbox. Token is the
+// sandbox's access token: the CLI makes it, keeps it, and uses it to talk
+// to the host directly, so files and output never pass through the central
+// server. The central server only ever sees its hash, and never sends it.
 type Sandbox struct {
 	ID        string    `json:"id"`
 	Host      string    `json:"host"`    // its name
@@ -113,9 +126,9 @@ type Usage struct {
 
 // HostCreateRequest is sent by the central server to a host.
 type HostCreateRequest struct {
-	ID    string `json:"id"`
-	Token string `json:"token"`
-	Spec  Spec   `json:"spec"`
+	ID        string `json:"id"`
+	TokenHash string `json:"token_hash"` // see CreateSandboxRequest
+	Spec      Spec   `json:"spec"`
 }
 
 // ExecRequest runs one command in a sandbox, in /workspace.

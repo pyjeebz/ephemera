@@ -53,10 +53,12 @@ type Server struct {
 }
 
 type entry struct {
-	token   string
-	created time.Time
-	rec     api.Record
-	expiry  *time.Timer
+	// tokenHash is the hash of the sandbox's access token. The host never
+	// learns the token itself until the CLI presents it.
+	tokenHash string
+	created   time.Time
+	rec       api.Record
+	expiry    *time.Timer
 	// ending is set once the sandbox is being destroyed; final holds the
 	// signed record of a sandbox that expired, until it is collected.
 	ending bool
@@ -131,10 +133,11 @@ func (s *Server) sandboxAuth(w http.ResponseWriter, r *http.Request) (string, bo
 	e, ok := s.sandboxes[id]
 	expired := ok && e.final != nil
 	s.mu.Unlock()
+	good := ok && tok != "" && equal(api.HashSandboxToken(tok), e.tokenHash)
 	switch {
-	case ok && equal(tok, e.token) && expired:
+	case good && expired:
 		WriteError(w, http.StatusGone, "sandbox %s reached its maximum lifetime and was destroyed", id)
-	case ok && equal(tok, e.token):
+	case good:
 		return id, true
 	case !ok:
 		WriteError(w, http.StatusNotFound, "sandbox %s not found", id)
@@ -146,8 +149,8 @@ func (s *Server) sandboxAuth(w http.ResponseWriter, r *http.Request) (string, bo
 
 // Create starts a sandbox the central server asked for.
 func (s *Server) Create(ctx context.Context, req api.HostCreateRequest) error {
-	if req.ID == "" || req.Token == "" {
-		return errors.New("id and token are required")
+	if req.ID == "" || req.TokenHash == "" {
+		return errors.New("id and token_hash are required")
 	}
 	if err := req.Spec.Validate(); err != nil {
 		return err
@@ -169,7 +172,7 @@ func (s *Server) Create(ctx context.Context, req api.HostCreateRequest) error {
 		return fmt.Errorf("sandbox %s already exists", req.ID)
 	}
 	now := time.Now()
-	s.sandboxes[req.ID] = &entry{token: req.Token, created: now, rec: api.Record{
+	s.sandboxes[req.ID] = &entry{tokenHash: req.TokenHash, created: now, rec: api.Record{
 		Version: 1, Sandbox: req.ID, Host: s.Name, Backend: s.BackendName, Spec: req.Spec, Created: now.UTC(),
 		Execs: []api.ExecRecord{}, Syncs: []api.SyncRecord{}, Connections: []api.Connection{},
 	}}
