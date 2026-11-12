@@ -12,6 +12,12 @@ import { cn } from "@/lib/utils"
 // Like the drawings in the features grid, every frame is a pure function
 // of time: render(t) sets every attribute from t alone. Strokes draw in
 // first and fills follow, so a fill never flashes over unfinished lines.
+//
+// The scene is one floor that runs under the whole page. "stage" frames all
+// of it; "strip" frames just the plate and the drop, for small screens.
+// Dispatching DROP_EVENT on window drops the waiting piece now: it moves
+// the clock to the start of the fall, so frames stay a pure function of
+// time.
 
 const SHAPES: [number, number][][] = [
   // [x, z] cells, z up
@@ -74,13 +80,17 @@ const RULE = "#2C2A25"
 const SAND = ["#F3DCAE", "#E6C287", "#D9B070", "#C99B5A", "#B98A4D", "#A67840"]
 const FACE = { top: "#2A2722", left: "#1E1C19", right: "#161513" }
 
+// The idle loop runs a little slower than the beats above.
+const SPEED = 0.85
+
+export const DROP_EVENT = "ephemera:drop"
+
 const NS = "http://www.w3.org/2000/svg"
-const W = 720
-const H = 900
 const S = 44 // one cell
-const CX = W / 2
-const PLATE_Y = 520 // the plate sits in the middle of the panel
+const CX = 470 // the plate's centre, in a 1440 by 900 scene
+const PLATE_Y = 560
 const DROP = 7 // cells the piece starts above the plate
+const VIEW = { stage: "0 0 1440 900", strip: "150 90 640 620" }
 
 const clamp = (v: number) => Math.min(1, Math.max(0, v))
 const seg = (t: number, a: number, b: number) => clamp((t - a) / (b - a))
@@ -116,15 +126,33 @@ function el<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string,
   return e
 }
 
-export function TetrisDrop({ className }: { className?: string }) {
+export function TetrisDrop({ frame = "stage", className }: { frame?: keyof typeof VIEW; className?: string }) {
   const ref = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
     const svg = ref.current
     if (!svg) return
 
-    // --- The parts that stay: plate and centerline ------------------------
+    // --- The parts that stay: floor, plate and centerline -----------------
     const fixed = el("g", {}, svg)
+    // The floor: the same cell grid as the plate, out across the page,
+    // fading away from the middle.
+    const uid = Math.random().toString(36).slice(2)
+    const defs = el("defs", {}, svg)
+    const fade = el(
+      "radialGradient",
+      { id: `fade-${uid}`, cx: CX + 200, cy: PLATE_Y, r: 820, gradientUnits: "userSpaceOnUse" },
+      defs,
+    )
+    el("stop", { offset: 0, "stop-color": "#fff", "stop-opacity": 0.9 }, fade)
+    el("stop", { offset: 1, "stop-color": "#fff", "stop-opacity": 0 }, fade)
+    const mask = el("mask", { id: `floor-${uid}` }, defs)
+    el("rect", { x: -2000, y: -2000, width: 6000, height: 6000, fill: `url(#fade-${uid})` }, mask)
+    const floor = el("g", { stroke: RULE, "stroke-width": 0.6, mask: `url(#floor-${uid})` }, fixed)
+    for (let i = -24; i <= 24; i++) {
+      el("path", { d: `M${P(i, -24, 0).join(" ")}L${P(i, 24, 0).join(" ")}` }, floor)
+      el("path", { d: `M${P(-24, i, 0).join(" ")}L${P(24, i, 0).join(" ")}` }, floor)
+    }
     // The plate: a 6 by 3 floor, dashed, with a faint cell grid.
     const px0 = -3,
       px1 = 3,
@@ -295,6 +323,7 @@ export function TetrisDrop({ className }: { className?: string }) {
 
       // Plate and centerline draw in once, then stay.
       const base = first ? eo(seg(t, 0, 0.8)) : 1
+      floor.setAttribute("opacity", String(base))
       plate.setAttribute("opacity", String(base))
       grid.setAttribute("opacity", String(base * 0.9))
       center.setAttribute("opacity", String(base * 0.55))
@@ -366,6 +395,20 @@ export function TetrisDrop({ className }: { className?: string }) {
     let visible = true
     let start = performance.now()
     let paused = 0
+    const at = (now: number) => ((now - start) / 1000) * SPEED
+    // Drop now: a piece still up high falls at once; after a landing, the
+    // next piece comes in already drawn and falls.
+    const drop = () => {
+      const now = performance.now()
+      const time = at(now)
+      const loop = Math.floor(time / CYCLE)
+      const t = time - loop * CYCLE
+      let target = -1
+      if (t < FALL[0]) target = loop * CYCLE + FALL[0]
+      else if (t > LAND + 0.3) target = (loop + 1) * CYCLE + FALL[0]
+      if (target >= 0) start = now - (target / SPEED) * 1000
+    }
+    window.addEventListener(DROP_EVENT, drop)
     const io = new IntersectionObserver(([e]) => {
       if (e.isIntersecting && !visible) start += performance.now() - paused
       if (!e.isIntersecting) paused = performance.now()
@@ -374,12 +417,13 @@ export function TetrisDrop({ className }: { className?: string }) {
     io.observe(svg)
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick)
-      if (visible) render((now - start) / 1000)
+      if (visible) render(at(now))
     }
     raf = requestAnimationFrame(tick)
     return () => {
       cancelAnimationFrame(raf)
       io.disconnect()
+      window.removeEventListener(DROP_EVENT, drop)
       svg.replaceChildren()
     }
   }, [])
@@ -387,8 +431,8 @@ export function TetrisDrop({ className }: { className?: string }) {
   return (
     <svg
       ref={ref}
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="xMidYMid meet"
+      viewBox={VIEW[frame]}
+      preserveAspectRatio="xMidYMid slice"
       aria-hidden
       className={cn("block", className)}
     />
