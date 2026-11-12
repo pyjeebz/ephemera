@@ -109,6 +109,18 @@ Delete the secret file afterwards; the installer has copied it into `/etc/epheme
 - `--name NAME`: the host's name in records and `ephemera ls`.
 - `--host-args "..."`: extra `ephemera-host` flags, for example `--capacity 40` (most sandboxes at once; default 20), `--max-lifetime 8h` (oldest a sandbox may get; default 24h) or `--max-snapshot-bytes` (space for setup snapshots; default 20 GB).
 
+## Postgres instead of files
+
+By default the central server keeps its tokens and sandboxes in files under `/var/lib/ephemera/server`. That's all one machine needs. To keep them in Postgres instead, which also keeps a history of finished sandboxes, set the database's URL in `/etc/ephemera/ephemera.env` and restart the server:
+
+```bash
+EPHEMERA_DATABASE_URL=postgres://ephemera:PASSWORD@db.internal:5432/ephemera
+```
+
+The server creates its tables on first start and updates them on upgrades. `ephemera-server token` commands use the database when `EPHEMERA_DATABASE_URL` is set, so run them with it: `sudo --preserve-env=EPHEMERA_DATABASE_URL ephemera-server token ls`, or pass `--database URL`. Tokens in the files are not copied over; make new ones.
+
+In Postgres, token names are unique within an account rather than across them. When two accounts have a token with the same name, revoke or change it by its id.
+
 ## Upgrade
 
 Pull and run the installer again:

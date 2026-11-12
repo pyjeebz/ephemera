@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,20 +12,20 @@ func TestTokenFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "tokens.json")
 	tf := &TokenFile{Path: path}
 
-	if _, ok := tf.Check("eph_nothing"); ok {
+	if _, ok := tf.Check(context.Background(), "eph_nothing"); ok {
 		t.Fatal("no tokens yet: Check succeeded")
 	}
-	rec, secret, err := tf.Create("laptop", "", Limits{})
+	rec, secret, err := tf.CreateToken(context.Background(), "laptop", "", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(secret, tokenPrefix) {
+	if !strings.HasPrefix(secret, TokenPrefix) {
 		t.Errorf("secret %q lacks prefix", secret)
 	}
-	if p, ok := tf.Check(secret); !ok || p.Name != "laptop" {
+	if p, ok := tf.Check(context.Background(), secret); !ok || p.Name != "laptop" {
 		t.Errorf("Check = %+v, %v", p, ok)
 	}
-	if _, ok := tf.Check(secret + "x"); ok {
+	if _, ok := tf.Check(context.Background(), secret+"x"); ok {
 		t.Error("altered token accepted")
 	}
 
@@ -39,24 +40,24 @@ func TestTokenFile(t *testing.T) {
 	// A second process (here, a second TokenFile) adds a token; the
 	// running server picks it up without a restart.
 	other := &TokenFile{Path: path}
-	_, secret2, err := other.Create("ci", "", Limits{})
+	_, secret2, err := other.CreateToken(context.Background(), "ci", "", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, ok := tf.Check(secret2); !ok || p.Name != "ci" {
+	if p, ok := tf.Check(context.Background(), secret2); !ok || p.Name != "ci" {
 		t.Errorf("new token not picked up: %+v, %v", p, ok)
 	}
 
-	if err := other.Revoke(rec.ID); err != nil {
+	if err := other.RevokeToken(context.Background(), rec.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := tf.Check(secret); ok {
+	if _, ok := tf.Check(context.Background(), secret); ok {
 		t.Error("revoked token still accepted")
 	}
-	if err := other.Revoke("no-such-token"); err == nil {
+	if err := other.RevokeToken(context.Background(), "no-such-token"); err == nil {
 		t.Error("revoking an unknown token: want error")
 	}
-	recs, _ := tf.List()
+	recs, _ := tf.ListTokens(context.Background())
 	if len(recs) != 1 || recs[0].Name != "ci" {
 		t.Errorf("List = %+v", recs)
 	}
@@ -64,23 +65,23 @@ func TestTokenFile(t *testing.T) {
 
 func TestTokenNamesUniqueAndLimits(t *testing.T) {
 	tf := &TokenFile{Path: filepath.Join(t.TempDir(), "tokens.json")}
-	_, secret, err := tf.Create("agent", "", Limits{MaxSandboxes: 2})
+	_, secret, err := tf.CreateToken(context.Background(), "agent", "", Limits{MaxSandboxes: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := tf.Create("agent", "", Limits{}); err == nil {
+	if _, _, err := tf.CreateToken(context.Background(), "agent", "", Limits{}); err == nil {
 		t.Error("a second token with the same name was created")
 	}
-	if p, _ := tf.Check(secret); p.MaxSandboxes != 2 {
+	if p, _ := tf.Check(context.Background(), secret); p.MaxSandboxes != 2 {
 		t.Errorf("limits = %+v", p.Limits)
 	}
-	if err := tf.SetLimits("agent", Limits{MaxSandboxes: 5, MaxMinutesPerDay: 60}); err != nil {
+	if err := tf.SetTokenLimits(context.Background(), "agent", Limits{MaxSandboxes: 5, MaxMinutesPerDay: 60}); err != nil {
 		t.Fatal(err)
 	}
-	if p, _ := tf.Check(secret); p.MaxSandboxes != 5 || p.MaxMinutesPerDay != 60 {
+	if p, _ := tf.Check(context.Background(), secret); p.MaxSandboxes != 5 || p.MaxMinutesPerDay != 60 {
 		t.Errorf("limits after SetLimits = %+v", p.Limits)
 	}
-	if err := tf.SetLimits("agent", Limits{MaxSandboxes: -1}); err == nil {
+	if err := tf.SetTokenLimits(context.Background(), "agent", Limits{MaxSandboxes: -1}); err == nil {
 		t.Error("negative limits accepted")
 	}
 }

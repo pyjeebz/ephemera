@@ -3,6 +3,7 @@
 package control
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -23,7 +24,7 @@ func TestTokenFileKeepsDirOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &TokenFile{Path: filepath.Join(dir, "tokens.json")}
-	if _, _, err := f.Create("laptop", "", Limits{}); err != nil {
+	if _, _, err := f.CreateToken(context.Background(), "laptop", "", Limits{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"tokens.json", "tokens.json.lock"} {

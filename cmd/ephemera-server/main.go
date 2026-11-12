@@ -19,12 +19,13 @@ import (
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/control"
+	"github.com/pyjeebz/ephemera/internal/pgstore"
 )
 
 const usage = `ephemera-server is ephemera's central server.
 
 Usage:
-  ephemera-server [serve] [--listen ADDR] [--state DIR]
+  ephemera-server [serve] [--listen ADDR] [--state DIR] [--database URL]
   ephemera-server token create <name> [--account NAME] [--max-sandboxes N] [--max-minutes N] [--state DIR]
   ephemera-server token limits <id-or-name> [--max-sandboxes N] [--max-minutes N] [--state DIR]
   ephemera-server token ls [--state DIR]
@@ -38,7 +39,10 @@ Accounts: a token sees and destroys only its own account's sandboxes.
 Tokens made without --account share the account "local".
 
 The state directory holds API tokens (tokens.json) and the list of running
-sandboxes (sandboxes.json). EPHEMERA_HOST_SECRET must be set for serve.
+sandboxes (sandboxes.json). With --database, or EPHEMERA_DATABASE_URL, they
+are kept in that Postgres database instead (postgres://...), along with a
+history of finished sandboxes; the token commands then use it too.
+EPHEMERA_HOST_SECRET must be set for serve.
 `
 
 func defaultStateDir() string {
@@ -81,15 +85,14 @@ func serve(args []string, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	listen := fs.String("listen", "127.0.0.1:7700", "address to listen on")
 	state := fs.String("state", defaultStateDir(), "state directory")
+	database := fs.String("database", os.Getenv("EPHEMERA_DATABASE_URL"), "Postgres URL; instead of files in the state directory")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 
 	srv := &control.Server{
-		Tokens:     &control.TokenFile{Path: filepath.Join(*state, "tokens.json")},
 		HostSecret: os.Getenv("EPHEMERA_HOST_SECRET"),
-		StatePath:  filepath.Join(*state, "sandboxes.json"),
 		Client:     &http.Client{Timeout: 2 * time.Minute},
 		Log:        log,
 	}
@@ -97,12 +100,22 @@ func serve(args []string, stderr io.Writer) int {
 		log.Error("EPHEMERA_HOST_SECRET must be set")
 		return 2
 	}
+	tokens, closeStore, err := openStores(*state, *database, srv)
+	if err != nil {
+		log.Error("open storage", "err", err)
+		return 1
+	}
+	defer closeStore()
 	if err := srv.Load(); err != nil {
 		log.Error("load state", "err", err)
 		return 1
 	}
-	if toks, _ := srv.Tokens.(*control.TokenFile).List(); len(toks) == 0 {
-		log.Warn("no API tokens yet; create one with: ephemera-server token create <name>", "state", *state)
+	if toks, _ := tokens.ListTokens(context.Background()); len(toks) == 0 {
+		log.Warn("no API tokens yet; create one with: ephemera-server token create <name>")
+	}
+	where := "state " + *state
+	if *database != "" {
+		where = "Postgres"
 	}
 
 	hs := &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
@@ -115,12 +128,36 @@ func serve(args []string, stderr io.Writer) int {
 		hs.Shutdown(sctx)
 	}()
 	go srv.Enforce(ctx, 15*time.Second)
-	log.Info("central server listening", "addr", *listen, "state", *state, "version", ver.String(version))
+	log.Info("central server listening", "addr", *listen, "storage", where, "version", ver.String(version))
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("serve", "err", err)
 		return 1
 	}
 	return 0
+}
+
+// openStores returns where tokens are kept, and sets srv's Tokens and State
+// to match: Postgres when database is set, otherwise files in state. The
+// returned func closes the database.
+func openStores(state, database string, srv *control.Server) (control.TokenStore, func(), error) {
+	if database != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		db, err := pgstore.Open(ctx, database)
+		if err != nil {
+			return nil, nil, err
+		}
+		if srv != nil {
+			srv.Tokens, srv.State = db, db
+		}
+		return db, db.Close, nil
+	}
+	tf := &control.TokenFile{Path: filepath.Join(state, "tokens.json")}
+	if srv != nil {
+		srv.Tokens = tf
+		srv.StatePath = filepath.Join(state, "sandboxes.json")
+	}
+	return tf, func() {}, nil
 }
 
 func tokenCmd(args []string, stdout, stderr io.Writer) int {
@@ -132,6 +169,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("token "+sub, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	state := fs.String("state", defaultStateDir(), "state directory")
+	database := fs.String("database", os.Getenv("EPHEMERA_DATABASE_URL"), "Postgres URL; instead of the state directory")
 	var limits control.Limits
 	fs.IntVar(&limits.MaxSandboxes, "max-sandboxes", 0, "sandboxes running at once (0: no limit)")
 	fs.IntVar(&limits.MaxMinutesPerDay, "max-minutes", 0, "sandbox-minutes per UTC day (0: no limit)")
@@ -149,11 +187,17 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		pos = append(pos, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
-	tf := &control.TokenFile{Path: filepath.Join(*state, "tokens.json")}
+	tf, closeStore, err := openStores(*state, *database, nil)
+	if err != nil {
+		fmt.Fprintln(stderr, "ephemera-server:", err)
+		return 1
+	}
+	defer closeStore()
+	ctx := context.Background()
 
 	switch {
 	case sub == "create" && len(pos) == 1:
-		rec, secret, err := tf.Create(pos[0], *account, limits)
+		rec, secret, err := tf.CreateToken(ctx, pos[0], *account, limits)
 		if err != nil {
 			fmt.Fprintln(stderr, "ephemera-server:", err)
 			return 1
@@ -162,7 +206,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, secret)
 		return 0
 	case sub == "ls" && len(pos) == 0:
-		recs, err := tf.List()
+		recs, err := tf.ListTokens(ctx)
 		if err != nil {
 			fmt.Fprintln(stderr, "ephemera-server:", err)
 			return 1
@@ -185,14 +229,14 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		tw.Flush()
 		return 0
 	case sub == "limits" && len(pos) == 1:
-		if err := tf.SetLimits(pos[0], limits); err != nil {
+		if err := tf.SetTokenLimits(ctx, pos[0], limits); err != nil {
 			fmt.Fprintln(stderr, "ephemera-server:", err)
 			return 1
 		}
 		fmt.Fprintf(stdout, "Limits for %s: %d sandboxes at once, %d minutes a day (0: no limit)\n", pos[0], limits.MaxSandboxes, limits.MaxMinutesPerDay)
 		return 0
 	case sub == "revoke" && len(pos) == 1:
-		if err := tf.Revoke(pos[0]); err != nil {
+		if err := tf.RevokeToken(ctx, pos[0]); err != nil {
 			fmt.Fprintln(stderr, "ephemera-server:", err)
 			return 1
 		}

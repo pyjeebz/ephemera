@@ -13,6 +13,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/client"
 	"github.com/pyjeebz/ephemera/internal/control"
 	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/pgstore/pgtest"
 	"github.com/pyjeebz/ephemera/internal/sandbox/sandboxtest"
 )
 
@@ -99,6 +100,55 @@ func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 	heartbeat(hs, url3, hts.URL)
 	if be.Live() != 0 || hs.Live() != 0 {
 		t.Errorf("unknown sandbox %s was not destroyed", sb2.ID)
+	}
+}
+
+// The same restart, with the state in Postgres: a second central server on
+// the same database still knows the sandbox and can destroy it.
+func TestStateSurvivesRestartOnPostgres(t *testing.T) {
+	ctx := context.Background()
+	db, _ := pgtest.Open(t)
+	be := &sandboxtest.Local{Root: t.TempDir()}
+	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
+	hts := httptest.NewServer(hs.Handler())
+	defer hts.Close()
+
+	start := func() string {
+		cs := &control.Server{Tokens: control.StaticToken{Name: "test", Token: userToken},
+			HostSecret: hostSecret, State: db, Log: discardLog()}
+		if err := cs.Load(); err != nil {
+			t.Fatal(err)
+		}
+		ts := httptest.NewServer(cs.Handler())
+		t.Cleanup(ts.Close)
+		return ts.URL
+	}
+	url1 := start()
+	heartbeat(hs, url1, hts.URL)
+	sb, err := (&client.Client{Server: url1, Token: userToken}).Create(ctx, api.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	url2 := start()
+	c2 := &client.Client{Server: url2, Token: userToken}
+	list, err := c2.List(ctx)
+	if err != nil || len(list) != 1 || list[0].ID != sb.ID {
+		t.Fatalf("after restart, list = %+v, %v", list, err)
+	}
+	heartbeat(hs, url2, hts.URL)
+	if be.Live() != 1 {
+		t.Fatal("known sandbox was destroyed after restart")
+	}
+	if _, err := c2.Destroy(ctx, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	if running, _ := db.RunningSandboxes(ctx); len(running) != 0 {
+		t.Errorf("destroyed sandbox still running in the database: %+v", running)
+	}
+	used, _ := db.UsageSince(ctx, "2000-01-01")
+	if len(used) == 0 {
+		t.Error("no usage recorded for the destroyed sandbox")
 	}
 }
 

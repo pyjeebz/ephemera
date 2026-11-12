@@ -6,7 +6,12 @@
 
 - `ephemera doctor` says why the CLI can't run a sandbox. It checks the login, the central server, the token and each host in turn, and prints a fix for the first that fails. Exit 1 if a check fails. `--json` prints the same checks.
 - `GET /v1/hosts` returns each host's `url`, and `online`: true while it checks in often enough to get sandboxes.
+- Postgres. With `EPHEMERA_DATABASE_URL` (or `--database`), the central server keeps tokens, sandboxes and usage in Postgres instead of files, and keeps finished sandboxes as a history. It creates and updates its tables itself. Files stay the default.
 - Accounts. `ephemera-server token create --account NAME` puts a token in an account, and a token sees and destroys only its own account's sandboxes. Tokens made without one, including every existing token, share the account `local`, so nothing changes for them. `GET /v1/whoami` and sandboxes include the account.
+
+### Changed
+
+- Building from source needs Go 1.25 or later (was 1.24), for the Postgres driver. Go itself supports only 1.26 and 1.27 now.
 
 ## v0.1.1 (2026-11-11)
 

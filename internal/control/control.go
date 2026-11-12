@@ -2,8 +2,8 @@
 // which sandboxes run where. It handles ids and states only: files, command
 // output and secrets go straight between the CLI and the host.
 //
-// The sandbox list is saved to StatePath so a restart keeps track of
-// running sandboxes. Every host heartbeat lists what the host really runs:
+// Running sandboxes and usage are kept in a StateStore, so a restart keeps
+// track of them. Every host heartbeat lists what the host really runs:
 // records the host no longer has are dropped, and sandboxes the central
 // server does not know about are destroyed.
 package control
@@ -13,14 +13,11 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -35,95 +32,107 @@ const HostTimeout = 45 * time.Second
 
 // Server serves the central API.
 type Server struct {
-	Tokens     Tokens // API tokens for CLI requests
-	HostSecret string // shared with every host
-	StatePath  string // where the sandbox list is saved; empty keeps it in memory
+	Tokens     Tokens     // API tokens for CLI requests
+	HostSecret string     // shared with every host
+	State      StateStore // where sandboxes and usage are kept
+	StatePath  string     // with no State: a FileState at this path; empty keeps it in memory
 	Client     *http.Client
 	Log        *slog.Logger
 	Now        func() time.Time
 
+	stateOnce sync.Once
+	state     StateStore
+
+	// The running sandboxes and recent usage, also in the StateStore, are
+	// kept here so requests don't wait on it. One server process per store.
 	mu        sync.Mutex
 	hosts     map[string]*hostState
 	sandboxes map[string]*api.Sandbox
 	// usage is finished sandboxes' seconds, by owner and UTC day.
-	usage map[string]map[string]float64
+	usage map[owner]map[string]float64
 	// limits is each owner's limits as last seen on a request.
-	limits map[string]Limits
+	limits map[owner]Limits
+}
 
-	saveMu sync.Mutex
+// owner is a token, in its account. Usage and limits are counted per owner.
+type owner struct{ Account, Name string }
+
+func ownerOf(sb *api.Sandbox) owner { return owner{accountOr(sb.Account), sb.Owner} }
+
+func (s *Server) store() StateStore {
+	s.stateOnce.Do(func() {
+		switch {
+		case s.State != nil:
+			s.state = s.State
+		case s.StatePath != "":
+			s.state = &FileState{Path: s.StatePath, Now: s.Now}
+		default:
+			s.state = memState{}
+		}
+	})
+	return s.state
 }
 
 // createGrace is how long a new sandbox may be missing from its host's
 // heartbeat before its record is dropped: the host may still be creating it.
 const createGrace = 2 * time.Minute
 
-type stateFile struct {
-	Sandboxes []api.Sandbox                 `json:"sandboxes"`
-	Usage     map[string]map[string]float64 `json:"usage,omitempty"`
-}
-
-// Load reads the saved sandbox list, if there is one.
+// Load reads the running sandboxes and the last month of usage from the
+// StateStore.
 func (s *Server) Load() error {
-	if s.StatePath == "" {
-		return nil
-	}
-	b, err := os.ReadFile(s.StatePath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+	ctx := context.Background()
+	running, err := s.store().RunningSandboxes(ctx)
 	if err != nil {
 		return err
 	}
-	var st stateFile
-	if err := json.Unmarshal(b, &st); err != nil {
-		return fmt.Errorf("%s: %w", s.StatePath, err)
+	since := s.now().UTC().Add(-usageKeep).Format(dayFormat)
+	used, err := s.store().UsageSince(ctx, since)
+	if err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.usage = st.Usage
-	s.sandboxes = make(map[string]*api.Sandbox, len(st.Sandboxes))
-	for i := range st.Sandboxes {
-		sb := st.Sandboxes[i]
+	s.sandboxes = make(map[string]*api.Sandbox, len(running))
+	for i := range running {
+		sb := running[i]
 		sb.Token = ""
-		sb.Account = accountOr(sb.Account) // saved before accounts existed
+		sb.Account = accountOr(sb.Account)
 		s.sandboxes[sb.ID] = &sb
+	}
+	s.usage = map[owner]map[string]float64{}
+	for _, u := range used {
+		o := owner{u.Account, u.Owner}
+		if s.usage[o] == nil {
+			s.usage[o] = map[string]float64{}
+		}
+		s.usage[o][u.Day] += u.Seconds
 	}
 	return nil
 }
 
-// save writes the sandbox list. Sandbox tokens are never written.
-func (s *Server) save() {
-	if s.StatePath == "" {
-		return
-	}
-	s.saveMu.Lock()
-	defer s.saveMu.Unlock()
+// end forgets a sandbox and records why it ended and the time it used.
+func (s *Server) end(ctx context.Context, sb *api.Sandbox, reason string) {
+	at := s.now()
 	s.mu.Lock()
-	st := stateFile{Sandboxes: make([]api.Sandbox, 0, len(s.sandboxes)), Usage: map[string]map[string]float64{}}
-	cutoff := s.now().UTC().AddDate(0, 0, -31).Format(dayFormat) // keep a month
-	for owner, days := range s.usage {
-		for day, secs := range days {
-			if day >= cutoff {
-				if st.Usage[owner] == nil {
-					st.Usage[owner] = map[string]float64{}
-				}
-				st.Usage[owner][day] = secs
-			}
-		}
-	}
-	for _, sb := range s.sandboxes {
-		c := *sb
-		c.Token = ""
-		st.Sandboxes = append(st.Sandboxes, c)
+	cur, ok := s.sandboxes[sb.ID]
+	var used []Usage
+	if ok {
+		used = s.accrue(cur, at)
+		delete(s.sandboxes, sb.ID)
 	}
 	s.mu.Unlock()
-	sort.Slice(st.Sandboxes, func(i, j int) bool { return st.Sandboxes[i].ID < st.Sandboxes[j].ID })
-	err := os.MkdirAll(filepath.Dir(s.StatePath), 0o700)
-	if err == nil {
-		err = writeJSONAtomic(s.StatePath, st, 0o600)
+	if !ok {
+		return
 	}
-	if err != nil {
-		s.log().Error("save state", "path", s.StatePath, "err", err)
+	// The record is already gone from memory; a failed write is logged,
+	// as there is nothing better to do with it.
+	if err := s.store().EndSandbox(ctx, sb.ID, at.UTC(), reason); err != nil {
+		s.log().Error("store: end sandbox", "sandbox", sb.ID, "err", err)
+	}
+	for _, u := range used {
+		if err := s.store().AddUsage(ctx, u); err != nil {
+			s.log().Error("store: add usage", "sandbox", sb.ID, "err", err)
+		}
 	}
 }
 
@@ -180,17 +189,18 @@ func (s *Server) user(h http.HandlerFunc) http.HandlerFunc {
 		var p Principal
 		ok := false
 		if s.Tokens != nil && tok != "" {
-			p, ok = s.Tokens.Check(tok)
+			p, ok = s.Tokens.Check(r.Context(), tok)
 		}
 		if !ok {
 			host.WriteError(w, http.StatusUnauthorized, "invalid token; run ephemera login")
 			return
 		}
+		p.Account = accountOr(p.Account)
 		s.mu.Lock()
 		if s.limits == nil {
-			s.limits = map[string]Limits{}
+			s.limits = map[owner]Limits{}
 		}
-		s.limits[p.Name] = p.Limits
+		s.limits[owner{p.Account, p.Name}] = p.Limits
 		s.mu.Unlock()
 		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
 	}
@@ -209,38 +219,43 @@ func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 const dayFormat = "2006-01-02"
 
 // accrue adds a finished sandbox's time to its owner's usage, split by UTC
-// day. Locked.
-func (s *Server) accrue(sb *api.Sandbox, end time.Time) {
+// day, and returns what it added. Locked.
+func (s *Server) accrue(sb *api.Sandbox, end time.Time) []Usage {
 	if sb.Owner == "" {
-		return
+		return nil
 	}
+	o := ownerOf(sb)
 	if s.usage == nil {
-		s.usage = map[string]map[string]float64{}
+		s.usage = map[owner]map[string]float64{}
 	}
-	if s.usage[sb.Owner] == nil {
-		s.usage[sb.Owner] = map[string]float64{}
+	if s.usage[o] == nil {
+		s.usage[o] = map[string]float64{}
 	}
+	var out []Usage
 	for start := sb.CreatedAt.UTC(); start.Before(end); {
 		dayEnd := time.Date(start.Year(), start.Month(), start.Day()+1, 0, 0, 0, 0, time.UTC)
 		stop := end
 		if dayEnd.Before(stop) {
 			stop = dayEnd
 		}
-		s.usage[sb.Owner][start.Format(dayFormat)] += stop.Sub(start).Seconds()
+		day, secs := start.Format(dayFormat), stop.Sub(start).Seconds()
+		s.usage[o][day] += secs
+		out = append(out, Usage{Account: o.Account, Owner: o.Name, Day: day, Seconds: secs})
 		start = stop
 	}
+	return out
 }
 
 // usedToday is an owner's sandbox-seconds today, running ones included,
 // and how many are running. Locked.
-func (s *Server) usedToday(owner string) (float64, int) {
+func (s *Server) usedToday(o owner) (float64, int) {
 	now := s.now().UTC()
 	today := now.Format(dayFormat)
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	used := s.usage[owner][today]
+	used := s.usage[o][today]
 	running := 0
 	for _, sb := range s.sandboxes {
-		if sb.Owner != owner {
+		if ownerOf(sb) != o {
 			continue
 		}
 		running++
@@ -260,7 +275,7 @@ func (s *Server) usedToday(owner string) (float64, int) {
 func (s *Server) admit(p Principal, spec *api.Spec) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	used, running := s.usedToday(p.Name)
+	used, running := s.usedToday(owner{p.Account, p.Name})
 	if p.MaxSandboxes > 0 && running >= p.MaxSandboxes {
 		return fmt.Sprintf("limit reached: %s may run %d sandboxes at once; destroy one first", p.Name, p.MaxSandboxes), false
 	}
@@ -279,7 +294,7 @@ func (s *Server) admit(p Principal, spec *api.Spec) (string, bool) {
 func (s *Server) usageOf(p Principal) api.Usage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	used, running := s.usedToday(p.Name)
+	used, running := s.usedToday(owner{p.Account, p.Name})
 	return api.Usage{Name: p.Name, Day: s.now().UTC().Format(dayFormat), MinutesToday: used / 60,
 		MaxMinutesPerDay: p.MaxMinutesPerDay, Running: running, MaxSandboxes: p.MaxSandboxes}
 }
@@ -307,13 +322,13 @@ func (s *Server) Enforce(ctx context.Context, interval time.Duration) {
 func (s *Server) enforceOnce(ctx context.Context) {
 	s.mu.Lock()
 	var over []*api.Sandbox
-	for owner, l := range s.limits {
+	for o, l := range s.limits {
 		if l.MaxMinutesPerDay <= 0 {
 			continue
 		}
-		if used, _ := s.usedToday(owner); used >= float64(l.MaxMinutesPerDay*60) {
+		if used, _ := s.usedToday(o); used >= float64(l.MaxMinutesPerDay*60) {
 			for _, sb := range s.sandboxes {
-				if sb.Owner == owner {
+				if ownerOf(sb) == o {
 					over = append(over, sb)
 				}
 			}
@@ -323,13 +338,7 @@ func (s *Server) enforceOnce(ctx context.Context) {
 	for _, sb := range over {
 		s.log().Warn("daily minutes used up; stopping sandbox", "sandbox", sb.ID, "owner", sb.Owner)
 		s.hostCall(ctx, http.MethodDelete, sb.HostURL+"/v1/sandboxes/"+sb.ID, nil)
-		s.mu.Lock()
-		if cur, ok := s.sandboxes[sb.ID]; ok {
-			s.accrue(cur, s.now())
-			delete(s.sandboxes, sb.ID)
-		}
-		s.mu.Unlock()
-		s.save()
+		s.end(ctx, sb, EndLimit)
 	}
 }
 
@@ -359,7 +368,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		reported[id] = true
 	}
 	var resp api.RegisterHostResponse
-	changed := false
+	var gone []*api.Sandbox
 	s.mu.Lock()
 	if s.hosts == nil {
 		s.hosts = map[string]*hostState{}
@@ -372,15 +381,13 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	}
 	for id, sb := range s.sandboxes {
 		if sb.Host == req.Name && !reported[id] && s.now().Sub(sb.CreatedAt) > createGrace {
-			s.accrue(sb, s.now())
-			delete(s.sandboxes, id)
-			changed = true
-			s.log().Info("sandbox gone from its host; record dropped", "sandbox", id, "host", req.Name)
+			gone = append(gone, sb)
 		}
 	}
 	s.mu.Unlock()
-	if changed {
-		s.save()
+	for _, sb := range gone {
+		s.log().Info("sandbox gone from its host; record dropped", "sandbox", sb.ID, "host", req.Name)
+		s.end(r.Context(), sb, EndGone)
 	}
 	for _, id := range resp.Destroy {
 		s.log().Warn("host runs a sandbox with no record; destroying it", "sandbox", id, "host", req.Name)
@@ -501,6 +508,16 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sandboxes[sb.ID] = &rec
 	s.mu.Unlock()
+	// Stored before the host makes it, so a crash in between leaves a
+	// record the host's heartbeat clears up, not a sandbox nobody knows.
+	if err := s.store().StartSandbox(r.Context(), rec); err != nil {
+		s.mu.Lock()
+		delete(s.sandboxes, sb.ID)
+		s.mu.Unlock()
+		s.log().Error("store: start sandbox", "sandbox", sb.ID, "err", err)
+		host.WriteError(w, http.StatusServiceUnavailable, "the central server could not save the sandbox; try again")
+		return
+	}
 
 	err = s.hostCall(r.Context(), http.MethodPost, sb.HostURL+"/v1/sandboxes",
 		api.HostCreateRequest{ID: sb.ID, Token: sb.Token, Spec: sb.Spec})
@@ -508,11 +525,13 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.sandboxes, sb.ID)
 		s.mu.Unlock()
+		if err := s.store().EndSandbox(r.Context(), sb.ID, s.now().UTC(), EndFailed); err != nil {
+			s.log().Error("store: end sandbox", "sandbox", sb.ID, "err", err)
+		}
 		s.log().Error("host create failed", "host", h.Name, "sandbox", sb.ID, "err", err)
 		host.WriteError(w, http.StatusBadGateway, "host %s: %v", h.Name, err)
 		return
 	}
-	s.save()
 	s.log().Info("sandbox placed", "sandbox", sb.ID, "host", h.Name)
 	writeJSON(w, http.StatusCreated, sb)
 }
@@ -557,11 +576,7 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 		// its heartbeat lists the sandbox and it is told to destroy it.
 		s.log().Warn("host offline; dropping sandbox record", "sandbox", id, "host", sb.Host)
 	}
-	s.mu.Lock()
-	s.accrue(sb, s.now())
-	delete(s.sandboxes, id)
-	s.mu.Unlock()
-	s.save()
+	s.end(r.Context(), sb, EndDestroyed)
 	s.log().Info("sandbox destroyed", "sandbox", id, "host", sb.Host)
 	if len(rec) == 0 {
 		w.WriteHeader(http.StatusNoContent)

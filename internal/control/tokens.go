@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -21,7 +22,7 @@ import (
 // Tokens checks API tokens.
 type Tokens interface {
 	// Check returns who the token belongs to, or false if it is not valid.
-	Check(token string) (Principal, bool)
+	Check(ctx context.Context, token string) (Principal, bool)
 }
 
 // Principal is a token's owner and the limits on what it may use.
@@ -62,7 +63,7 @@ type StaticToken struct {
 	Limits
 }
 
-func (s StaticToken) Check(token string) (Principal, bool) {
+func (s StaticToken) Check(_ context.Context, token string) (Principal, bool) {
 	if s.Token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.Token)) == 1 {
 		return Principal{Name: s.Name, Account: accountOr(s.Account), Limits: s.Limits}, true
 	}
@@ -90,16 +91,48 @@ type TokenFile struct {
 	byHash  map[string]TokenRecord
 }
 
-const tokenPrefix = "eph_"
+// TokenPrefix starts every API token, so a token is easy to recognize.
+const TokenPrefix = "eph_"
 
-func hashToken(token string) string {
+// HashToken is how tokens are stored: the hex SHA-256 of the secret.
+func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
+// NewTokenSecret returns a new token's id and secret.
+func NewTokenSecret() (id, secret string, err error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", err
+	}
+	idb := make([]byte, 4)
+	if _, err := rand.Read(idb); err != nil {
+		return "", "", err
+	}
+	return "tok_" + hex.EncodeToString(idb), TokenPrefix + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// CheckTokenInput validates a new token's name, account and limits, and
+// returns the name trimmed and the account with DefaultAccount filled in.
+func CheckTokenInput(name, account string, limits Limits) (string, string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", "", errors.New("a token needs a name")
+	}
+	account = accountOr(account)
+	if !ValidAccount(account) {
+		return "", "", fmt.Errorf("account %q: use lowercase letters, digits and dashes, at most 39", account)
+	}
+	if limits.MaxSandboxes < 0 || limits.MaxMinutesPerDay < 0 {
+		return "", "", errors.New("limits cannot be negative")
+	}
+	return name, account, nil
+}
+
 // Check implements Tokens.
-func (f *TokenFile) Check(token string) (Principal, bool) {
-	if !strings.HasPrefix(token, tokenPrefix) {
+func (f *TokenFile) Check(_ context.Context, token string) (Principal, bool) {
+	if !strings.HasPrefix(token, TokenPrefix) {
 		return Principal{}, false
 	}
 	f.mu.Lock()
@@ -109,7 +142,7 @@ func (f *TokenFile) Check(token string) (Principal, bool) {
 	}
 	// The lookup is by hash, so the secret itself is never compared
 	// byte by byte.
-	rec, ok := f.byHash[hashToken(token)]
+	rec, ok := f.byHash[HashToken(token)]
 	return Principal{Name: rec.Name, Account: accountOr(rec.Account), Limits: rec.Limits}, ok
 }
 
@@ -185,33 +218,22 @@ func (f *TokenFile) update(fn func([]TokenRecord) ([]TokenRecord, error)) error 
 	return nil
 }
 
-// Create adds a token to an account (empty for DefaultAccount) and returns
-// its secret, which is shown only once. Names are unique across accounts:
-// usage and limits are counted by name.
-func (f *TokenFile) Create(name, account string, limits Limits) (TokenRecord, string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return TokenRecord{}, "", errors.New("a token needs a name")
-	}
-	account = accountOr(account)
-	if !ValidAccount(account) {
-		return TokenRecord{}, "", fmt.Errorf("account %q: use lowercase letters, digits and dashes, at most 39", account)
+// CreateToken implements TokenStore. In a file, names are unique across
+// accounts, so a token can be revoked by name alone.
+func (f *TokenFile) CreateToken(_ context.Context, name, account string, limits Limits) (TokenRecord, string, error) {
+	name, account, err := CheckTokenInput(name, account, limits)
+	if err != nil {
+		return TokenRecord{}, "", err
 	}
 	if account == DefaultAccount {
 		account = "" // keep files written before accounts unchanged
 	}
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	id, secret, err := NewTokenSecret()
+	if err != nil {
 		return TokenRecord{}, "", err
 	}
-	secret := tokenPrefix + base64.RawURLEncoding.EncodeToString(b)
-	idb := make([]byte, 4)
-	rand.Read(idb)
-	if limits.MaxSandboxes < 0 || limits.MaxMinutesPerDay < 0 {
-		return TokenRecord{}, "", errors.New("limits cannot be negative")
-	}
-	rec := TokenRecord{ID: "tok_" + hex.EncodeToString(idb), Name: name, Account: account, Hash: hashToken(secret), Created: time.Now().UTC(), Limits: limits}
-	err := f.update(func(recs []TokenRecord) ([]TokenRecord, error) {
+	rec := TokenRecord{ID: id, Name: name, Account: account, Hash: HashToken(secret), Created: time.Now().UTC(), Limits: limits}
+	err = f.update(func(recs []TokenRecord) ([]TokenRecord, error) {
 		for _, r := range recs {
 			if r.Name == name {
 				return nil, fmt.Errorf("a token named %q already exists", name)
@@ -222,8 +244,8 @@ func (f *TokenFile) Create(name, account string, limits Limits) (TokenRecord, st
 	return rec, secret, err
 }
 
-// SetLimits changes the limits of the token with this id or name.
-func (f *TokenFile) SetLimits(idOrName string, limits Limits) error {
+// SetTokenLimits implements TokenStore.
+func (f *TokenFile) SetTokenLimits(_ context.Context, idOrName string, limits Limits) error {
 	if limits.MaxSandboxes < 0 || limits.MaxMinutesPerDay < 0 {
 		return errors.New("limits cannot be negative")
 	}
@@ -238,15 +260,15 @@ func (f *TokenFile) SetLimits(idOrName string, limits Limits) error {
 	})
 }
 
-// List returns the stored tokens, oldest first.
-func (f *TokenFile) List() ([]TokenRecord, error) {
+// ListTokens implements TokenStore.
+func (f *TokenFile) ListTokens(context.Context) ([]TokenRecord, error) {
 	recs, err := readTokens(f.Path)
 	sort.Slice(recs, func(i, j int) bool { return recs[i].Created.Before(recs[j].Created) })
 	return recs, err
 }
 
-// Revoke deletes a token by id or name.
-func (f *TokenFile) Revoke(idOrName string) error {
+// RevokeToken implements TokenStore.
+func (f *TokenFile) RevokeToken(_ context.Context, idOrName string) error {
 	return f.update(func(recs []TokenRecord) ([]TokenRecord, error) {
 		out := recs[:0]
 		for _, r := range recs {

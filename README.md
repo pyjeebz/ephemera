@@ -45,7 +45,7 @@ server and hosts, see [docs/self-hosting.md](docs/self-hosting.md).
 
 ## Try it locally
 
-Needs Go 1.24+ and Docker on Linux. The host agent runs as root, so it can
+Needs Go 1.25+ and Docker on Linux. The host agent runs as root, so it can
 reach ports inside sandboxes.
 
 ```sh
@@ -314,8 +314,17 @@ go test -race ./...
 ```
 
 The end-to-end tests in `internal/e2e` run against Docker when it is
-available and skip that part otherwise. CI runs the same checks, plus
-shellcheck and a release build, on every push to `main`.
+available and skip that part otherwise. The Postgres store's tests run when
+`EPHEMERA_TEST_POSTGRES` names a server where they may create databases,
+for example a throwaway one in Docker:
+
+```sh
+docker run -d --rm -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:17-alpine
+EPHEMERA_TEST_POSTGRES='postgres://postgres:test@127.0.0.1:55432/postgres?sslmode=disable' go test ./...
+```
+
+CI runs the same checks, with Postgres, plus shellcheck and a release
+build, on every push to `main`.
 
 ### Releasing
 
@@ -350,6 +359,7 @@ internal/egress       per-sandbox egress proxy: allow lists, address checks, log
 internal/guest        guest agent API (inside the microVM)
 internal/host         host agent API
 internal/mcp          MCP server for coding agents
+internal/pgstore      central server storage in Postgres (schema in migrations/)
 internal/record       signing and checking sandbox records
 internal/router       local router: several dev sessions on one port, by name
 internal/sandbox      backend interface; Docker, Firecracker and test backends

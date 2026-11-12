@@ -2,6 +2,7 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -55,19 +56,19 @@ func call(t *testing.T, method, url, token string, body, out any) int {
 func TestAccountsSeeOnlyTheirOwn(t *testing.T) {
 	state := t.TempDir()
 	tf := &TokenFile{Path: filepath.Join(state, "tokens.json")}
-	_, alice, err := tf.Create("alice-laptop", "alice", Limits{})
+	_, alice, err := tf.CreateToken(context.Background(), "alice-laptop", "alice", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, aliceCI, err := tf.Create("alice-ci", "alice", Limits{})
+	_, aliceCI, err := tf.CreateToken(context.Background(), "alice-ci", "alice", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, bob, err := tf.Create("bob-laptop", "bob", Limits{})
+	_, bob, err := tf.CreateToken(context.Background(), "bob-laptop", "bob", Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := tf.Create("x", "Not Valid", Limits{}); err == nil {
+	if _, _, err := tf.CreateToken(context.Background(), "x", "Not Valid", Limits{}); err == nil {
 		t.Error("an account name with capitals and a space was accepted")
 	}
 
@@ -133,11 +134,11 @@ func TestAccountsSeeOnlyTheirOwn(t *testing.T) {
 func TestNoAccountIsLocal(t *testing.T) {
 	state := t.TempDir()
 	tokens := filepath.Join(state, "tokens.json")
-	old := `[{"id":"tok_1","name":"laptop","sha256":"` + hashToken("eph_old") + `","created":"2026-11-01T00:00:00Z"}]`
+	old := `[{"id":"tok_1","name":"laptop","sha256":"` + HashToken("eph_old") + `","created":"2026-11-01T00:00:00Z"}]`
 	if err := os.WriteFile(tokens, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if p, ok := (&TokenFile{Path: tokens}).Check("eph_old"); !ok || p.Account != DefaultAccount {
+	if p, ok := (&TokenFile{Path: tokens}).Check(context.Background(), "eph_old"); !ok || p.Account != DefaultAccount {
 		t.Errorf("old token: %+v, %v", p, ok)
 	}
 
