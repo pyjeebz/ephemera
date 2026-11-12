@@ -349,6 +349,49 @@ type JoinCode struct {
 	Expires time.Time `json:"expires"`
 }
 
+// DeviceCodeRequest starts signing a CLI in through the browser.
+type DeviceCodeRequest struct {
+	Device string `json:"device"` // the machine's name, shown on the approval page
+}
+
+// DeviceCode is what the CLI shows and polls with. DeviceCode is a secret
+// that stays with the CLI; UserCode is what the person checks in the
+// browser.
+type DeviceCode struct {
+	DeviceCode      string `json:"device_code"`
+	UserCode        string `json:"user_code"`
+	VerificationURI string `json:"verification_uri"` // with the code filled in
+	Interval        int    `json:"interval"`         // seconds between polls
+	ExpiresIn       int    `json:"expires_in"`       // seconds
+}
+
+// DeviceTokenRequest polls for the result.
+type DeviceTokenRequest struct {
+	DeviceCode string `json:"device_code"`
+}
+
+// DeviceToken is the result: Status is pending, denied, expired or ok.
+// With ok, Token is the new device token, shown this once.
+type DeviceToken struct {
+	Status  string `json:"status"`
+	Token   string `json:"token,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Account string `json:"account,omitempty"`
+}
+
+// DeviceInfo is a pending sign-in, for the approval page.
+type DeviceInfo struct {
+	UserCode string    `json:"user_code"`
+	Device   string    `json:"device"`
+	Created  time.Time `json:"created"`
+}
+
+// DeviceApproval approves or denies a pending sign-in.
+type DeviceApproval struct {
+	UserCode string `json:"user_code"`
+	Approve  bool   `json:"approve"`
+}
+
 // Account is a person signed in on the web.
 type Account struct {
 	ID        string `json:"id"` // "gh-" and their GitHub user id
@@ -362,6 +405,7 @@ type Account struct {
 type Token struct {
 	ID               string    `json:"id"`
 	Name             string    `json:"name"`
+	Kind             string    `json:"kind"` // device, from ephemera login, or api
 	Created          time.Time `json:"created"`
 	MaxSandboxes     int       `json:"max_sandboxes,omitempty"`
 	MaxMinutesPerDay int       `json:"max_minutes_per_day,omitempty"`

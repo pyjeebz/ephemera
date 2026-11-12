@@ -129,20 +129,25 @@ func (s *Store) CreateToken(ctx context.Context, name, account string, limits co
 	if err != nil {
 		return control.TokenRecord{}, "", err
 	}
+	rec, secret, err := s.createToken(ctx, name, account, "api", limits)
+	if isUnique(err) {
+		return control.TokenRecord{}, "", fmt.Errorf("a token named %q already exists in account %s", name, account)
+	}
+	return rec, secret, err
+}
+
+func (s *Store) createToken(ctx context.Context, name, account, kind string, limits control.Limits) (control.TokenRecord, string, error) {
 	id, secret, err := control.NewTokenSecret()
 	if err != nil {
 		return control.TokenRecord{}, "", err
 	}
-	rec := control.TokenRecord{ID: id, Name: name, Account: account, Hash: control.HashToken(secret),
+	rec := control.TokenRecord{ID: id, Name: name, Account: account, Kind: kind, Hash: control.HashToken(secret),
 		Created: time.Now().UTC().Truncate(time.Microsecond), Limits: limits}
 	_, err = s.pool.Exec(ctx, `
 		WITH a AS (INSERT INTO accounts (id) VALUES ($3) ON CONFLICT DO NOTHING)
-		INSERT INTO tokens (id, name, account_id, sha256, max_sandboxes, max_minutes_per_day, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		rec.ID, rec.Name, rec.Account, rec.Hash, limits.MaxSandboxes, limits.MaxMinutesPerDay, rec.Created)
-	if isUnique(err) {
-		return control.TokenRecord{}, "", fmt.Errorf("a token named %q already exists in account %s", name, account)
-	}
+		INSERT INTO tokens (id, name, account_id, kind, sha256, max_sandboxes, max_minutes_per_day, created_at)
+		VALUES ($1, $2, $3, $8, $4, $5, $6, $7)`,
+		rec.ID, rec.Name, rec.Account, rec.Hash, limits.MaxSandboxes, limits.MaxMinutesPerDay, rec.Created, kind)
 	if err != nil {
 		return control.TokenRecord{}, "", err
 	}
@@ -163,11 +168,11 @@ func (s *Store) ListTokens(ctx context.Context) ([]control.TokenRecord, error) {
 	return pgx.CollectRows(rows, scanToken)
 }
 
-const tokenColumns = `id, name, account_id, sha256, max_sandboxes, max_minutes_per_day, created_at`
+const tokenColumns = `id, name, account_id, kind, sha256, max_sandboxes, max_minutes_per_day, created_at`
 
 func scanToken(r pgx.CollectableRow) (control.TokenRecord, error) {
 	var t control.TokenRecord
-	err := r.Scan(&t.ID, &t.Name, &t.Account, &t.Hash, &t.MaxSandboxes, &t.MaxMinutesPerDay, &t.Created)
+	err := r.Scan(&t.ID, &t.Name, &t.Account, &t.Kind, &t.Hash, &t.MaxSandboxes, &t.MaxMinutesPerDay, &t.Created)
 	t.Created = t.Created.UTC()
 	return t, err
 }
@@ -470,4 +475,86 @@ func (s *Store) RemoveHost(ctx context.Context, account, id string) error {
 		return control.ErrNotFound
 	}
 	return nil
+}
+
+var _ control.DeviceStore = (*Store)(nil)
+
+// CreateDeviceLogin implements control.DeviceStore. It also clears out
+// sign-ins that have expired.
+func (s *Store) CreateDeviceLogin(ctx context.Context, d control.DeviceLogin) error {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM device_logins WHERE expires_at < $1`, d.Created); err != nil {
+		return err
+	}
+	_, err := s.pool.Exec(ctx, `INSERT INTO device_logins (device_hash, user_code, device, status, created_at, expires_at)
+		VALUES ($1, $2, $3, 'pending', $4, $5)`, d.DeviceHash, d.UserCode, d.Device, d.Created, d.Expires)
+	return err
+}
+
+const deviceColumns = `device_hash, user_code, device, coalesce(account_id, ''), status, created_at, expires_at`
+
+func scanDevice(r pgx.CollectableRow) (control.DeviceLogin, error) {
+	var d control.DeviceLogin
+	err := r.Scan(&d.DeviceHash, &d.UserCode, &d.Device, &d.Account, &d.Status, &d.Created, &d.Expires)
+	d.Created, d.Expires = d.Created.UTC(), d.Expires.UTC()
+	return d, err
+}
+
+func oneDevice(rows pgx.Rows, err error) (control.DeviceLogin, error) {
+	if err != nil {
+		return control.DeviceLogin{}, err
+	}
+	d, err := pgx.CollectExactlyOneRow(rows, scanDevice)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return d, control.ErrNotFound
+	}
+	return d, err
+}
+
+// DeviceLoginByCode implements control.DeviceStore.
+func (s *Store) DeviceLoginByCode(ctx context.Context, userCode string, now time.Time) (control.DeviceLogin, error) {
+	return oneDevice(s.pool.Query(ctx, `SELECT `+deviceColumns+` FROM device_logins
+		WHERE user_code = $1 AND status = 'pending' AND expires_at > $2`, userCode, now))
+}
+
+// DecideDeviceLogin implements control.DeviceStore.
+func (s *Store) DecideDeviceLogin(ctx context.Context, userCode, accountID string, approve bool, now time.Time) error {
+	status := "denied"
+	if approve {
+		status = "approved"
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE device_logins SET status = $2, account_id = $3
+		WHERE user_code = $1 AND status = 'pending' AND expires_at > $4`, userCode, status, accountID, now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return control.ErrNotFound
+	}
+	return nil
+}
+
+// TakeDeviceLogin implements control.DeviceStore. Deleting a decided
+// sign-in and returning it is one statement, so two polls at once can't
+// both collect a token.
+func (s *Store) TakeDeviceLogin(ctx context.Context, deviceHash string, now time.Time) (control.DeviceLogin, error) {
+	d, err := oneDevice(s.pool.Query(ctx, `DELETE FROM device_logins
+		WHERE device_hash = $1 AND status <> 'pending' AND expires_at > $2 RETURNING `+deviceColumns, deviceHash, now))
+	if !errors.Is(err, control.ErrNotFound) {
+		return d, err
+	}
+	return oneDevice(s.pool.Query(ctx, `SELECT `+deviceColumns+` FROM device_logins
+		WHERE device_hash = $1 AND expires_at > $2`, deviceHash, now))
+}
+
+// CreateDeviceToken implements control.DeviceStore.
+func (s *Store) CreateDeviceToken(ctx context.Context, name, accountID string) (control.TokenRecord, string, error) {
+	try := name
+	for i := 2; i < 50; i++ {
+		rec, secret, err := s.createToken(ctx, try, accountID, "device", control.Limits{})
+		if err == nil || !isUnique(err) {
+			return rec, secret, err
+		}
+		try = fmt.Sprintf("%s-%d", name, i)
+	}
+	return control.TokenRecord{}, "", fmt.Errorf("account %s has too many tokens named %s", accountID, name)
 }

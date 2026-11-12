@@ -56,6 +56,8 @@ type Server struct {
 	usage map[owner]map[string]float64
 	// limits is each owner's limits as last seen on a request.
 	limits map[owner]Limits
+	// misses counts unknown codes tried at the device approval page.
+	misses misses
 }
 
 // owner is a token, in its account. Usage and limits are counted per owner.

@@ -9,11 +9,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/client"
 	"github.com/pyjeebz/ephemera/internal/control"
 	"github.com/pyjeebz/ephemera/internal/pgstore/pgtest"
 )
@@ -258,5 +261,98 @@ func TestSignInOff(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s with sign-in off: %s, want 404", p, resp.Status)
 		}
+	}
+}
+
+// The CLI signs in through the browser: it gets a code, the signed-in
+// person approves it from the dashboard's origin, and the CLI collects a
+// device token, once.
+func TestDeviceLogin(t *testing.T) {
+	db, _ := pgtest.Open(t)
+	gh := fakeGitHub(t)
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	cs := &control.Server{Tokens: db, State: db, Accounts: db, Now: func() time.Time { return time.Unix(0, clock.Load()) },
+		GitHub: &control.GitHub{ClientID: "cid", ClientSecret: "csecret", PublicURL: "https://api.example", DashboardURL: dashboard,
+			AuthorizeURL: gh.URL + "/login/oauth/authorize", TokenURL: gh.URL + "/login/oauth/access_token", APIURL: gh.URL}}
+	ts := httptest.NewServer(cs.Handler())
+	defer ts.Close()
+	w := web{t: t, base: ts.URL, c: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	octo := w.signIn("good")
+	ctx := context.Background()
+
+	start := func() (chan api.DeviceCode, chan error, chan api.DeviceToken) {
+		codes, errs, toks := make(chan api.DeviceCode, 1), make(chan error, 1), make(chan api.DeviceToken, 1)
+		go func() {
+			tok, err := client.DeviceLogin(ctx, ts.URL, "jeebz laptop!", func(dc api.DeviceCode) { codes <- dc })
+			errs <- err
+			toks <- tok
+		}()
+		return codes, errs, toks
+	}
+
+	codes, errs, toks := start()
+	dc := <-codes
+	if !strings.HasPrefix(dc.VerificationURI, dashboard+"/device?code=") || len(dc.UserCode) != 9 || dc.UserCode[4] != '-' {
+		t.Errorf("code %+v", dc)
+	}
+	info := decode[api.DeviceInfo](t, w.do("GET", "/v1/device?code="+strings.ToLower(dc.UserCode), session(octo, ""), nil))
+	if info.Device != "jeebz-laptop" || info.UserCode != dc.UserCode {
+		t.Errorf("info = %+v", info)
+	}
+	approve := api.DeviceApproval{UserCode: dc.UserCode, Approve: true}
+	if r := w.do("POST", "/v1/device/approve", session(octo, "https://evil.example"), approve); r.StatusCode != http.StatusForbidden {
+		t.Errorf("approve from another site: %s", r.Status)
+	}
+	if r := w.do("POST", "/v1/device/approve", session(octo, dashboard), approve); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("approve: %s", r.Status)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	tok := <-toks
+	if tok.Account != "gh-99" || tok.Name != "jeebz-laptop" || !strings.HasPrefix(tok.Token, control.TokenPrefix) {
+		t.Errorf("token = %+v", tok)
+	}
+	who := decode[api.WhoAmI](t, w.do("GET", "/v1/whoami", http.Header{"Authorization": {"Bearer " + tok.Token}}, nil))
+	if who.Account != "gh-99" {
+		t.Errorf("whoami = %+v", who)
+	}
+	toksList := decode[[]api.Token](t, w.do("GET", "/v1/tokens", session(octo, ""), nil))
+	if len(toksList) != 1 || toksList[0].Kind != "device" {
+		t.Errorf("tokens = %+v, want one device token", toksList)
+	}
+	// The code is spent: collecting again gets nothing.
+	again := decode[api.DeviceToken](t, w.do("POST", "/v1/device/token", http.Header{"Content-Type": {"application/json"}},
+		api.DeviceTokenRequest{DeviceCode: dc.DeviceCode}))
+	if again.Status != "expired" || again.Token != "" {
+		t.Errorf("second collect = %+v", again)
+	}
+
+	// Cancelled in the browser.
+	codes, errs, _ = start()
+	dc = <-codes
+	w.do("POST", "/v1/device/approve", session(octo, dashboard), api.DeviceApproval{UserCode: dc.UserCode, Approve: false})
+	if err := <-errs; err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("denied login: %v", err)
+	}
+
+	// Not approved within 10 minutes.
+	codes, errs, _ = start()
+	dc = <-codes
+	clock.Add(int64(11 * time.Minute))
+	if err := <-errs; err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Errorf("expired login: %v", err)
+	}
+	if r := w.do("POST", "/v1/device/approve", session(octo, dashboard), api.DeviceApproval{UserCode: dc.UserCode, Approve: true}); r.StatusCode != http.StatusNotFound {
+		t.Errorf("approving an expired code: %s", r.Status)
+	}
+
+	// Guessing codes is capped: 10 misses an hour.
+	for i := 0; i < 10; i++ {
+		w.do("GET", "/v1/device?code=AAAA-AAAA", session(octo, ""), nil)
+	}
+	if r := w.do("GET", "/v1/device?code=AAAA-AAAA", session(octo, ""), nil); r.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("11th wrong code: %s, want 429", r.Status)
 	}
 }

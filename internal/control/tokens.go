@@ -75,6 +75,7 @@ type TokenRecord struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
 	Account string    `json:"account,omitempty"` // empty is DefaultAccount
+	Kind    string    `json:"kind,omitempty"`    // device or api; empty is api
 	Hash    string    `json:"sha256"`
 	Created time.Time `json:"created"`
 	Limits

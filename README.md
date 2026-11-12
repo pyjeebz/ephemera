@@ -69,7 +69,10 @@ and what it joined as in `/var/lib/ephemera/host.json`. From then on the
 host signs in to the server with that key; there is no shared secret.
 
 `ephemera login` checks the token and saves it, readable only by you, in
-your user config directory. `ephemera logout` removes it. The variables
+your user config directory. On a server with GitHub sign-in, running it in
+a terminal signs you in through the browser instead: it shows a code, opens
+the approval page, and saves a token for this machine once you approve.
+`--with-token` reads a token from stdin either way. `ephemera logout` removes it. The variables
 `EPHEMERA_SERVER` and `EPHEMERA_TOKEN` override the saved login, which is
 handy in CI. If a command can't reach the server or a host, `ephemera doctor`
 checks the login, the network, the token and the hosts, and says what to fix.

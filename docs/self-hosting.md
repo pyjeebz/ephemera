@@ -140,6 +140,8 @@ EPHEMERA_PUBLIC_URL=https://ephemera.example.com
 EPHEMERA_DASHBOARD_URL=https://ephemera.example.com/dashboard
 ```
 
+With sign-in on, `ephemera login` in a terminal signs a machine in through the browser: it shows a code like `K7QM-2XRT` and opens the dashboard's `/device` page, where the person checks the code and approves. The CLI then gets a device token named after the machine, listed under the account's tokens. The code works for 10 minutes, and its token can be collected once; the server makes the token only then, so it never stores it in the clear. `ephemera login --with-token`, or piping a token in, still works, for CI.
+
 Sign-in asks GitHub only for `read:user`: the person's id, login, name and avatar, never their repositories. GitHub's access token is used once to read those and isn't kept. A GitHub user's account is `gh-` and their GitHub user id, so renaming their login changes nothing. Sessions last 30 days and live in an `HttpOnly` cookie; only a hash of each is stored. Requests that change something with a session must come from the dashboard's own site.
 
 The server has no HTTPS of its own yet, so put it behind a proxy that has it, and use `https://` in both URLs: browsers only send the session cookie over HTTPS.

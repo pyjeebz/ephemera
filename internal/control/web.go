@@ -128,6 +128,7 @@ func (s *Server) webRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/tokens", s.session(s.tokenCreate))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.session(s.tokenRevoke))
 	mux.HandleFunc("POST /v1/join-codes", s.session(s.joinCodeCreate))
+	s.deviceRoutes(mux)
 }
 
 // joinCodeCreate makes a one-time code for adding a host to the account.
@@ -330,7 +331,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func tokenOut(t TokenRecord) api.Token {
-	return api.Token{ID: t.ID, Name: t.Name, Created: t.Created,
+	kind := t.Kind
+	if kind == "" {
+		kind = "api"
+	}
+	return api.Token{ID: t.ID, Name: t.Name, Kind: kind, Created: t.Created,
 		MaxSandboxes: t.MaxSandboxes, MaxMinutesPerDay: t.MaxMinutesPerDay}
 }
 
