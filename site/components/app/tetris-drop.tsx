@@ -66,7 +66,6 @@ const FALL = [1.8, 2.55] // it drops
 const LAND = 2.55
 const RUN = [2.7, 4.1] // a highlight sweeps its top faces
 const DISSOLVE = [4.2, 6.2] // cube by cube, into sand
-const EMPTY = [6.3, 7.7] // "nothing here."
 
 // Night-desert palette, as on the rest of the site.
 const INK = "#EFEDE6"
@@ -124,7 +123,7 @@ export function TetrisDrop({ className }: { className?: string }) {
     const svg = ref.current
     if (!svg) return
 
-    // --- The parts that stay: plate, centerline, labels ------------------
+    // --- The parts that stay: plate and centerline ------------------------
     const fixed = el("g", {}, svg)
     // The plate: a 6 by 3 floor, dashed, with a faint cell grid.
     const px0 = -3,
@@ -175,46 +174,17 @@ export function TetrisDrop({ className }: { className?: string }) {
       { d: `M${cx - 10} ${cy}L${cx + 10} ${cy}`, stroke: DIM, "stroke-width": 0.8, opacity: 0 },
       fixed,
     )
-    const label = (x: number, y: number, text: string, anchor = "start") => {
-      const t = el(
-        "text",
-        {
-          x,
-          y,
-          fill: DIM,
-          "font-size": 10,
-          "letter-spacing": "0.14em",
-          "font-family": "var(--font-jetbrains), ui-monospace, monospace",
-          "text-anchor": anchor,
-          opacity: 0,
-        },
-        fixed,
-      )
-      t.textContent = text
-      return t
-    }
-    const landLabel = label(P(px1, py0, 0)[0] + 14, P(px1, py0, 0)[1] + 4, "LAND · Z0")
-    const nothing = label(cx, P(0, py1, 0)[1] + 58, "nothing here.", "middle")
-    nothing.setAttribute("letter-spacing", "0.04em")
-    nothing.setAttribute("font-size", "12")
-
     // --- The piece, rebuilt for each loop's shape ------------------------
     // Dust sits behind the piece, so only what kicks out past it shows.
     const dust = el("g", {}, svg)
     const piece = el("g", {}, svg)
     const ghost = el("g", { fill: "none", stroke: DIM, "stroke-width": 0.8, "stroke-dasharray": "3 3" }, svg)
-    const dims = el("g", { stroke: DIM, "stroke-width": 0.7, fill: "none" }, svg)
     const grains = el("g", {}, svg)
     let faces: Face[] = []
     let sand: Grain[] = []
     let puffs: Grain[] = []
     let cubes: [number, number][] = []
     let built = -1
-    // Dimension lines: H, the drop, beside the piece; S, one cell, above it.
-    const hLine = el("path", {}, dims)
-    const hText = label(0, 0, "H · DROP")
-    const sLine = el("path", {}, dims)
-    const sText = label(0, 0, "S", "middle")
 
     const build = (loop: number) => {
       built = loop
@@ -323,13 +293,12 @@ export function TetrisDrop({ className }: { className?: string }) {
       if (loop !== built) build(loop)
       const first = loop === 0
 
-      // Plate, centerline and labels draw in once, then stay.
+      // Plate and centerline draw in once, then stay.
       const base = first ? eo(seg(t, 0, 0.8)) : 1
       plate.setAttribute("opacity", String(base))
       grid.setAttribute("opacity", String(base * 0.9))
       center.setAttribute("opacity", String(base * 0.55))
       cross.setAttribute("opacity", String(base))
-      landLabel.setAttribute("opacity", String(base * 0.8))
 
       // The fall: gravity, so ease-in, from DROP cells up to the plate.
       const fall = ei(seg(t, FALL[0], FALL[1]))
@@ -362,36 +331,6 @@ export function TetrisDrop({ className }: { className?: string }) {
       const ghostOn = eo(seg(t, 0.9, 1.5)) * (1 - eo(seg(t, FALL[1] - 0.2, LAND)))
       ghost.setAttribute("opacity", (ghostOn * 0.7).toFixed(3))
 
-      // H measures what's left of the drop; S measures one cell.
-      const bottom = P(0, 0, 0)[1] - lift * S
-      const xs = cubes.map((c) => c[0])
-      const leftX = P(Math.min(...xs), 1, 0)[0] - 26
-      const hOn = eo(seg(t, 0.95, 1.35)) * (1 - eo(seg(t, FALL[1] - 0.25, FALL[1])))
-      hLine.setAttribute(
-        "d",
-        `M${leftX} ${bottom}L${leftX} ${PLATE_Y + S}M${leftX - 5} ${bottom}L${leftX + 5} ${bottom}M${leftX - 5} ${PLATE_Y + S}L${leftX + 5} ${PLATE_Y + S}`,
-      )
-      hLine.setAttribute("opacity", hOn.toFixed(3))
-      hText.setAttribute("x", String(leftX - 10))
-      hText.setAttribute("y", String((bottom + PLATE_Y + S) / 2))
-      hText.setAttribute("text-anchor", "end")
-      hText.setAttribute("opacity", hOn.toFixed(3))
-      const topCube = cubes.reduce((a, c) => (c[1] > a[1] || (c[1] === a[1] && c[0] < a[0]) ? c : a), cubes[0])
-      // S runs along the top face's far edge, set back from it, with
-      // extension lines, the way an isometric drawing dimensions an edge.
-      const [ex, ey] = P(topCube[0], 0, topCube[1] + 1, lift)
-      const [fx, fy] = P(topCube[0] + 1, 0, topCube[1] + 1, lift)
-      const [ax, ay] = P(topCube[0], -0.6, topCube[1] + 1, lift)
-      const [bx, by] = P(topCube[0] + 1, -0.6, topCube[1] + 1, lift)
-      const [gx, gy] = P(topCube[0], -0.75, topCube[1] + 1, lift)
-      const [hx, hy] = P(topCube[0] + 1, -0.75, topCube[1] + 1, lift)
-      const sOn = eo(seg(t, 0.85, 1.25)) * (1 - eo(seg(t, FALL[0] - 0.05, FALL[0] + 0.2)))
-      sLine.setAttribute("d", `M${ex} ${ey - 4}L${gx} ${gy}M${fx} ${fy - 4}L${hx} ${hy}M${ax} ${ay}L${bx} ${by}`)
-      sLine.setAttribute("opacity", sOn.toFixed(3))
-      sText.setAttribute("x", String((ax + bx) / 2 + 8))
-      sText.setAttribute("y", String((ay + by) / 2 - 8))
-      sText.setAttribute("opacity", sOn.toFixed(3))
-
       // Landing: the plate's edge lights up, and dust kicks out sideways.
       flash.setAttribute("opacity", (t > LAND ? 1 - eo(seg(t, LAND, LAND + 0.7)) : 0).toFixed(3))
       for (const g of puffs) {
@@ -415,10 +354,6 @@ export function TetrisDrop({ className }: { className?: string }) {
           g.el.setAttribute("y", (g.y + 0.5 * 520 * k * k).toFixed(1))
         }
       }
-
-      // Empty, for a moment.
-      const empty = eo(seg(t, EMPTY[0], EMPTY[0] + 0.5)) * (1 - eo(seg(t, EMPTY[1] - 0.5, EMPTY[1])))
-      nothing.setAttribute("opacity", (empty * 0.9).toFixed(3))
     }
 
     // People who prefer reduced motion get the piece landed, at rest.
