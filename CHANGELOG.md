@@ -12,6 +12,7 @@
 
 ### Changed
 
+- Hosts connect out to the central server and keep that connection open; the server sends creates and destroys down it instead of calling the host. The server no longer needs to reach hosts at all, so a host can sit behind NAT, as long as the CLI can reach its `--url` for files and commands. A host that loses the connection keeps retrying, waiting 1 s, doubling to 60 s. `POST /v1/hosts` and the host's create and destroy endpoints are gone, so hosts and servers from v0.1 don't work with this version or each other: upgrade both.
 - Building from source needs Go 1.25 or later (was 1.24), for the Postgres driver. Go itself supports only 1.26 and 1.27 now.
 
 ## v0.1.1 (2026-11-11)

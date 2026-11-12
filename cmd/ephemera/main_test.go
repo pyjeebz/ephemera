@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
-	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -14,7 +12,10 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/control"
+	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/host/hosttest"
 	"github.com/pyjeebz/ephemera/internal/record"
+	"github.com/pyjeebz/ephemera/internal/sandbox/sandboxtest"
 )
 
 func TestLoginLsLogout(t *testing.T) {
@@ -73,13 +74,9 @@ func TestVerify(t *testing.T) {
 	t.Setenv("EPHEMERA_CONFIG", filepath.Join(t.TempDir(), "c.json"))
 
 	key := newKey(t)
-	// The host registers its public key with the central server.
-	body, _ := json.Marshal(api.RegisterHostRequest{Name: "h1", URL: "http://h1", PublicKey: record.PublicKey(key)})
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/hosts", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer s")
-	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode/100 != 2 {
-		t.Fatalf("register: %v %v", resp, err)
-	}
+	// The host tells the central server its public key when it connects.
+	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Name: "h1", Key: key}
+	hosttest.Connect(t, hs, ts.URL, "s", api.HostHello{Name: "h1", URL: "http://h1"})
 
 	// Records are written the way the CLI saves them.
 	write := func(sr api.SignedRecord) string {

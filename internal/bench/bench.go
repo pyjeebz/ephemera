@@ -218,7 +218,7 @@ func newStack(ctx context.Context, be *firecracker.Backend, workDir string) (*st
 		return nil, err
 	}
 	cs := &control.Server{Tokens: control.StaticToken{Name: "bench", Token: token}, HostSecret: secret, Log: quiet}
-	hs := &host.Server{Backend: be, Secret: secret, Log: quiet, DefaultImage: "default", Name: "bench", BackendName: "firecracker", Key: key}
+	hs := &host.Server{Backend: be, Log: quiet, DefaultImage: "default", Name: "bench", BackendName: "firecracker", Key: key}
 	cURL, cStop, err := serve(cs.Handler())
 	if err != nil {
 		return nil, err
@@ -229,7 +229,8 @@ func newStack(ctx context.Context, be *firecracker.Backend, workDir string) (*st
 		return nil, err
 	}
 	rctx, cancel := context.WithCancel(ctx)
-	go hs.Register(rctx, http.DefaultClient, cURL, secret, api.RegisterHostRequest{Name: "bench", URL: hURL, Capacity: 1000}, time.Second)
+	go hs.Connect(rctx, host.ConnectConfig{ServerURL: cURL, Secret: secret,
+		Hello: api.HostHello{Name: "bench", URL: hURL, Capacity: 1000}})
 	st := &stack{host: hs, client: &client.Client{Server: cURL, Token: token}, stop: func() {
 		cancel()
 		dctx, c := context.WithTimeout(context.Background(), time.Minute)
@@ -239,12 +240,12 @@ func newStack(ctx context.Context, be *firecracker.Backend, workDir string) (*st
 		cStop()
 	}}
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		if hosts, err := st.client.Hosts(ctx); err == nil && len(hosts) > 0 {
+		if hosts, err := st.client.Hosts(ctx); err == nil && len(hosts) > 0 && hosts[0].Online {
 			return st, nil
 		}
 		if time.Now().After(deadline) {
 			st.close()
-			return nil, fmt.Errorf("the host agent did not register")
+			return nil, fmt.Errorf("the host agent did not connect")
 		}
 	}
 }

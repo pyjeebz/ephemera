@@ -38,7 +38,7 @@ sudo deploy/host/install.sh
 1. Builds `ephemera`, `ephemera-server` and `ephemera-host` into `/usr/local/bin`.
 2. Builds the guest image into `/var/lib/ephemera/image`. This takes a few minutes and needs network.
 3. Writes `/etc/ephemera/ephemera.env` with a random host secret and the machine's Tailscale address.
-4. Starts both parts as systemd services, `ephemera-server` and `ephemera-host`, and waits until the host has registered.
+4. Starts both parts as systemd services, `ephemera-server` and `ephemera-host`, and waits until the host has connected.
 5. Creates the first API token, named `admin`, and prints it once.
 
 ## Connect your laptop
@@ -185,5 +185,5 @@ This stops the services and removes the binaries, but keeps `/var/lib/ephemera` 
 ## Security notes
 
 - **Traffic between your laptop and the machine is not encrypted by ephemera.** Tailscale encrypts it. Don't serve ephemera on a public address; the installer refuses to.
-- **The host secret lets a machine register as a host.** Anyone who has it can receive sandboxes, and the code in them. Keep it root-only and share it only with your own hosts.
+- **The host secret lets a machine connect as a host.** Anyone who has it can receive sandboxes, and the code in them. Keep it root-only and share it only with your own hosts.
 - **A record is only as trustworthy as its host's key.** `ephemera verify` checks a record against the key the central server has for that host.

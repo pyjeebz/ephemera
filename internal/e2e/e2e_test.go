@@ -20,6 +20,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/client"
 	"github.com/pyjeebz/ephemera/internal/control"
 	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/host/hosttest"
 	"github.com/pyjeebz/ephemera/internal/sandbox"
 	"github.com/pyjeebz/ephemera/internal/sandbox/docker"
 	"github.com/pyjeebz/ephemera/internal/sandbox/sandboxtest"
@@ -42,31 +43,13 @@ func newStack(t *testing.T, be sandbox.Backend, image string) *stack {
 	cts := httptest.NewServer(cs.Handler())
 	t.Cleanup(cts.Close)
 
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: image, Log: discardLog(), Name: "test-host", BackendName: "test", Key: testKey()}
+	hs := &host.Server{Backend: be, DefaultImage: image, Log: discardLog(), Name: "test-host", BackendName: "test", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 	t.Cleanup(hts.Close)
 	t.Cleanup(func() { hs.DestroyAll(context.Background()) })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go hs.Register(ctx, http.DefaultClient, cts.URL, hostSecret,
-		api.RegisterHostRequest{Name: "test-host", URL: hts.URL, Capacity: 10}, 50*time.Millisecond)
-
-	c := &client.Client{Server: cts.URL, Token: userToken}
-	// Wait for the host to register.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		sb, err := c.Create(context.Background(), api.Spec{})
-		if err == nil {
-			c.Destroy(context.Background(), sb.ID)
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("host never registered: %v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return &stack{control: cs, host: hs, client: c}
+	hosttest.Connect(t, hs, cts.URL, hostSecret, api.HostHello{Name: "test-host", URL: hts.URL, Capacity: 10})
+	return &stack{control: cs, host: hs, client: &client.Client{Server: cts.URL, Token: userToken}}
 }
 
 func worktree(t *testing.T, files map[string]string) string {

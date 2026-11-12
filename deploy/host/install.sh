@@ -203,18 +203,18 @@ if [ "$ROLE" = all ]; then
 	done
 	curl -fsS -o /dev/null "$SERVER_URL/healthz" || die "the central server did not start: journalctl -u ephemera-server"
 fi
-log "waiting for the host agent to register (it builds a snapshot first, about 10 s)"
+log "waiting for the host agent to connect (it builds a snapshot first, about 10 s)"
 since="$(date '+%Y-%m-%d %H:%M:%S' -d '-5 sec' 2>/dev/null || date '+%Y-%m-%d %H:%M:%S')"
-registered=0
+connected=0
 for _ in $(seq 1 90); do
-	if journalctl -u ephemera-host --since "$since" -q --no-pager 2>/dev/null | grep -q 'registered with central server'; then
-		registered=1
+	if journalctl -u ephemera-host --since "$since" -q --no-pager 2>/dev/null | grep -q 'connected to central server'; then
+		connected=1
 		break
 	fi
 	systemctl is-active --quiet ephemera-host.service || break
 	sleep 1
 done
-[ "$registered" -eq 1 ] || die "the host agent did not register: journalctl -u ephemera-host"
+[ "$connected" -eq 1 ] || die "the host agent did not connect: journalctl -u ephemera-host"
 
 # --- First token ------------------------------------------------------------
 

@@ -216,23 +216,53 @@ type DeleteFilesRequest struct {
 // a port inside a sandbox.
 const PortUpgrade = "ephemera-tcp"
 
-// RegisterHostRequest is a host's registration and heartbeat. Sandboxes
-// lists the sandboxes the host is running, so the central server can
-// reconcile its records with reality.
-type RegisterHostRequest struct {
-	Name      string   `json:"name"`
-	URL       string   `json:"url"`
-	Capacity  int      `json:"capacity"`
-	Sandboxes []string `json:"sandboxes"`
-	// PublicKey is the host's Ed25519 key for signing records, base64.
-	PublicKey string `json:"public_key,omitempty"`
+// HostUpgrade is the Upgrade token of a host's connection to the central
+// server. The host dials out and keeps the connection open; the server
+// sends it work down that connection, so the server never needs to reach
+// the host.
+const HostUpgrade = "ephemera-host/1"
+
+// HostProtocol is the version of the messages on that connection.
+const HostProtocol = 1
+
+// HostMessage is one message on a host's connection, sent as one line of
+// JSON either way. Type says which fields are set:
+//
+//	hello      host to server, first: Hello and Sandboxes
+//	welcome    server to host, the reply: Destroy
+//	heartbeat  host to server, every 15 s: Req and Sandboxes
+//	ack        server to host, the reply: Req and Destroy
+//	create     server to host: Req and Create
+//	destroy    server to host: Sandbox, and Req when it wants a result
+//	result     host to server, the reply to create or destroy: Req, OK,
+//	           Error, and Record for a destroy
+//
+// Destroy lists sandboxes the host runs that the server has no record of.
+// The host destroys them: nothing may run that no one can see or stop.
+// Either side ignores types it doesn't know.
+type HostMessage struct {
+	Type      string             `json:"type"`
+	Req       string             `json:"req,omitempty"`
+	Hello     *HostHello         `json:"hello,omitempty"`
+	Sandboxes []string           `json:"sandboxes,omitempty"`
+	Destroy   []string           `json:"destroy,omitempty"`
+	Create    *HostCreateRequest `json:"create,omitempty"`
+	Sandbox   string             `json:"sandbox,omitempty"`
+	OK        bool               `json:"ok,omitempty"`
+	Error     string             `json:"error,omitempty"`
+	Record    *SignedRecord      `json:"record,omitempty"`
 }
 
-// RegisterHostResponse tells a host which of its sandboxes the central
-// server does not know about. The host destroys them: nothing may run that
-// no one can see or stop.
-type RegisterHostResponse struct {
-	Destroy []string `json:"destroy,omitempty"`
+// HostHello introduces a host when it connects.
+type HostHello struct {
+	Name string `json:"name"`
+	// URL is where the CLI reaches the host for files and commands.
+	URL      string `json:"url"`
+	Capacity int    `json:"capacity"`
+	// PublicKey is the host's Ed25519 key for signing records, base64.
+	PublicKey string `json:"public_key,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Protocol  int    `json:"protocol"`
 }
 
 // WhoAmI describes the caller's token.

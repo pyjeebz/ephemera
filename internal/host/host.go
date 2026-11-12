@@ -1,11 +1,11 @@
-// Package host is the host agent's HTTP API. The central server creates and
-// destroys sandboxes here; the CLI sends files and runs commands here
-// directly, with the sandbox's own token, so neither passes through the
+// Package host is the host agent. It keeps a connection open to the
+// central server, which creates and destroys sandboxes over it (see
+// Connect). The CLI sends files and runs commands over this package's HTTP
+// API directly, with the sandbox's own token, so neither passes through the
 // central server.
 package host
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/subtle"
@@ -36,7 +36,6 @@ const MaxUpload = 4 << 30
 // Server serves the host API.
 type Server struct {
 	Backend      sandbox.Backend
-	Secret       string // shared with the central server
 	DefaultImage string
 	Log          *slog.Logger
 	// Name and BackendName go into records.
@@ -50,6 +49,7 @@ type Server struct {
 
 	mu        sync.Mutex
 	sandboxes map[string]*entry
+	conns     map[*conn]struct{} // open connections to central servers
 }
 
 type entry struct {
@@ -87,7 +87,6 @@ func (s *Server) Live() int {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
-	mux.HandleFunc("POST /v1/sandboxes", s.create)
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/files", s.files)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/files/delete", s.deleteFiles)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.exec)
@@ -95,7 +94,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}/connections", s.connections)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/snapshots/load", s.snapshot(true))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/snapshots/save", s.snapshot(false))
-	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.destroy)
 	return mux
 }
 
@@ -125,9 +123,8 @@ func WriteError(w http.ResponseWriter, code int, format string, args ...any) {
 	json.NewEncoder(w).Encode(api.Error{Error: fmt.Sprintf(format, args...)})
 }
 
-// sandboxAuth checks the request's token against the sandbox's own token,
-// or the central server's secret when allowSecret is set.
-func (s *Server) sandboxAuth(w http.ResponseWriter, r *http.Request, allowSecret bool) (string, bool) {
+// sandboxAuth checks the request's token against the sandbox's own token.
+func (s *Server) sandboxAuth(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id := r.PathValue("id")
 	tok := bearer(r)
 	s.mu.Lock()
@@ -135,9 +132,7 @@ func (s *Server) sandboxAuth(w http.ResponseWriter, r *http.Request, allowSecret
 	expired := ok && e.final != nil
 	s.mu.Unlock()
 	switch {
-	case allowSecret && equal(tok, s.Secret):
-		return id, true
-	case ok && equal(tok, e.token) && expired && !allowSecret:
+	case ok && equal(tok, e.token) && expired:
 		WriteError(w, http.StatusGone, "sandbox %s reached its maximum lifetime and was destroyed", id)
 	case ok && equal(tok, e.token):
 		return id, true
@@ -149,28 +144,17 @@ func (s *Server) sandboxAuth(w http.ResponseWriter, r *http.Request, allowSecret
 	return "", false
 }
 
-func (s *Server) create(w http.ResponseWriter, r *http.Request) {
-	if !equal(bearer(r), s.Secret) {
-		WriteError(w, http.StatusUnauthorized, "invalid host secret")
-		return
-	}
-	var req api.HostCreateRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "bad request: %v", err)
-		return
-	}
+// Create starts a sandbox the central server asked for.
+func (s *Server) Create(ctx context.Context, req api.HostCreateRequest) error {
 	if req.ID == "" || req.Token == "" {
-		WriteError(w, http.StatusBadRequest, "id and token are required")
-		return
+		return errors.New("id and token are required")
 	}
 	if err := req.Spec.Validate(); err != nil {
-		WriteError(w, http.StatusBadRequest, "%v", err)
-		return
+		return err
 	}
 	for _, pat := range req.Spec.Allow {
 		if err := egress.ValidatePattern(pat); err != nil {
-			WriteError(w, http.StatusBadRequest, "%v", err)
-			return
+			return err
 		}
 	}
 	if req.Spec.Image == "" {
@@ -182,8 +166,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, dup := s.sandboxes[req.ID]; dup {
 		s.mu.Unlock()
-		WriteError(w, http.StatusConflict, "sandbox %s already exists", req.ID)
-		return
+		return fmt.Errorf("sandbox %s already exists", req.ID)
 	}
 	now := time.Now()
 	s.sandboxes[req.ID] = &entry{token: req.Token, created: now, rec: api.Record{
@@ -192,12 +175,11 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}}
 	s.mu.Unlock()
 
-	if err := s.Backend.Create(r.Context(), req.ID, req.Spec); err != nil {
+	if err := s.Backend.Create(ctx, req.ID, req.Spec); err != nil {
 		s.forget(req.ID)
-		s.Backend.Destroy(context.WithoutCancel(r.Context()), req.ID)
+		s.Backend.Destroy(context.WithoutCancel(ctx), req.ID)
 		s.log().Error("create failed", "sandbox", req.ID, "err", err)
-		WriteError(w, http.StatusInternalServerError, "create sandbox: %v", err)
-		return
+		return fmt.Errorf("create sandbox: %w", err)
 	}
 	if life := s.lifetime(req.Spec); life > 0 {
 		id := req.ID
@@ -209,7 +191,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}
 	s.log().Info("sandbox created", "sandbox", req.ID, "image", req.Spec.Image, "network", req.Spec.Network)
-	w.WriteHeader(http.StatusCreated)
+	return nil
 }
 
 // lifetime is how long a sandbox may live: the host's limit, or less if
@@ -223,7 +205,7 @@ func (s *Server) lifetime(spec api.Spec) time.Duration {
 }
 
 func (s *Server) files(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.sandboxAuth(w, r, false)
+	id, ok := s.sandboxAuth(w, r)
 	if !ok {
 		return
 	}
@@ -253,7 +235,7 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.sandboxAuth(w, r, false)
+	id, ok := s.sandboxAuth(w, r)
 	if !ok {
 		return
 	}
@@ -302,7 +284,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteFiles(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.sandboxAuth(w, r, false)
+	id, ok := s.sandboxAuth(w, r)
 	if !ok {
 		return
 	}
@@ -342,7 +324,7 @@ func (s *Server) deleteFiles(w http.ResponseWriter, r *http.Request) {
 // an HTTP Upgrade; after the 101 response the connection carries raw bytes
 // both ways.
 func (s *Server) port(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.sandboxAuth(w, r, false)
+	id, ok := s.sandboxAuth(w, r)
 	if !ok {
 		return
 	}
@@ -416,7 +398,7 @@ func Pipe(a, b net.Conn) {
 // in the request and is used only for it.
 func (s *Server) snapshot(load bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := s.sandboxAuth(w, r, false)
+		id, ok := s.sandboxAuth(w, r)
 		if !ok {
 			return
 		}
@@ -454,7 +436,7 @@ func (s *Server) snapshot(load bool) http.HandlerFunc {
 // connections returns the sandbox's outbound connection log, from the
 // "since" index on.
 func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.sandboxAuth(w, r, false)
+	id, ok := s.sandboxAuth(w, r)
 	if !ok {
 		return
 	}
@@ -473,30 +455,30 @@ func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
 
 // destroy destroys the sandbox and answers with its signed record. For a
 // sandbox that already expired, it hands over the record kept for it.
-func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.sandboxAuth(w, r, true)
-	if !ok {
-		return
-	}
+// Destroy destroys a sandbox and returns its signed record. A sandbox that
+// already expired returns the record it was destroyed with.
+func (s *Server) Destroy(ctx context.Context, id string) (*api.SignedRecord, error) {
 	s.mu.Lock()
 	e := s.sandboxes[id]
-	if e != nil && e.final != nil {
+	if e == nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("sandbox %s not found", id)
+	}
+	if e.final != nil {
 		final := e.final
 		delete(s.sandboxes, id)
 		s.mu.Unlock()
-		writeJSON(w, http.StatusOK, final)
-		return
+		return final, nil
 	}
 	s.mu.Unlock()
-	sr, err := s.finish(r.Context(), id, "destroyed")
+	sr, err := s.finish(ctx, id, "destroyed")
 	if err != nil {
 		s.log().Error("destroy failed", "sandbox", id, "err", err)
-		WriteError(w, http.StatusInternalServerError, "destroy: %v", err)
-		return
+		return nil, err
 	}
 	s.forget(id)
 	s.log().Info("sandbox destroyed", "sandbox", id)
-	writeJSON(w, http.StatusOK, sr)
+	return sr, nil
 }
 
 // finish destroys a sandbox and returns its signed record. Only the first
@@ -586,64 +568,6 @@ func (s *Server) DestroyAll(ctx context.Context) error {
 		s.forget(id)
 	}
 	return errors.Join(errs...)
-}
-
-// Register announces the host to the central server, then repeats every
-// interval as a heartbeat until ctx is done. Each heartbeat lists this
-// host's sandboxes; any the central server has no record of are destroyed.
-func (s *Server) Register(ctx context.Context, client *http.Client, serverURL, secret string, req api.RegisterHostRequest, interval time.Duration) {
-	send := func() (api.RegisterHostResponse, error) {
-		var out api.RegisterHostResponse
-		req.Sandboxes = s.ids()
-		if s.Key != nil {
-			req.PublicKey = record.PublicKey(s.Key)
-		}
-		body, _ := json.Marshal(req)
-		hr, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(serverURL, "/")+"/v1/hosts", bytes.NewReader(body))
-		if err != nil {
-			return out, err
-		}
-		hr.Header.Set("Authorization", "Bearer "+secret)
-		hr.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(hr)
-		if err != nil {
-			return out, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode/100 != 2 {
-			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			return out, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(msg)))
-		}
-		if resp.StatusCode == http.StatusOK {
-			err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
-		}
-		return out, err
-	}
-	registered := false
-	for {
-		resp, err := send()
-		switch {
-		case err != nil && ctx.Err() == nil:
-			s.log().Warn("registration failed", "server", serverURL, "err", err)
-			registered = false
-		case err == nil && !registered:
-			s.log().Info("registered with central server", "server", serverURL, "name", req.Name)
-			registered = true
-		}
-		for _, id := range resp.Destroy {
-			s.log().Warn("central server has no record of sandbox; destroying it", "sandbox", id)
-			if err := s.Backend.Destroy(ctx, id); err != nil {
-				s.log().Error("destroy unknown sandbox", "sandbox", id, "err", err)
-				continue
-			}
-			s.forget(id)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(interval):
-		}
-	}
 }
 
 func (s *Server) ids() []string {

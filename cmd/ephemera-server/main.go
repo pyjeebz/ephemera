@@ -100,7 +100,6 @@ func serve(args []string, stderr io.Writer) int {
 
 	srv := &control.Server{
 		HostSecret: os.Getenv("EPHEMERA_HOST_SECRET"),
-		Client:     &http.Client{Timeout: 2 * time.Minute},
 		Log:        log,
 	}
 	if srv.HostSecret == "" {

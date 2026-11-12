@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,9 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/control"
+	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/host/hosttest"
+	"github.com/pyjeebz/ephemera/internal/sandbox/sandboxtest"
 )
 
 type doctorReport struct {
@@ -38,33 +42,45 @@ func doctorEnv(t *testing.T) (*httptest.Server, *time.Time) {
 	return ts, &now
 }
 
-func registerHost(t *testing.T, server, name, hostURL string) {
+// startHost runs a host agent connected to the server, and returns its
+// HTTP server and a func that disconnects it and waits until the server
+// lists it offline.
+func startHost(t *testing.T, server, name string) (*httptest.Server, func()) {
 	t.Helper()
-	b, _ := json.Marshal(api.RegisterHostRequest{Name: name, URL: hostURL, Capacity: 1})
-	req, _ := http.NewRequest(http.MethodPost, server+"/v1/hosts", bytes.NewReader(b))
-	req.Header.Set("Authorization", "Bearer s")
+	_, key, _ := ed25519.GenerateKey(nil)
+	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Name: name, Key: key}
+	hts := httptest.NewServer(hs.Handler())
+	t.Cleanup(hts.Close)
+	disconnect := hosttest.Connect(t, hs, server, "s", api.HostHello{Name: name, URL: hts.URL, Capacity: 1})
+	return hts, func() {
+		disconnect()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if !online(t, server, name) {
+				return
+			}
+		}
+		t.Fatalf("server still lists %s as online", name)
+	}
+}
+
+// online reports whether the server lists the host as online.
+func online(t *testing.T, server, name string) bool {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, server+"/v1/hosts", nil)
+	req.Header.Set("Authorization", "Bearer eph_good")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("register host: %s", resp.Status)
-	}
-}
-
-// fakeHost answers /healthz like a host agent.
-func fakeHost(t *testing.T) *httptest.Server {
-	t.Helper()
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
-			w.Write([]byte("ok\n"))
-			return
+	defer resp.Body.Close()
+	var hosts []api.Host
+	json.NewDecoder(resp.Body).Decode(&hosts)
+	for _, h := range hosts {
+		if h.Name == name {
+			return h.Online
 		}
-		http.NotFound(w, r)
-	}))
-	t.Cleanup(hs.Close)
-	return hs
+	}
+	return false
 }
 
 func runDoctorJSON(t *testing.T) (int, doctorReport) {
@@ -89,7 +105,7 @@ func statuses(rep doctorReport) string {
 
 func TestDoctorAllOK(t *testing.T) {
 	ts, _ := doctorEnv(t)
-	registerHost(t, ts.URL, "h1", fakeHost(t).URL)
+	startHost(t, ts.URL, "h1")
 
 	code, rep := runDoctorJSON(t)
 	if want := "login=ok server=ok token=ok hosts=ok"; code != 0 || !rep.OK || statuses(rep) != want {
@@ -168,9 +184,9 @@ func TestDoctorFailures(t *testing.T) {
 	})
 
 	t.Run("host offline", func(t *testing.T) {
-		ts, now := doctorEnv(t)
-		registerHost(t, ts.URL, "h1", fakeHost(t).URL)
-		*now = now.Add(control.HostTimeout + time.Second)
+		ts, _ := doctorEnv(t)
+		_, disconnect := startHost(t, ts.URL, "h1")
+		disconnect()
 		code, rep := runDoctorJSON(t)
 		if want := "login=ok server=ok token=ok hosts=fail"; code != 1 || statuses(rep) != want {
 			t.Fatalf("code %d, checks %s, want %s", code, statuses(rep), want)
@@ -182,9 +198,8 @@ func TestDoctorFailures(t *testing.T) {
 
 	t.Run("host unreachable from here", func(t *testing.T) {
 		ts, _ := doctorEnv(t)
-		gone := fakeHost(t)
-		registerHost(t, ts.URL, "h1", gone.URL)
-		gone.Close()
+		gone, _ := startHost(t, ts.URL, "h1")
+		gone.Close() // still connected, but its address answers nothing
 		code, rep := runDoctorJSON(t)
 		if want := "login=ok server=ok token=ok hosts=fail"; code != 1 || statuses(rep) != want {
 			t.Fatalf("code %d, checks %s, want %s", code, statuses(rep), want)
@@ -195,10 +210,10 @@ func TestDoctorFailures(t *testing.T) {
 	})
 
 	t.Run("one host of two offline", func(t *testing.T) {
-		ts, now := doctorEnv(t)
-		registerHost(t, ts.URL, "old", fakeHost(t).URL)
-		*now = now.Add(control.HostTimeout + time.Second)
-		registerHost(t, ts.URL, "new", fakeHost(t).URL)
+		ts, _ := doctorEnv(t)
+		_, disconnect := startHost(t, ts.URL, "old")
+		disconnect()
+		startHost(t, ts.URL, "new")
 		code, rep := runDoctorJSON(t)
 		if code != 0 || !rep.OK {
 			t.Fatalf("code %d, checks %s: one reachable host is enough", code, statuses(rep))

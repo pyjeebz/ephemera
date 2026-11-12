@@ -3,6 +3,7 @@ package control
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,21 +12,18 @@ import (
 	"testing"
 
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/host/hosttest"
+	"github.com/pyjeebz/ephemera/internal/sandbox/sandboxtest"
 )
 
-// fakeHost accepts creates and destroys like a host agent.
-func fakeHost(t *testing.T) *httptest.Server {
+func testKey(t *testing.T) ed25519.PrivateKey {
 	t.Helper()
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			w.WriteHeader(http.StatusCreated)
-		case http.MethodDelete:
-			w.WriteHeader(http.StatusNoContent)
-		}
-	}))
-	t.Cleanup(hs.Close)
-	return hs
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
 }
 
 // call sends a request with a bearer token and decodes a JSON reply into out.
@@ -75,10 +73,10 @@ func TestAccountsSeeOnlyTheirOwn(t *testing.T) {
 	cs := &Server{Tokens: tf, HostSecret: "s", StatePath: filepath.Join(state, "sandboxes.json")}
 	ts := httptest.NewServer(cs.Handler())
 	defer ts.Close()
-	if code := call(t, http.MethodPost, ts.URL+"/v1/hosts", "s",
-		api.RegisterHostRequest{Name: "h1", URL: fakeHost(t).URL, Capacity: 10}, nil); code != http.StatusOK {
-		t.Fatalf("register host: %d", code)
-	}
+	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Name: "h1", Key: testKey(t)}
+	hts := httptest.NewServer(hs.Handler())
+	defer hts.Close()
+	hosttest.Connect(t, hs, ts.URL, "s", api.HostHello{Name: "h1", URL: hts.URL, Capacity: 10})
 
 	var who api.WhoAmI
 	call(t, http.MethodGet, ts.URL+"/v1/whoami", alice, nil, &who)

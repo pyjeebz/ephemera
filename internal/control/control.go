@@ -9,7 +9,6 @@
 package control
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -17,7 +16,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -27,7 +25,8 @@ import (
 	"github.com/pyjeebz/ephemera/internal/host"
 )
 
-// HostTimeout is how long a host stays eligible after its last heartbeat.
+// HostTimeout is how long a host may go without a heartbeat before its
+// connection is taken for dead and closed.
 const HostTimeout = 45 * time.Second
 
 // Server serves the central API.
@@ -40,7 +39,6 @@ type Server struct {
 	// endpoints. Without both, those routes don't exist.
 	GitHub   *GitHub
 	Accounts AccountStore
-	Client   *http.Client
 	Log      *slog.Logger
 	Now      func() time.Time
 
@@ -140,16 +138,11 @@ func (s *Server) end(ctx context.Context, sb *api.Sandbox, reason string) {
 	}
 }
 
-type hostState struct {
-	api.RegisterHostRequest
-	lastSeen time.Time
-}
-
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
-	mux.HandleFunc("POST /v1/hosts", s.register)
+	mux.HandleFunc("GET /v1/hosts/connect", s.hostConnect)
 	mux.HandleFunc("GET /v1/whoami", s.user(s.whoami))
 	mux.HandleFunc("GET /v1/usage", s.user(s.usageHandler))
 	mux.HandleFunc("GET /v1/hosts", s.user(s.hostList))
@@ -175,13 +168,6 @@ func (s *Server) log() *slog.Logger {
 		return s.Log
 	}
 	return slog.Default()
-}
-
-func (s *Server) client() *http.Client {
-	if s.Client != nil {
-		return s.Client
-	}
-	return http.DefaultClient
 }
 
 func tokenOK(r *http.Request, want string) bool {
@@ -345,7 +331,9 @@ func (s *Server) enforceOnce(ctx context.Context) {
 	s.mu.Unlock()
 	for _, sb := range over {
 		s.log().Warn("daily minutes used up; stopping sandbox", "sandbox", sb.ID, "owner", sb.Owner)
-		s.hostCall(ctx, http.MethodDelete, sb.HostURL+"/v1/sandboxes/"+sb.ID, nil)
+		if _, err := s.hostDo(ctx, sb.Host, api.HostMessage{Type: "destroy", Sandbox: sb.ID}); err != nil {
+			s.log().Warn("stopping sandbox", "sandbox", sb.ID, "host", sb.Host, "err", err)
+		}
 		s.end(ctx, sb, EndLimit)
 	}
 }
@@ -356,61 +344,15 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func (s *Server) register(w http.ResponseWriter, r *http.Request) {
-	if !tokenOK(r, s.HostSecret) {
-		host.WriteError(w, http.StatusUnauthorized, "invalid host secret")
-		return
-	}
-	var req api.RegisterHostRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
-		host.WriteError(w, http.StatusBadRequest, "bad request: %v", err)
-		return
-	}
-	u, err := url.Parse(req.URL)
-	if req.Name == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		host.WriteError(w, http.StatusBadRequest, "name and an http(s) url are required")
-		return
-	}
-	reported := make(map[string]bool, len(req.Sandboxes))
-	for _, id := range req.Sandboxes {
-		reported[id] = true
-	}
-	var resp api.RegisterHostResponse
-	var gone []*api.Sandbox
-	s.mu.Lock()
-	if s.hosts == nil {
-		s.hosts = map[string]*hostState{}
-	}
-	s.hosts[req.Name] = &hostState{RegisterHostRequest: req, lastSeen: s.now()}
-	for _, id := range req.Sandboxes {
-		if sb, ok := s.sandboxes[id]; !ok || sb.Host != req.Name {
-			resp.Destroy = append(resp.Destroy, id)
-		}
-	}
-	for id, sb := range s.sandboxes {
-		if sb.Host == req.Name && !reported[id] && s.now().Sub(sb.CreatedAt) > createGrace {
-			gone = append(gone, sb)
-		}
-	}
-	s.mu.Unlock()
-	for _, sb := range gone {
-		s.log().Info("sandbox gone from its host; record dropped", "sandbox", sb.ID, "host", req.Name)
-		s.end(r.Context(), sb, EndGone)
-	}
-	for _, id := range resp.Destroy {
-		s.log().Warn("host runs a sandbox with no record; destroying it", "sandbox", id, "host", req.Name)
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
 func (s *Server) hostLive(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, ok := s.hosts[name]
-	return ok && s.now().Sub(h.lastSeen) <= HostTimeout
+	return ok && h.conn != nil
 }
 
-// pick chooses the live host with the fewest sandboxes and free capacity.
+// pick chooses the connected host with the fewest sandboxes and free
+// capacity.
 func (s *Server) pick() (*hostState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -420,7 +362,7 @@ func (s *Server) pick() (*hostState, error) {
 	}
 	var live []*hostState
 	for _, h := range s.hosts {
-		if s.now().Sub(h.lastSeen) > HostTimeout {
+		if h.conn == nil {
 			continue
 		}
 		if h.Capacity > 0 && load[h.Name] >= h.Capacity {
@@ -438,42 +380,6 @@ func (s *Server) pick() (*hostState, error) {
 		return live[i].Name < live[j].Name
 	})
 	return live[0], nil
-}
-
-func (s *Server) hostCall(ctx context.Context, method, url string, body any) error {
-	_, err := s.hostCallBody(ctx, method, url, body)
-	return err
-}
-
-// hostCallBody is hostCall, returning the response body.
-func (s *Server) hostCallBody(ctx context.Context, method, url string, body any) ([]byte, error) {
-	var rd io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		rd = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, url, rd)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+s.HostSecret)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := s.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		var e api.Error
-		json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&e)
-		return nil, fmt.Errorf("%s: %s", resp.Status, e.Error)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
@@ -527,8 +433,8 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.hostCall(r.Context(), http.MethodPost, sb.HostURL+"/v1/sandboxes",
-		api.HostCreateRequest{ID: sb.ID, Token: sb.Token, Spec: sb.Spec})
+	_, err = s.hostDo(r.Context(), h.Name, api.HostMessage{Type: "create",
+		Create: &api.HostCreateRequest{ID: sb.ID, Token: sb.Token, Spec: sb.Spec}})
 	if err != nil {
 		s.mu.Lock()
 		delete(s.sandboxes, sb.ID)
@@ -574,7 +480,7 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 	}
 	// The host answers with the sandbox's signed record. It is passed on
 	// to the caller and not kept here.
-	rec, err := s.hostCallBody(r.Context(), http.MethodDelete, sb.HostURL+"/v1/sandboxes/"+id, nil)
+	res, err := s.hostDo(r.Context(), sb.Host, api.HostMessage{Type: "destroy", Sandbox: id})
 	if err != nil {
 		if s.hostLive(sb.Host) {
 			host.WriteError(w, http.StatusBadGateway, "host %s: %v", sb.Host, err)
@@ -586,27 +492,24 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 	}
 	s.end(r.Context(), sb, EndDestroyed)
 	s.log().Info("sandbox destroyed", "sandbox", id, "host", sb.Host)
-	if len(rec) == 0 {
+	if res.Record == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(rec)
+	writeJSON(w, http.StatusOK, res.Record)
 }
 
 // hosts lists the hosts with their public keys, so records can be checked.
 func (s *Server) hostList(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	out := make([]api.Host, 0, len(s.hosts))
-	now := s.now()
 	for _, h := range s.hosts {
 		out = append(out, api.Host{
 			Name:      h.Name,
 			PublicKey: h.PublicKey,
 			LastSeen:  h.lastSeen.UTC(),
 			URL:       h.URL,
-			Online:    now.Sub(h.lastSeen) <= HostTimeout,
+			Online:    h.conn != nil,
 		})
 	}
 	s.mu.Unlock()

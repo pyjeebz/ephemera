@@ -1,5 +1,5 @@
 // Command ephemera-host is the host agent: it runs sandboxes on this machine
-// and registers with the central server.
+// and keeps a connection open to the central server, which sends it work.
 package main
 
 import (
@@ -31,7 +31,7 @@ func main() {
 	hostname, _ := os.Hostname()
 	var (
 		listen    = flag.String("listen", "127.0.0.1:7701", "address to listen on")
-		advertise = flag.String("url", "http://127.0.0.1:7701", "URL the CLI and central server use to reach this host")
+		advertise = flag.String("url", "http://127.0.0.1:7701", "URL the CLI uses to reach this host")
 		server    = flag.String("server", "http://127.0.0.1:7700", "central server URL")
 		name      = flag.String("name", hostname, "host name")
 		backend   = flag.String("backend", "docker", "sandbox backend: docker or firecracker")
@@ -77,15 +77,15 @@ func main() {
 		log.Error("signing key", "err", err)
 		os.Exit(2)
 	}
-	srv := &host.Server{Backend: be, Secret: secret, DefaultImage: *image, Log: log,
+	srv := &host.Server{Backend: be, DefaultImage: *image, Log: log,
 		Name: *name, BackendName: *backend, Key: key, MaxLifetime: *maxLife}
 	log.Info("records are signed with this host's key", "public_key", record.PublicKey(key))
 	hs := &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go srv.Register(ctx, &http.Client{Timeout: 10 * time.Second}, *server, secret,
-		api.RegisterHostRequest{Name: *name, URL: *advertise, Capacity: *capacity}, 15*time.Second)
+	go srv.Connect(ctx, host.ConnectConfig{ServerURL: *server, Secret: secret,
+		Hello: api.HostHello{Name: *name, URL: *advertise, Capacity: *capacity, Version: ver.String(version)}})
 	cleaned := make(chan struct{})
 	go func() {
 		defer close(cleaned)

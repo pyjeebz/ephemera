@@ -2,9 +2,9 @@ package e2e
 
 import (
 	"context"
-	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +13,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/client"
 	"github.com/pyjeebz/ephemera/internal/control"
 	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/host/hosttest"
 	"github.com/pyjeebz/ephemera/internal/pgstore/pgtest"
 	"github.com/pyjeebz/ephemera/internal/sandbox/sandboxtest"
 )
@@ -35,32 +36,63 @@ func centralServer(t *testing.T, path string, now func() time.Time) (*control.Se
 	return cs, ts.URL
 }
 
-// heartbeat sends one heartbeat from the host to the central server and
-// waits for the host to act on the reply.
-func heartbeat(hs *host.Server, serverURL, hostURL string) {
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		hs.Register(ctx, http.DefaultClient, serverURL, hostSecret,
-			api.RegisterHostRequest{Name: "test-host", URL: hostURL, Capacity: 10}, time.Hour)
-		close(done)
-	}()
-	time.Sleep(200 * time.Millisecond)
-	cancel()
-	<-done
+// links are the open host connections, by host and server.
+var links sync.Map // linkKey -> func() (disconnect)
+
+type linkKey struct {
+	hs  *host.Server
+	url string
+}
+
+// heartbeat connects the host to the central server the first time it is
+// called for that pair, and sends a heartbeat on every connection the host
+// has after that. Either way, the server has reconciled the host's
+// sandboxes, and the host has acted on the answer, when it returns.
+func heartbeat(t *testing.T, hs *host.Server, serverURL, hostURL string) {
+	t.Helper()
+	key := linkKey{hs, serverURL}
+	if _, ok := links.Load(key); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := hs.Heartbeat(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	disconnect := hosttest.Connect(t, hs, serverURL, hostSecret, api.HostHello{Name: "test-host", URL: hostURL, Capacity: 10})
+	links.Store(key, disconnect)
+	t.Cleanup(func() { links.Delete(key) })
+}
+
+// disconnect closes the host's connection to the server and waits until
+// the server lists the host as offline.
+func disconnect(t *testing.T, hs *host.Server, serverURL string) {
+	t.Helper()
+	d, ok := links.LoadAndDelete(linkKey{hs, serverURL})
+	if !ok {
+		t.Fatal("host is not connected to that server")
+	}
+	d.(func())()
+	c := &client.Client{Server: serverURL, Token: userToken}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if hosts, err := c.Hosts(context.Background()); err == nil && len(hosts) > 0 && !hosts[0].Online {
+			return
+		}
+	}
+	t.Fatal("server still lists the host as online")
 }
 
 func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 	ctx := context.Background()
 	state := filepath.Join(t.TempDir(), "sandboxes.json")
 	be := &sandboxtest.Local{Root: t.TempDir()}
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
+	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 	defer hts.Close()
 
 	// First central server: create a sandbox.
 	_, url1 := centralServer(t, state, nil)
-	heartbeat(hs, url1, hts.URL)
+	heartbeat(t, hs, url1, hts.URL)
 	c1 := &client.Client{Server: url1, Token: userToken}
 	sb, err := c1.Create(ctx, api.Spec{})
 	if err != nil {
@@ -78,7 +110,7 @@ func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 	if list[0].Token != "" {
 		t.Error("saved state returned a sandbox token")
 	}
-	heartbeat(hs, url2, hts.URL)
+	heartbeat(t, hs, url2, hts.URL)
 	if be.Live() != 1 {
 		t.Fatalf("known sandbox was destroyed after restart")
 	}
@@ -97,7 +129,7 @@ func TestStateSurvivesRestartAndReconciles(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, url3 := centralServer(t, filepath.Join(t.TempDir(), "empty.json"), nil)
-	heartbeat(hs, url3, hts.URL)
+	heartbeat(t, hs, url3, hts.URL)
 	if be.Live() != 0 || hs.Live() != 0 {
 		t.Errorf("unknown sandbox %s was not destroyed", sb2.ID)
 	}
@@ -109,7 +141,7 @@ func TestStateSurvivesRestartOnPostgres(t *testing.T) {
 	ctx := context.Background()
 	db, _ := pgtest.Open(t)
 	be := &sandboxtest.Local{Root: t.TempDir()}
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
+	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 	defer hts.Close()
 
@@ -124,7 +156,7 @@ func TestStateSurvivesRestartOnPostgres(t *testing.T) {
 		return ts.URL
 	}
 	url1 := start()
-	heartbeat(hs, url1, hts.URL)
+	heartbeat(t, hs, url1, hts.URL)
 	sb, err := (&client.Client{Server: url1, Token: userToken}).Create(ctx, api.Spec{})
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +168,7 @@ func TestStateSurvivesRestartOnPostgres(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].ID != sb.ID {
 		t.Fatalf("after restart, list = %+v, %v", list, err)
 	}
-	heartbeat(hs, url2, hts.URL)
+	heartbeat(t, hs, url2, hts.URL)
 	if be.Live() != 1 {
 		t.Fatal("known sandbox was destroyed after restart")
 	}
@@ -155,13 +187,13 @@ func TestStateSurvivesRestartOnPostgres(t *testing.T) {
 func TestRecordDroppedWhenHostLostSandbox(t *testing.T) {
 	ctx := context.Background()
 	be := &sandboxtest.Local{Root: t.TempDir()}
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
+	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 	defer hts.Close()
 
 	clock := newClock()
 	_, url := centralServer(t, filepath.Join(t.TempDir(), "s.json"), clock.now)
-	heartbeat(hs, url, hts.URL)
+	heartbeat(t, hs, url, hts.URL)
 	c := &client.Client{Server: url, Token: userToken}
 	sb, err := c.Create(ctx, api.Spec{})
 	if err != nil {
@@ -171,12 +203,12 @@ func TestRecordDroppedWhenHostLostSandbox(t *testing.T) {
 	// The host loses the sandbox (say, it was restarted). Within the grace
 	// period the record stays; after it, the record is dropped.
 	hs.DestroyAll(ctx)
-	heartbeat(hs, url, hts.URL)
+	heartbeat(t, hs, url, hts.URL)
 	if list, _ := c.List(ctx); len(list) != 1 {
 		t.Fatalf("record dropped during the grace period")
 	}
 	clock.advance(3 * time.Minute)
-	heartbeat(hs, url, hts.URL)
+	heartbeat(t, hs, url, hts.URL)
 	if list, _ := c.List(ctx); len(list) != 0 {
 		t.Errorf("stale record for %s kept", sb.ID)
 	}
@@ -185,20 +217,21 @@ func TestRecordDroppedWhenHostLostSandbox(t *testing.T) {
 func TestDestroyWhenHostOffline(t *testing.T) {
 	ctx := context.Background()
 	be := &sandboxtest.Local{Root: t.TempDir()}
-	hs := &host.Server{Backend: be, Secret: hostSecret, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
+	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 
 	clock := newClock()
 	_, url := centralServer(t, filepath.Join(t.TempDir(), "s.json"), clock.now)
-	heartbeat(hs, url, hts.URL)
+	heartbeat(t, hs, url, hts.URL)
 	c := &client.Client{Server: url, Token: userToken}
 	sb, err := c.Create(ctx, api.Spec{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	hts.Close() // the host goes away
-	clock.advance(time.Minute)
+	// The host goes away.
+	disconnect(t, hs, url)
+	hts.Close()
 	if _, err := c.Destroy(ctx, sb.ID); err != nil {
 		t.Fatalf("destroy with the host offline: %v", err)
 	}

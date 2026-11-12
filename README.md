@@ -70,9 +70,10 @@ The central server keeps its API tokens (stored only as hashes) and its list
 of running sandboxes in a state directory: `/var/lib/ephemera` as root,
 otherwise your user config directory, or `--state DIR`. Manage tokens with
 `ephemera-server token create|ls|revoke`; the running server picks up
-changes. Each host reports its sandboxes every 15 seconds, and any sandbox
-the central server has no record of is destroyed, so nothing keeps running
-unseen.
+changes. Each host keeps a connection open to the central server, which
+sends it work over that connection, so the server never needs to reach the
+host. Every 15 seconds the host lists its sandboxes, and any the central
+server has no record of is destroyed, so nothing keeps running unseen.
 
 For a dev server, use `ephemera dev`. It keeps the sandbox running, forwards
 ports to your machine, and sends only the files you change, so hot reload

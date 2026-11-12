@@ -32,11 +32,11 @@ func limitedStack(t *testing.T, limits control.Limits) (*control.Server, *client
 	cts := httptest.NewServer(cs.Handler())
 	t.Cleanup(cts.Close)
 	be := &sandboxtest.Local{Root: t.TempDir()}
-	hs := &host.Server{Backend: be, Secret: hostSecret, Log: discardLog(), Name: "test-host", Key: testKey()}
+	hs := &host.Server{Backend: be, Log: discardLog(), Name: "test-host", Key: testKey()}
 	hts := httptest.NewServer(hs.Handler())
 	t.Cleanup(hts.Close)
 	t.Cleanup(func() { hs.DestroyAll(context.Background()) })
-	beat := func() { heartbeat(hs, cts.URL, hts.URL) }
+	beat := func() { heartbeat(t, hs, cts.URL, hts.URL) }
 	beat()
 	return cs, &client.Client{Server: cts.URL, Token: userToken}, be, clock, beat
 }
