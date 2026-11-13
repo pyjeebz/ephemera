@@ -86,11 +86,13 @@ A new host joins the central server once, with a one-time code. On the server ma
 sudo ephemera-server join-code create
 ```
 
-Add `--account NAME` to join the host to that account instead of `local`. On the new machine, run `bootstrap.sh` as above, save the code to a file, and point the installer at the central server:
+Add `--account NAME` to join the host to that account instead of `local`. On the new machine, run the host installer, pointed at your central server:
 
 ```bash
-sudo deploy/host/install.sh --role host --server-url http://100.64.0.1:7700 --join-code-file /root/join-code
+curl -fsSL https://ephemera.run/host | sudo sh -s -- ej_... --server http://100.64.0.1:7700
 ```
+
+It installs Firecracker, the host agent and its guest image from the latest release; see [Add a host](/guides/hosts) for its options.
 
 The host makes its own key, joins with the code, and from then on signs in with that key. Delete the code file afterwards; it can't be used again anyway. `ephemera-host join` prints the key's fingerprint, so you can check it against the server's logs or the dashboard.
 

@@ -38,9 +38,20 @@ Run the script again. It replaces the binary with the latest release, or the one
 
 Download the archive for your platform and `checksums.txt` from the [releases page](https://github.com/pyjeebz/ephemera/releases), check the archive with `sha256sum -c`, and put `ephemera` on your `PATH`. On Windows, download the zip.
 
-## Hosts and servers
+## The host installer
 
-The host agent and central server are for x86_64 Linux. See [Add a host](/guides/hosts) and [Self-hosting](/self-hosting).
+```bash
+curl -fsSL https://ephemera.run/host | sudo sh -s -- ej_...
+```
+
+`ephemera.run/host` redirects to `install-host.sh` from the latest release. On an x86_64 Linux machine with KVM, it:
+
+1. Installs Firecracker 1.15.1, checked against a SHA-256 pinned in the script.
+2. Downloads the release's host archive and `checksums.txt`, and checks the archive.
+3. Builds the guest image from the archive's guest agent, again whenever the guest agent changes.
+4. Writes `/etc/ephemera/ephemera.env`, installs the `ephemera-host` systemd service, joins with the code, and waits until the host is connected.
+
+It takes `EPHEMERA_VERSION` and `EPHEMERA_DOWNLOAD_URL` like the CLI's script, and `--help` lists its options. [Add a host](/guides/hosts) walks through it. The central server, for [self-hosting](/self-hosting), installs from a checkout.
 
 ## Check it
 

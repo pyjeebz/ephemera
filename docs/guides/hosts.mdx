@@ -23,23 +23,25 @@ A host is a machine you own that runs your sandboxes as Firecracker microVMs. Ad
   </Step>
 
   <Step title="Install the host agent">
-    {/* TODO: replace this step with the one-line installer at ephemera.run/host once it exists. bootstrap.sh also installs and joins Tailscale today, which the hosted setup shouldn't require. */}
-
-    On the machine, from a checkout of the repository, prepare it and install the host agent, joining with the code:
+    On the machine, with the code at the end:
 
     ```bash
-    git clone https://github.com/pyjeebz/ephemera.git && cd ephemera
-    sudo deploy/host/bootstrap.sh --hostname lab-1
-    echo 'ej_...' | sudo tee /root/join-code >/dev/null
-    sudo deploy/host/install.sh --role host --server-url https://api.ephemera.run \
-      --join-code-file /root/join-code --listen-ip 10.0.0.12
+    curl -fsSL https://ephemera.run/host | sudo sh -s -- ej_...
     ```
 
-    `bootstrap.sh` checks KVM and installs Firecracker and Go. Today it also installs Tailscale and asks you to sign in to it, for SSH to the machine; a one-line host installer without that is on the way. `install.sh` builds the binaries and the guest image (a few minutes, with network), joins with the code, and runs the host agent as the `ephemera-host` systemd service. `--listen-ip` is the private address your laptop reaches the host on.
+    It checks KVM, installs Firecracker and the host agent from the latest release, checking each download against its checksum, and builds the guest image (a few minutes; it downloads Ubuntu's packages). Then it joins your account with the code and runs the agent as the `ephemera-host` systemd service. It sets up no network of its own.
+
+    Your laptop reaches the host at the machine's private address. With exactly one, the installer uses it; with several, such as a LAN address and a VPN address, it lists them and asks you to pick one with `--address`:
+
+    ```bash
+    curl -fsSL https://ephemera.run/host | sudo sh -s -- ej_... --address 10.0.0.12
+    ```
+
+    A public address works too, but then the host's port, 7701, is open to the internet. The host serves TLS with its own key and checks each sandbox's token, but a private network is safer.
   </Step>
 
   <Step title="Check it">
-    The installer waits until the host is connected, then prints its key's fingerprint:
+    The installer prints the host's key fingerprint when it joins, then waits until the host is connected:
 
     ```text
     Key fingerprint: SHA256:qL3HdSf8UZXKjpVRma/Eo9jyxni9zZ8p6aDu+FxTJhA
@@ -85,9 +87,18 @@ Do that only when you know why it changed, such as a rebuilt machine.
 Pass host agent flags through the installer, for example:
 
 ```bash
-sudo deploy/host/install.sh --role host --server-url https://api.ephemera.run \
-  --host-args "--capacity 40 --max-lifetime 8h"
+curl -fsSL https://ephemera.run/host | sudo sh -s -- --host-args "--capacity 40 --max-lifetime 8h"
 ```
+
+| Installer option | Meaning |
+| - | - |
+| `--address IP` | The address your laptop reaches this machine on |
+| `--name NAME` | The host's name in your account. Default: the machine's hostname |
+| `--server URL` | The central server to join. Default: `https://api.ephemera.run` |
+| `--host-args "..."` | Extra host agent flags, below |
+| `EPHEMERA_VERSION=vX.Y.Z` | Install that release instead of the latest |
+
+These host agent flags are the ones you're most likely to want:
 
 | Flag | Default | Meaning |
 | - | - | - |
@@ -97,8 +108,24 @@ sudo deploy/host/install.sh --role host --server-url https://api.ephemera.run \
 
 The [host reference](/reference/host) lists every flag.
 
+## Upgrade a host
+
+Run the installer again, without a code:
+
+```bash
+curl -fsSL https://ephemera.run/host | sudo sh
+```
+
+It keeps the host's key, name, server and address, installs the latest release, and rebuilds the guest image when the guest agent changed. Restarting the host agent destroys the sandboxes running on it, so upgrade when none are in use.
+
 ## Remove a host
 
 In the dashboard, under Hosts, choose **Remove**. Its sandboxes are destroyed, and it can't sign in again until it joins with a new code. With a token instead: `DELETE /v1/hosts/<id>`, see the [API reference](/reference/api).
 
-To take ephemera off the machine itself: `sudo deploy/host/install.sh --uninstall`, and `--purge` to delete its data and key too.
+To take ephemera off the machine itself:
+
+```bash
+curl -fsSL https://ephemera.run/host | sudo sh -s -- --uninstall --purge
+```
+
+Without `--purge`, it keeps the host's key and guest image in `/var/lib/ephemera`.

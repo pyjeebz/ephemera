@@ -33,7 +33,7 @@ ephemera dev -p 3000 --net -- npm run dev
 
 ```bash
 curl -fsSL https://ephemera.run/install | sh
-ephemera login --server https://api.ephemera.run
+ephemera login
 ```
 
 Sign in with GitHub, approve the code, then [add a host](https://ephemera.run/docs/guides/hosts): any x86_64 Linux machine with KVM. Then, in any git repository:

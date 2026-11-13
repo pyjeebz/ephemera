@@ -4,7 +4,7 @@ description: "Install the CLI, sign in, add a host and run your first sandbox."
 sidebarTitle: "Quickstart"
 ---
 
-This uses the hosted central server at `api.ephemera.run`. You need a GitHub account, a laptop running Linux or macOS (Windows works too, from the zip on the releases page), and one Linux machine with KVM to be your host. To run the central server yourself instead, start with [Self-hosting](/self-hosting).
+This uses the hosted central server at `api.ephemera.run`. You need a GitHub account, a laptop running Linux or macOS (Windows works too, from the zip on the releases page), and one Linux machine with KVM to be your host. To run the central server yourself instead, start with [Self-hosting](/self-hosting); then add `--server <URL>` to `ephemera login`.
 
 <Steps>
   <Step title="Install the CLI">
@@ -17,7 +17,7 @@ This uses the hosted central server at `api.ephemera.run`. You need a GitHub acc
 
   <Step title="Sign in">
     ```bash
-    ephemera login --server https://api.ephemera.run
+    ephemera login
     ```
 
     The CLI shows a code such as `K7QM-2XRT` and opens a page in your browser. Sign in with GitHub if you haven't, check the code matches, and approve. The CLI saves a token for this machine, named after it. The code works for 10 minutes.
@@ -35,7 +35,13 @@ This uses the hosted central server at `api.ephemera.run`. You need a GitHub acc
   </Step>
 
   <Step title="Add a host">
-    A host is the Linux machine your sandboxes run on: x86_64, with KVM. In the [dashboard](https://ephemera.run/dashboard/hosts), make a join code. It works once, for 15 minutes. Then install the host agent on that machine and join it with the code; [Add a host](/guides/hosts) has the steps.
+    A host is the Linux machine your sandboxes run on: x86_64, with KVM. In the [dashboard](https://ephemera.run/dashboard/hosts), make a join code. It works once, for 15 minutes. Then, on that machine:
+
+    ```bash
+    curl -fsSL https://ephemera.run/host | sudo sh -s -- ej_...
+    ```
+
+    It installs Firecracker and the host agent, builds the guest image (a few minutes), joins your account and starts. [Add a host](/guides/hosts) has the details.
 
     The host connects out to `api.ephemera.run`, so it needs no open ports for the central server. Your laptop does talk to it directly, to send files and read output, so it must be able to reach the host's address: the same network, or a VPN between them.
   </Step>
