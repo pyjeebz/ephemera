@@ -49,7 +49,7 @@ Usage:
   ephemera version
 
 Environment (overrides the saved login):
-  EPHEMERA_SERVER   central server URL (default http://127.0.0.1:7700)
+  EPHEMERA_SERVER   central server URL (default https://api.ephemera.run)
   EPHEMERA_TOKEN    API token
   EPHEMERA_CONFIG   where the login is saved; pinned host keys go next to it
   EPHEMERA_STRICT_HOSTS=1  refuse hosts not pinned yet, instead of pinning them

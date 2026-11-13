@@ -6,8 +6,10 @@
 # OUTDIR (default dist/) gets:
 #   ephemera_vX.Y.Z_<os>_<arch>.tar.gz      the CLI, for Linux and macOS
 #   ephemera_vX.Y.Z_windows_<arch>.zip      the CLI, for Windows
-#   ephemera-host_vX.Y.Z_linux_amd64.tar.gz ephemera-server, ephemera-host and ephemera-guest
+#   ephemera-host_vX.Y.Z_linux_amd64.tar.gz ephemera-server, ephemera-host, ephemera-guest, the
+#                                           guest image build and the host agent's systemd unit
 #   install.sh                              the CLI install script, so it can be served from a release
+#   install-host.sh                         the host install script, served at ephemera.run/host
 #   checksums.txt                           SHA-256 of every file above
 set -euo pipefail
 
@@ -60,9 +62,13 @@ for cmd in ephemera-server ephemera-host ephemera-guest; do
 	build linux amd64 "$cmd" "$dir/$cmd"
 done
 for d in "${docs[@]}"; do cp "$REPO/$d" "$dir/"; done
+# What install-host.sh needs to set up a host without a checkout.
+install -m 0755 "$REPO/deploy/guest/build-image.sh" "$dir/build-image.sh"
+install -m 0644 "$REPO/deploy/systemd/ephemera-host.service" "$dir/ephemera-host.service"
 tar -C "$work" -czf "$OUT/$name.tar.gz" --owner=0 --group=0 "$name"
 echo "built $name"
 
 cp "$REPO/install.sh" "$OUT/install.sh"
-(cd "$OUT" && sha256sum -- *.tar.gz *.zip install.sh >checksums.txt)
+cp "$REPO/deploy/host/install-host.sh" "$OUT/install-host.sh"
+(cd "$OUT" && sha256sum -- *.tar.gz *.zip install.sh install-host.sh >checksums.txt)
 echo "wrote $OUT/checksums.txt"

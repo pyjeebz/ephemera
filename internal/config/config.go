@@ -11,8 +11,9 @@ import (
 	"path/filepath"
 )
 
-// DefaultServer is used when no server is configured.
-const DefaultServer = "http://127.0.0.1:7700"
+// DefaultServer is used when no server is configured: the hosted central
+// server. A self-hosted one is given with ephemera login --server.
+const DefaultServer = "https://api.ephemera.run"
 
 // Config is the saved login.
 type Config struct {

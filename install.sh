@@ -117,7 +117,7 @@ main() {
 	*":$dir:"*) ;;
 	*) say "$dir is not on your PATH; add it, e.g. echo 'export PATH=\"$dir:\$PATH\"' >> ~/.profile" ;;
 	esac
-	say "next: ephemera login --server <your server's URL>"
+	say "next: ephemera login"
 }
 
 # Everything runs from main, so a download cut off halfway runs nothing.

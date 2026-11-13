@@ -121,7 +121,7 @@ func runDoctor(ctx context.Context) []check {
 		var se *client.StatusError
 		if errors.As(err, &se) && se.Code == http.StatusUnauthorized {
 			tok.Detail = "the server rejected the token; it may have been revoked or mistyped"
-			tok.Fix = "Make a new one on the server (ephemera-server token create <name>) and run: ephemera login"
+			tok.Fix = "Sign in again: ephemera login. For CI, make a new token in the dashboard, or on your own server with: ephemera-server token create <name>"
 		}
 		out = append(out, tok)
 		skip("hosts")
@@ -153,7 +153,7 @@ func checkLogin() (check, string, string) {
 	}
 	if token == "" {
 		return check{Name: "login", Status: "fail", Detail: "not logged in: no token in " + path + " or EPHEMERA_TOKEN",
-			Fix: "Run: ephemera login --server <URL>, with a token from: ephemera-server token create <name>"}, "", ""
+			Fix: "Run: ephemera login (add --server <URL> for a central server you run)"}, "", ""
 	}
 	if server == "" {
 		server, serverFrom = config.DefaultServer, "the default"
@@ -168,7 +168,7 @@ func checkReach(ctx context.Context, hc *http.Client, name, base, what string) c
 	u, err := url.Parse(base)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return check{Name: name, Status: "fail", Detail: fmt.Sprintf("%q is not an http(s) URL", base),
-			Fix: "Run: ephemera login --server http://<address>:7700"}
+			Fix: "Run: ephemera login, or ephemera login --server <URL> for a central server you run"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, doctorTimeout)
 	defer cancel()
@@ -231,7 +231,7 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 	}
 	if len(hosts) == 0 {
 		return []check{{Name: "hosts", Status: "fail", Detail: "no host has registered with this server",
-			Fix: "Start the host agent on a Linux machine with KVM, pointed at this server: see docs/self-hosting.md"}}
+			Fix: "Add a host: make a join code in the dashboard, under Hosts, and on a Linux machine with KVM run: curl -fsSL https://ephemera.run/host | sudo sh -s -- <code>. See https://ephemera.run/docs/guides/hosts"}}
 	}
 	var out []check
 	reachable := false
