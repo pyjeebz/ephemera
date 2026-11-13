@@ -1,0 +1,7 @@
+# Only the Go code goes into the central server's image.
+.git
+site
+dist
+bin
+.agents
+.claude
