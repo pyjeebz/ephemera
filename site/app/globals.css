@@ -115,8 +115,16 @@ html { scroll-padding-top: 64px; }
   justify-content: space-between;
   height: 64px;
   padding: 0 40px;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid rgb(44 42 37 / 0.7);
   background: var(--ground);
+}
+/* Glass: the page shows through, blurred, where the browser can blur. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .header {
+    background: rgb(11 10 9 / 0.55);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+  }
 }
 .logo { display: flex; align-items: center; gap: 10px; width: 240px; color: var(--sand); }
 .logo span { color: var(--bone); font-weight: 700; font-size: 17px; letter-spacing: -0.02em; }
