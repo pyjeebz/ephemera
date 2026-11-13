@@ -13,6 +13,12 @@ const nextConfig: NextConfig = {
         destination: "https://github.com/pyjeebz/ephemera/releases/latest/download/install.sh",
         permanent: false,
       },
+      // `curl -fsSL https://ephemera.run/host | sudo sh -s -- <code>` sets up a host.
+      {
+        source: "/host",
+        destination: "https://github.com/pyjeebz/ephemera/releases/latest/download/install-host.sh",
+        permanent: false,
+      },
     ]
   },
   turbopack: {
