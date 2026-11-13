@@ -116,7 +116,7 @@ Run the installer again, without a code:
 curl -fsSL https://ephemera.run/host | sudo sh
 ```
 
-It keeps the host's key, name, server and address, installs the latest release, and rebuilds the guest image when the guest agent changed. Restarting the host agent destroys the sandboxes running on it, so upgrade when none are in use.
+It keeps the host's key, name, server and address, installs the latest release, and rebuilds the guest image when the guest agent changed. It restarts the host agent only if something changed, and a restart destroys the sandboxes running on it, so upgrade when none are in use.
 
 ## Remove a host
 
