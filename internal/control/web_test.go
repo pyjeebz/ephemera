@@ -356,3 +356,43 @@ func TestDeviceLogin(t *testing.T) {
 		t.Errorf("11th wrong code: %s, want 429", r.Status)
 	}
 }
+
+// Sign-in returns to ?next= when it's a path on the dashboard's site, and
+// to the dashboard otherwise, so it can't send people to another site.
+func TestSignInNext(t *testing.T) {
+	db, _ := pgtest.Open(t)
+	gh := fakeGitHub(t)
+	cs := &control.Server{Tokens: db, State: db, Accounts: db, GitHub: &control.GitHub{
+		ClientID: "cid", ClientSecret: "csecret", PublicURL: "https://api.example", DashboardURL: dashboard + "/dashboard",
+		AuthorizeURL: gh.URL + "/login/oauth/authorize", TokenURL: gh.URL + "/login/oauth/access_token", APIURL: gh.URL,
+	}}
+	ts := httptest.NewServer(cs.Handler())
+	defer ts.Close()
+	w := web{t: t, base: ts.URL, c: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}}
+	for next, want := range map[string]string{
+		"/device?code=K7QM-2XRT":     dashboard + "/device?code=K7QM-2XRT",
+		"":                           dashboard + "/dashboard",
+		"//evil.example/x":           dashboard + "/dashboard",
+		"https://evil.example/":      dashboard + "/dashboard",
+		"/\\evil.example":            dashboard + "/dashboard",
+		"/ok\r\nSet-Cookie: x=y":     dashboard + "/dashboard",
+		"javascript:alert(1)":        dashboard + "/dashboard",
+		"/dashboard/hosts?tab=a#top": dashboard + "/dashboard/hosts?tab=a#top",
+	} {
+		start := w.do("GET", "/auth/github?next="+url.QueryEscape(next), nil, nil)
+		start.Body.Close()
+		loc, _ := url.Parse(start.Header.Get("Location"))
+		var cookies []string
+		for _, c := range start.Cookies() {
+			cookies = append(cookies, c.Name+"="+c.Value)
+		}
+		cb := w.do("GET", "/auth/github/callback?code=good&state="+loc.Query().Get("state"),
+			http.Header{"Cookie": {strings.Join(cookies, "; ")}}, nil)
+		cb.Body.Close()
+		if got := cb.Header.Get("Location"); cb.StatusCode != http.StatusSeeOther || got != want {
+			t.Errorf("next %q: %s to %q, want %q", next, cb.Status, got, want)
+		}
+	}
+}

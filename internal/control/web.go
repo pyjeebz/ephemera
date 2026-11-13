@@ -76,6 +76,7 @@ func GitHubAccount(id int64) string { return "gh-" + strconv.FormatInt(id, 10) }
 const (
 	sessionCookie = "ephemera_session"
 	stateCookie   = "ephemera_oauth_state"
+	nextCookie    = "ephemera_next"
 	sessionTTL    = 30 * 24 * time.Hour
 	// SessionPrefix starts every session secret.
 	SessionPrefix = "ephs_"
@@ -175,6 +176,12 @@ func (s *Server) githubStart(w http.ResponseWriter, r *http.Request) {
 	g := s.GitHub
 	http.SetCookie(w, &http.Cookie{Name: stateCookie, Value: state, Path: "/auth/github",
 		MaxAge: 600, HttpOnly: true, Secure: g.secure(), SameSite: http.SameSiteLaxMode})
+	// ?next= is where to land after signing in, such as the approval page
+	// ephemera login opened. Only a path on the dashboard's site is kept.
+	if next := r.URL.Query().Get("next"); localPath(next) {
+		http.SetCookie(w, &http.Cookie{Name: nextCookie, Value: url.QueryEscape(next), Path: "/auth/github",
+			MaxAge: 600, HttpOnly: true, Secure: g.secure(), SameSite: http.SameSiteLaxMode})
+	}
 	q := url.Values{
 		"client_id":    {g.ClientID},
 		"redirect_uri": {strings.TrimRight(g.PublicURL, "/") + "/auth/github/callback"},
@@ -223,7 +230,26 @@ func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: secret, Path: "/",
 		MaxAge: int(sessionTTL.Seconds()), HttpOnly: true, Secure: g.secure(), SameSite: http.SameSiteLaxMode})
 	s.log().Info("signed in", "account", acct.ID, "login", acct.Login)
-	http.Redirect(w, r, g.DashboardURL, http.StatusSeeOther)
+	to := g.DashboardURL
+	if c, err := r.Cookie(nextCookie); err == nil {
+		if next, err := url.QueryUnescape(c.Value); err == nil && localPath(next) {
+			to = originOf(g.DashboardURL) + next
+		}
+		http.SetCookie(w, &http.Cookie{Name: nextCookie, Path: "/auth/github", MaxAge: -1,
+			HttpOnly: true, Secure: g.secure(), SameSite: http.SameSiteLaxMode})
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
+}
+
+// localPath reports whether p is a plain path, such as /device?code=X, so
+// that sending people to it can't take them to another site.
+func localPath(p string) bool {
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || len(p) > 512 ||
+		strings.ContainsAny(p, "\\\x00\r\n") {
+		return false
+	}
+	u, err := url.Parse(p)
+	return err == nil && u.Scheme == "" && u.Host == "" && u.User == nil
 }
 
 // githubUser trades an OAuth code for an access token and reads the user
