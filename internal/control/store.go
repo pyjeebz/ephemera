@@ -47,6 +47,14 @@ type StateStore interface {
 	UsageSince(ctx context.Context, day string) ([]Usage, error)
 }
 
+// RunStore keeps finished sandboxes for the run history. pgstore.Store
+// implements it; FileState forgets finished sandboxes.
+type RunStore interface {
+	// AccountRuns returns an account's sandboxes, running and finished,
+	// newest first: at most limit, made before before.
+	AccountRuns(ctx context.Context, account string, before time.Time, limit int) ([]api.Run, error)
+}
+
 // Why a sandbox ended.
 const (
 	EndDestroyed = "destroyed" // someone destroyed it

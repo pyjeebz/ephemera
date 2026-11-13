@@ -347,9 +347,15 @@ func (s *Server) hostList(w http.ResponseWriter, r *http.Request) {
 	out := make([]api.Host, 0, len(recs))
 	s.mu.Lock()
 	for _, rec := range recs {
-		h := api.Host{ID: rec.ID, Name: rec.Name, PublicKey: rec.PublicKey}
+		h := api.Host{ID: rec.ID, Name: rec.Name, PublicKey: rec.PublicKey, Joined: rec.Joined.UTC()}
 		if st := s.hosts[rec.ID]; st != nil {
 			h.LastSeen, h.URL, h.Online = st.lastSeen.UTC(), st.URL, st.conn != nil
+			h.Capacity, h.Version = st.Capacity, st.Version
+		}
+		for _, sb := range s.sandboxes {
+			if sb.HostID == rec.ID {
+				h.Running++
+			}
 		}
 		out = append(out, h)
 	}

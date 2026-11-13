@@ -310,6 +310,28 @@ func (s *Server) session(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// tokenOrSession runs h for the CLI with a token, or for the dashboard
+// with a session, acting for the whole account. Only for endpoints that
+// read or stop things: a session can't make sandboxes, since only the CLI
+// holds a sandbox's token.
+func (s *Server) tokenOrSession(h http.HandlerFunc) http.HandlerFunc {
+	tok := s.user(h)
+	if !s.webEnabled() {
+		return tok
+	}
+	ses := s.session(func(w http.ResponseWriter, r *http.Request) {
+		p := Principal{Account: account(r).ID, Dashboard: true}
+		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
+	})
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, err := r.Cookie(sessionCookie); err != nil || r.Header.Get("Authorization") != "" {
+			tok(w, r)
+			return
+		}
+		ses(w, r)
+	}
+}
+
 func account(r *http.Request) api.Account {
 	a, _ := r.Context().Value(accountKey{}).(api.Account)
 	return a
@@ -329,6 +351,35 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, account(r))
 }
+
+// runList lists the account's runs, newest first. ?before= (RFC 3339)
+// pages back from the oldest one already shown.
+func (s *Server) runList(rs RunStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		before := s.now().Add(time.Minute)
+		if b := r.URL.Query().Get("before"); b != "" {
+			t, err := time.Parse(time.RFC3339Nano, b)
+			if err != nil {
+				host.WriteError(w, http.StatusBadRequest, "before must be a time like 2026-11-12T09:41:00Z")
+				return
+			}
+			before = t
+		}
+		runs, err := rs.AccountRuns(r.Context(), principal(r).Account, before, runPage)
+		if err != nil {
+			s.log().Error("store: list runs", "err", err)
+			host.WriteError(w, http.StatusServiceUnavailable, "could not list runs; try again")
+			return
+		}
+		if runs == nil {
+			runs = []api.Run{}
+		}
+		writeJSON(w, http.StatusOK, runs)
+	}
+}
+
+// runPage is how many runs one request returns.
+const runPage = 100
 
 func tokenOut(t TokenRecord) api.Token {
 	kind := t.Kind

@@ -173,13 +173,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /v1/hosts/connect", s.hostConnect)
 	mux.HandleFunc("POST /v1/hosts/join", s.hostJoin)
-	mux.HandleFunc("DELETE /v1/hosts/{id}", s.user(s.hostRemove))
+	mux.HandleFunc("DELETE /v1/hosts/{id}", s.tokenOrSession(s.hostRemove))
 	mux.HandleFunc("GET /v1/whoami", s.user(s.whoami))
-	mux.HandleFunc("GET /v1/usage", s.user(s.usageHandler))
-	mux.HandleFunc("GET /v1/hosts", s.user(s.hostList))
+	mux.HandleFunc("GET /v1/usage", s.tokenOrSession(s.usageHandler))
+	mux.HandleFunc("GET /v1/hosts", s.tokenOrSession(s.hostList))
 	mux.HandleFunc("POST /v1/sandboxes", s.user(s.create))
-	mux.HandleFunc("GET /v1/sandboxes", s.user(s.list))
-	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.user(s.destroy))
+	mux.HandleFunc("GET /v1/sandboxes", s.tokenOrSession(s.list))
+	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.tokenOrSession(s.destroy))
+	if rs, ok := s.store().(RunStore); ok {
+		mux.HandleFunc("GET /v1/runs", s.tokenOrSession(s.runList(rs)))
+	}
 	if !s.webEnabled() {
 		return mux
 	}
@@ -266,16 +269,21 @@ func (s *Server) accrue(sb *api.Sandbox, end time.Time) []Usage {
 	return out
 }
 
-// usedToday is an owner's sandbox-seconds today, running ones included,
-// and how many are running. Locked.
-func (s *Server) usedToday(o owner) (float64, int) {
+// usedToday is the sandbox-seconds today, running ones included, of the
+// owners that match, and how many of their sandboxes are running. Locked.
+func (s *Server) usedToday(match func(owner) bool) (float64, int) {
 	now := s.now().UTC()
 	today := now.Format(dayFormat)
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	used := s.usage[o][today]
+	used := 0.0
+	for o, days := range s.usage {
+		if match(o) {
+			used += days[today]
+		}
+	}
 	running := 0
 	for _, sb := range s.sandboxes {
-		if ownerOf(sb) != o {
+		if !match(ownerOf(sb)) {
 			continue
 		}
 		running++
@@ -295,7 +303,7 @@ func (s *Server) usedToday(o owner) (float64, int) {
 func (s *Server) admit(p Principal, spec *api.Spec) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	used, running := s.usedToday(owner{p.Account, p.Name})
+	used, running := s.usedToday(is(owner{p.Account, p.Name}))
 	if p.MaxSandboxes > 0 && running >= p.MaxSandboxes {
 		return fmt.Sprintf("limit reached: %s may run %d sandboxes at once; destroy one first", p.Name, p.MaxSandboxes), false
 	}
@@ -311,10 +319,18 @@ func (s *Server) admit(p Principal, spec *api.Spec) (string, bool) {
 	return "", true
 }
 
+func is(o owner) func(owner) bool { return func(x owner) bool { return x == o } }
+
+// usageOf is a token's usage today, or for the dashboard the whole
+// account's, with no limits.
 func (s *Server) usageOf(p Principal) api.Usage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	used, running := s.usedToday(owner{p.Account, p.Name})
+	if p.Dashboard {
+		used, running := s.usedToday(func(o owner) bool { return o.Account == p.Account })
+		return api.Usage{Day: s.now().UTC().Format(dayFormat), MinutesToday: used / 60, Running: running}
+	}
+	used, running := s.usedToday(is(owner{p.Account, p.Name}))
 	return api.Usage{Name: p.Name, Day: s.now().UTC().Format(dayFormat), MinutesToday: used / 60,
 		MaxMinutesPerDay: p.MaxMinutesPerDay, Running: running, MaxSandboxes: p.MaxSandboxes}
 }
@@ -346,7 +362,7 @@ func (s *Server) enforceOnce(ctx context.Context) {
 		if l.MaxMinutesPerDay <= 0 {
 			continue
 		}
-		if used, _ := s.usedToday(o); used >= float64(l.MaxMinutesPerDay*60) {
+		if used, _ := s.usedToday(is(o)); used >= float64(l.MaxMinutesPerDay*60) {
 			for _, sb := range s.sandboxes {
 				if ownerOf(sb) == o {
 					over = append(over, sb)

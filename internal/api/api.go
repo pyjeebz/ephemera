@@ -222,6 +222,27 @@ type Host struct {
 	URL string `json:"url"`
 	// Online is true while the host checks in often enough to get sandboxes.
 	Online bool `json:"online"`
+	// Capacity and Version are what the host last said when it connected.
+	Capacity int    `json:"capacity,omitempty"`
+	Version  string `json:"version,omitempty"`
+	// Running is how many of the account's sandboxes are on it now.
+	Running int       `json:"running"`
+	Joined  time.Time `json:"joined"`
+}
+
+// Run is a sandbox in the run history, running or finished. The central
+// server never sees what ran in it, only where, for how long, and how it
+// ended.
+type Run struct {
+	ID        string     `json:"id"`
+	Host      string     `json:"host"`
+	HostID    string     `json:"host_id"`
+	Owner     string     `json:"owner"` // the token's name
+	Spec      Spec       `json:"spec"`
+	CreatedAt time.Time  `json:"created_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"` // nil while it runs
+	// EndReason is why it ended: destroyed, limit, gone or failed.
+	EndReason string `json:"end_reason,omitempty"`
 }
 
 // DeleteFilesRequest removes files from a sandbox's workspace, for files

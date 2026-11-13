@@ -298,6 +298,32 @@ func (s *Store) UsageSince(ctx context.Context, day string) ([]control.Usage, er
 	})
 }
 
+var _ control.RunStore = (*Store)(nil)
+
+// AccountRuns implements control.RunStore.
+func (s *Store) AccountRuns(ctx context.Context, account string, before time.Time, limit int) ([]api.Run, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, owner, host, host_id, spec, created_at, ended_at, coalesce(end_reason, '')
+		FROM sandboxes WHERE account_id = $1 AND created_at < $2
+		ORDER BY created_at DESC, id DESC LIMIT $3`, account, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (api.Run, error) {
+		var run api.Run
+		var spec []byte
+		if err := r.Scan(&run.ID, &run.Owner, &run.Host, &run.HostID, &spec, &run.CreatedAt, &run.EndedAt, &run.EndReason); err != nil {
+			return run, err
+		}
+		run.CreatedAt = run.CreatedAt.UTC()
+		if run.EndedAt != nil {
+			t := run.EndedAt.UTC()
+			run.EndedAt = &t
+		}
+		return run, json.Unmarshal(spec, &run.Spec)
+	})
+}
+
 var _ control.AccountStore = (*Store)(nil)
 
 // UpsertGitHubAccount implements control.AccountStore.

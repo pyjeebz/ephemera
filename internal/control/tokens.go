@@ -32,6 +32,9 @@ type Principal struct {
 	// its own account's sandboxes.
 	Account string
 	Limits
+	// Dashboard is set for a signed-in browser instead of a token. It acts
+	// for the whole account and has no limits of its own.
+	Dashboard bool
 }
 
 // DefaultAccount is the account of tokens made without one, which is every
