@@ -1,0 +1,78 @@
+---
+title: "ephemera-server"
+description: "The central server's commands and flags, exactly as its help prints them."
+icon: "database"
+---
+
+You need this only to [run your own central server](/self-hosting). The hosted one is at `api.ephemera.run`.
+
+```text
+ephemera-server is ephemera's central server.
+
+Usage:
+  ephemera-server [serve] [--listen ADDR] [--state DIR] [--database URL]
+  ephemera-server token create <name> [--account NAME] [--max-sandboxes N] [--max-minutes N] [--state DIR]
+  ephemera-server token limits <id-or-name> [--max-sandboxes N] [--max-minutes N] [--state DIR]
+  ephemera-server token ls [--state DIR]
+  ephemera-server token revoke <id-or-name> [--state DIR]
+  ephemera-server join-code create [--account NAME] [--state DIR]
+  ephemera-server version
+
+Limits: --max-sandboxes caps sandboxes running at once, --max-minutes caps
+sandbox-minutes per UTC day. 0 means no limit.
+
+Accounts: a token sees and destroys only its own account's sandboxes.
+Tokens made without --account share the account "local".
+
+The state directory holds API tokens (tokens.json) and the list of running
+sandboxes (sandboxes.json). With --database, or EPHEMERA_DATABASE_URL, they
+are kept in that Postgres database instead (postgres://...), along with a
+history of finished sandboxes; the token commands then use it too.
+A new host joins with a one-time code from "join-code create", valid for
+15 minutes: ephemera-host join --server URL CODE.
+
+Web sign-in with GitHub needs the database and a GitHub OAuth app:
+  EPHEMERA_GITHUB_CLIENT_ID, EPHEMERA_GITHUB_CLIENT_SECRET
+  EPHEMERA_PUBLIC_URL      where browsers reach this server, e.g. https://api.example.com
+  EPHEMERA_DASHBOARD_URL   where people land after signing in
+The OAuth app's callback URL is EPHEMERA_PUBLIC_URL/auth/github/callback.
+```
+
+The token commands share one set of flags:
+
+```text
+Usage of token create, limits, ls, revoke:
+  -account string
+    	account the token belongs to (create only; default "local")
+  -database string
+    	Postgres URL; instead of the state directory
+  -max-minutes int
+    	sandbox-minutes per UTC day (0: no limit)
+  -max-sandboxes int
+    	sandboxes running at once (0: no limit)
+  -state string
+    	state directory (default "~/.config/ephemera/server")
+```
+
+```text
+Usage of join-code create:
+  -account string
+    	account the host joins (default "local")
+  -database string
+    	Postgres URL; instead of the state directory
+  -state string
+    	state directory (default "~/.config/ephemera/server")
+```
+
+The state directory defaults to `/var/lib/ephemera/server` when run as root, and to `ephemera/server` in your user config folder otherwise.
+
+## Environment
+
+| Variable | Meaning |
+| - | - |
+| `EPHEMERA_DATABASE_URL` | Postgres URL; the same as `--database` |
+| `EPHEMERA_GITHUB_CLIENT_ID`, `EPHEMERA_GITHUB_CLIENT_SECRET` | The GitHub OAuth app, for sign-in |
+| `EPHEMERA_PUBLIC_URL` | Where browsers reach this server |
+| `EPHEMERA_DASHBOARD_URL` | Where people land after signing in; its origin may call the API with the session cookie |
+
+See [Postgres and GitHub sign-in](/self-hosting/postgres-github).

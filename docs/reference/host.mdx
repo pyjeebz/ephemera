@@ -1,0 +1,100 @@
+---
+title: "ephemera-host"
+description: "The host agent's commands and flags, exactly as its help prints them."
+icon: "server"
+---
+
+The host agent runs sandboxes on one Linux machine. The installer runs it as the `ephemera-host` systemd service; see [Add a host](/guides/hosts).
+
+## ephemera-host
+
+Runs the host agent: connects to the central server it joined and serves the CLI.
+
+```text
+Usage of ephemera-host:
+  -backend string
+    	sandbox backend: docker or firecracker (default "docker")
+  -capacity int
+    	maximum sandboxes on this host (default 20)
+  -identity string
+    	where the host keeps the result of ephemera-host join (default "/var/lib/ephemera/host.json")
+  -image string
+    	default sandbox image (docker backend) (default "ubuntu:24.04")
+  -image-dir string
+    	guest image from deploy/guest/build-image.sh (firecracker backend) (default "/var/lib/ephemera/image")
+  -jail
+    	run each microVM under Firecracker's jailer: its own user, chroot and cgroup limits (needs root)
+  -jail-dir string
+    	where jails go; same filesystem as -image-dir (firecracker backend) (default "/var/lib/ephemera/jail")
+  -key-file string
+    	Ed25519 key the host signs in and signs records with (default "/var/lib/ephemera/host.key")
+  -listen string
+    	address to listen on (default "127.0.0.1:7701")
+  -max-lifetime duration
+    	destroy any sandbox this long after it was created (0: no limit) (default 24h0m0s)
+  -max-snapshot-bytes int
+    	total size of project snapshots; the least recently used go first (default 21474836480)
+  -server string
+    	central server URL (default: the one the host joined)
+  -snapshot-dir string
+    	encrypted project snapshots (firecracker backend) (default "/var/lib/ephemera/snapshots")
+  -snapshots
+    	start sandboxes from a snapshot of a booted VM (firecracker backend) (default true)
+  -state-dir string
+    	per-VM working directories (firecracker backend) (default "/var/lib/ephemera/vms")
+  -template-dir string
+    	where the snapshot goes; same filesystem as -jail-dir (firecracker backend) (default "/var/lib/ephemera/templates")
+  -url string
+    	URL the CLI uses to reach this host; it serves TLS with its own key (default "https://127.0.0.1:7701")
+```
+
+Production hosts run with `--backend firecracker`. The `docker` backend is for building ephemera: containers share the host's kernel, and allow lists aren't available.
+
+## ephemera-host join
+
+```text
+Usage: ephemera-host join --server URL [--name NAME] [CODE]
+
+Joins this host to an account with a one-time code. Without CODE, it is read from stdin.
+
+Flags:
+  -identity string
+    	where to keep the result (default "/var/lib/ephemera/host.json")
+  -key-file string
+    	Ed25519 key this host signs in and signs records with; created if missing (default "/var/lib/ephemera/host.key")
+  -name string
+    	this host's name in its account (default: this machine's hostname)
+  -server string
+    	central server URL, e.g. https://api.ephemera.run
+```
+
+## ephemera-host bench
+
+```text
+Usage: ephemera-host bench [flags]
+
+Measures this host with the Firecracker backend: cold boot, snapshot
+restore, ephemera run end to end, output latency, setup snapshots and,
+with --density, many sandboxes at once. Prints a table and writes the
+results as JSON. Run it as root, with no other benchmark running.
+
+Flags:
+  -commit string
+    	commit being measured (default: the commit it was built from)
+  -compare string
+    	an earlier JSON report to compare with
+  -cpus int
+    	vCPUs per sandbox (default 2)
+  -density int
+    	sandboxes started at once (0 skips the density test) (default 20)
+  -image-dir string
+    	guest image from deploy/guest/build-image.sh (default "/var/lib/ephemera/image")
+  -jail
+    	run each microVM under the jailer, as production hosts do
+  -memory int
+    	guest memory per sandbox, in MB (default 1024)
+  -out string
+    	where to write the JSON (default bench-<commit>-<time>.json)
+  -runs int
+    	samples per timing (default 10)
+```

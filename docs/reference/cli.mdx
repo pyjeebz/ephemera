@@ -1,0 +1,242 @@
+---
+title: "ephemera"
+description: "Every command of the CLI, exactly as its help prints it."
+icon: "terminal"
+---
+
+`ephemera help` prints:
+
+```text
+ephemera runs commands in short-lived, locked-down sandboxes.
+
+Usage:
+  ephemera run [flags] -- <command> [args...]
+  ephemera dev [flags] [-p PORT]... -- <dev server command>
+  ephemera routes                   dev sessions sharing ports, and their addresses
+  ephemera focus <session>          make plain localhost show that session
+  ephemera ls [--json]
+  ephemera usage                    sandbox-minutes used today and this token's limits
+  ephemera rm <sandbox-id>...
+  ephemera verify <record.json>
+  ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
+  ephemera login [--server URL]
+  ephemera logout
+  ephemera hosts [trust <host>]     the account's hosts, and the keys this CLI has pinned
+  ephemera doctor [--json]          why the CLI can't reach the server or a host
+  ephemera version
+
+Environment (overrides the saved login):
+  EPHEMERA_SERVER   central server URL (default http://127.0.0.1:7700)
+  EPHEMERA_TOKEN    API token
+  EPHEMERA_CONFIG   where the login is saved; pinned host keys go next to it
+  EPHEMERA_STRICT_HOSTS=1  refuse hosts not pinned yet, instead of pinning them
+
+Run "ephemera run -h" or "ephemera dev -h" for their flags.
+```
+
+Flags take one dash or two: `-net` and `--net` are the same. Everything after `--` is the command to run.
+
+## ephemera run
+
+Run one command in a fresh sandbox, then destroy it. See [Run commands](/guides/run).
+
+```text
+Usage: ephemera run [flags] -- <command> [args...]
+
+Flags:
+  -allow value
+    	allow outbound access to a host: example.com, *.example.com, host:port (repeatable)
+  -cpus float
+    	CPU limit, e.g. 2 or 0.5 (default: no limit)
+  -dir string
+    	worktree to sync (default ".")
+  -env value
+    	set an environment variable, KEY=VALUE (repeatable)
+  -image string
+    	sandbox image (default: the host's default)
+  -include value
+    	send an ignored file anyway, e.g. .env.local (repeatable)
+  -json
+    	print newline-delimited JSON events instead of raw output
+  -memory int
+    	memory limit in MB (default: no limit)
+  -net
+    	allow outbound access to any public host (blocked by default; still logged)
+  -record string
+    	save the sandbox's signed record here (default: the records directory)
+  -setup string
+    	prepare the sandbox first, e.g. "npm ci"; the result is snapshotted and later runs skip it
+  -setup-input value
+    	a file setup depends on, beyond the usual lockfiles (repeatable)
+  -timeout duration
+    	run: stop the command after this long (exit code 124); dev: destroy the sandbox after this long. e.g. 10m
+```
+
+## ephemera dev
+
+Run a dev server in a sandbox that stays up, with ports forwarded and edits synced. See [Dev servers](/guides/dev).
+
+```text
+Usage: ephemera dev [flags] -- <command> [args...]
+
+Flags:
+  -allow value
+    	allow outbound access to a host: example.com, *.example.com, host:port (repeatable)
+  -cpus float
+    	CPU limit, e.g. 2 or 0.5 (default: no limit)
+  -dir string
+    	worktree to sync (default ".")
+  -env value
+    	set an environment variable, KEY=VALUE (repeatable)
+  -image string
+    	sandbox image (default: the host's default)
+  -include value
+    	send an ignored file anyway, e.g. .env.local (repeatable)
+  -json
+    	print newline-delimited JSON events instead of raw output
+  -memory int
+    	memory limit in MB (default: no limit)
+  -name string
+    	session name for shared ports (default: the git branch)
+  -net
+    	allow outbound access to any public host (blocked by default; still logged)
+  -p value
+    	forward a port: PORT is shared by session at http://<name>.localhost:PORT; LOCAL:SANDBOX binds LOCAL for this session only (repeatable)
+  -record string
+    	save the sandbox's signed record here (default: the records directory)
+  -setup string
+    	prepare the sandbox first, e.g. "npm ci"; the result is snapshotted and later runs skip it
+  -setup-input value
+    	a file setup depends on, beyond the usual lockfiles (repeatable)
+  -timeout duration
+    	run: stop the command after this long (exit code 124); dev: destroy the sandbox after this long. e.g. 10m
+```
+
+## ephemera login
+
+Sign this machine in. See [Quickstart](/quickstart) and [Tokens and CI](/guides/tokens).
+
+```text
+Usage: ephemera login [--server URL] [--with-token]
+
+In a terminal, signs this machine in through the browser: it shows a code,
+opens the approval page, and saves the token once you approve. With
+--with-token, piped input, or a server without browser sign-in, it reads
+an API token instead (made with ephemera-server token create <name>, or
+in the dashboard).
+
+Flags:
+  -server string
+    	central server URL (default "http://127.0.0.1:7700")
+  -with-token
+    	read an API token from stdin instead of signing in through the browser
+```
+
+## ephemera doctor
+
+Say why the CLI can't reach the server or a host. See [Troubleshooting](/guides/troubleshooting).
+
+```text
+Usage: ephemera doctor [--json]
+
+Checks the login, the central server, the token and the hosts, and
+says how to fix the first thing that fails.
+
+Flags:
+  -json
+    	print the checks as JSON
+```
+
+## ephemera mcp
+
+Serve ephemera to a coding agent over MCP, on stdin and stdout. See [Coding agents](/guides/agents).
+
+```text
+Usage of mcp:
+  -dir string
+    	worktree that run_command syncs by default (default ".")
+```
+
+## ephemera ls
+
+List the account's running sandboxes.
+
+```text
+Usage of ls:
+  -json
+    	print JSON
+```
+
+## ephemera routes
+
+List dev sessions sharing local ports, and their addresses.
+
+```text
+ephemera routes
+```
+
+## ephemera focus
+
+Make plain `localhost:PORT` show one session.
+
+```text
+ephemera focus <session>
+```
+
+## ephemera usage
+
+Show sandbox-minutes used today, and this token's limits.
+
+```text
+ephemera usage
+```
+
+## ephemera rm
+
+Destroy sandboxes by id.
+
+```text
+ephemera rm <sandbox-id>...
+```
+
+## ephemera verify
+
+Check a signed record and print what the sandbox did. See [Signed records](/guides/records).
+
+```text
+ephemera verify <record.json>
+```
+
+## ephemera hosts
+
+List the account's hosts and the keys this CLI has pinned. `trust` accepts a host's new key.
+
+```text
+ephemera hosts [trust <host>]
+```
+
+## ephemera logout
+
+Remove the saved login from this machine. The token still works until it's revoked.
+
+```text
+ephemera logout
+```
+
+## ephemera version
+
+Print the version.
+
+```text
+ephemera version
+```
+
+## Exit codes
+
+| Code | Meaning |
+| - | - |
+| 0 | Success; for `run`, the command exited 0 |
+| The command's own | `run`: the command's exit code, passed through |
+| 124 | `run`: `--timeout` stopped the command |
+| 125 | ephemera itself failed |
+| 1 | `doctor`: a check failed |

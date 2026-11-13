@@ -1,0 +1,163 @@
+---
+title: "HTTP API"
+description: "The central server's endpoints, who may call each, and what they take and return."
+icon: "braces"
+---
+
+The CLI and the dashboard use this API; you can too. The hosted server is `https://api.ephemera.run`. Bodies are JSON. Errors come back with a 4xx or 5xx status and a body like:
+
+```json
+{ "error": "invalid token; run ephemera login" }
+```
+
+## Authentication
+
+| How | Header | Who uses it |
+| - | - | - |
+| Token | `Authorization: Bearer eph_...` | The CLI, CI, scripts. Any device or API token |
+| Session | The `ephemera_session` cookie from GitHub sign-in | The dashboard |
+
+Requests with a session that change something (`POST`, `DELETE`) must come from the dashboard's own site: they need its `Origin` header. Browsers on other sites get no CORS headers, so they can't read the API with your cookie.
+
+A token or a session sees only its own account's sandboxes and hosts. Another account's sandbox or host is "not found", not "forbidden", so ids can't be probed.
+
+## Endpoints
+
+| Method and path | Auth | Does |
+| - | - | - |
+| `GET /healthz` | none | Answers `ok` |
+| `GET /v1/whoami` | token | The token's name and account |
+| `POST /v1/sandboxes` | token | Make a sandbox |
+| `GET /v1/sandboxes` | token or session | The account's running sandboxes |
+| `DELETE /v1/sandboxes/{id}` | token or session | Destroy a sandbox |
+| `GET /v1/runs` | token or session | The account's sandboxes, running and finished, newest first |
+| `GET /v1/usage` | token or session | Sandbox-minutes today, and limits |
+| `GET /v1/hosts` | token or session | The account's hosts |
+| `DELETE /v1/hosts/{id}` | token or session | Remove a host and destroy its sandboxes |
+| `GET /v1/me` | session | Who is signed in |
+| `GET /v1/tokens` | session | The account's tokens, never their secrets |
+| `POST /v1/tokens` | session | Make an API token |
+| `DELETE /v1/tokens/{id}` | session | Revoke a token |
+| `POST /v1/join-codes` | session | Make a one-time code to join a host |
+| `GET /auth/github` | none | Start GitHub sign-in. `?next=/path` returns to that path afterwards |
+| `POST /auth/logout` | session | End the session |
+| `POST /v1/device/codes`, `POST /v1/device/token` | none | `ephemera login`'s browser sign-in |
+| `GET /v1/device`, `POST /v1/device/approve` | session | The approval page |
+| `POST /v1/hosts/join`, `GET /v1/hosts/connect` | join code, host key | For hosts |
+
+`/v1/runs` needs Postgres; a server keeping its state in files has no run history. The `/v1/me`, `/v1/tokens`, `/v1/join-codes` and device endpoints exist only when GitHub sign-in is set up.
+
+## Sandboxes
+
+### `POST /v1/sandboxes`
+
+```json
+{
+  "spec": {
+    "image": "",
+    "cpus": 2,
+    "memory_mb": 2048,
+    "network": "allow",
+    "allow": ["registry.npmjs.org"],
+    "max_lifetime_seconds": 600
+  },
+  "token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+}
+```
+
+`token_hash` is the hex SHA-256 of an access token you make and keep; the host checks requests for the sandbox against it. Every `spec` field is optional. `network` is `none`, `allow` or `open`; with `allow` entries, it defaults to `allow`.
+
+It answers `201` with the sandbox:
+
+```json
+{
+  "id": "sbx_09459d27f28c808c",
+  "host": "lab-1",
+  "host_id": "host_0b275ef1",
+  "host_url": "https://10.0.0.12:7701",
+  "host_key": "KTSv0bKYrAe5r4LFcTHw0mbqU55ZJIZu0j658LB5JKs=",
+  "spec": { "network": "allow", "allow": ["registry.npmjs.org"] },
+  "created_at": "2026-11-13T04:34:20.611Z",
+  "owner": "ci",
+  "account": "gh-147967875"
+}
+```
+
+Then talk to the host at `host_url` over TLS, checking that its certificate carries `host_key`. A token over its limits gets `429` with a message saying which limit.
+
+### `GET /v1/runs`
+
+The newest 100, newest first. `?before=<RFC 3339 time>` returns the 100 before that time, for paging back.
+
+```json
+[
+  {
+    "id": "sbx_09459d27f28c808c",
+    "host": "lab-1",
+    "host_id": "host_0b275ef1",
+    "owner": "ci",
+    "spec": { "network": "none" },
+    "created_at": "2026-11-13T04:34:20.611Z",
+    "ended_at": "2026-11-13T04:34:21.422Z",
+    "end_reason": "destroyed"
+  }
+]
+```
+
+`ended_at` is missing while a sandbox runs. `end_reason` is `destroyed` (the CLI or someone destroyed it), `limit` (its token ran out of minutes), `gone` (its host stopped reporting it) or `failed` (the host couldn't make it).
+
+### `GET /v1/usage`
+
+With a token, that token's day; with a session, the whole account's, without limits.
+
+```json
+{ "name": "ci", "day": "2026-11-13", "minutes_today": 41.5, "max_minutes_per_day": 600, "running": 1, "max_sandboxes": 2 }
+```
+
+## Hosts
+
+### `GET /v1/hosts`
+
+```json
+[
+  {
+    "id": "host_0b275ef1",
+    "name": "lab-1",
+    "public_key": "KTSv0bKYrAe5r4LFcTHw0mbqU55ZJIZu0j658LB5JKs=",
+    "fingerprint": "SHA256:qL3HdSf8UZXKjpVRma/Eo9jyxni9zZ8p6aDu+FxTJhA",
+    "last_seen": "2026-11-13T04:40:02Z",
+    "url": "https://10.0.0.12:7701",
+    "online": true,
+    "capacity": 20,
+    "version": "v0.2.0",
+    "running": 1,
+    "joined": "2026-11-12T22:01:47Z"
+  }
+]
+```
+
+A host that joined but hasn't connected since the server started is listed with `online: false`.
+
+### `POST /v1/join-codes`
+
+```json
+{ "code": "ej_k3v7q2mxa5t4wd6yr3bn5hc2pe", "expires": "2026-11-13T04:55:02Z" }
+```
+
+The code works once, for 15 minutes: `ephemera-host join --server URL CODE`.
+
+## Tokens
+
+### `POST /v1/tokens`
+
+```json
+{ "name": "github-actions", "max_sandboxes": 4, "max_minutes_per_day": 600 }
+```
+
+It answers `201` with the token, and its `secret`, which is never shown again:
+
+```json
+{ "id": "tok_8c2e0b71", "name": "github-actions", "kind": "api", "created": "2026-11-13T04:41:00Z", "max_sandboxes": 4, "max_minutes_per_day": 600, "secret": "eph_..." }
+```
+
+A limit of 0, or a missing one, means none. Names must be unique within the account.

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "maple",
+  "name": "ephemera",
+  "description": "Run commands, dev servers and coding agents in throwaway microVMs on your own machines.",
+  "colors": {
+    "primary": "#8C6A3D",
+    "light": "#E6C287",
+    "dark": "#8C6A3D"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "https://ephemera.run"
+  },
+  "favicon": "/favicon.svg",
+  "fonts": {
+    "family": "Satoshi",
+    "source": "/fonts/Satoshi-Variable.woff2",
+    "format": "woff2"
+  },
+  "appearance": {
+    "default": "dark"
+  },
+  "background": {
+    "color": {
+      "light": "#FAF8F3",
+      "dark": "#0B0A09"
+    }
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "navbar": {
+    "links": [
+      { "type": "github", "href": "https://github.com/pyjeebz/ephemera" }
+    ],
+    "primary": { "type": "button", "label": "Dashboard", "href": "https://ephemera.run/dashboard" }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Docs",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": ["index", "quickstart", "how-it-works", "security"]
+          },
+          {
+            "group": "Use it",
+            "pages": [
+              "guides/run",
+              "guides/dev",
+              "guides/network",
+              "guides/setup",
+              "guides/records",
+              "guides/agents",
+              "guides/troubleshooting"
+            ]
+          },
+          {
+            "group": "Hosts and access",
+            "pages": ["guides/hosts", "guides/tokens"]
+          },
+          {
+            "group": "Self-hosting",
+            "pages": ["self-hosting/index", "self-hosting/postgres-github", "self-hosting/operate"]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": ["reference/cli", "reference/host", "reference/server"]
+          },
+          {
+            "group": "Reference",
+            "pages": ["reference/configuration", "reference/api", "reference/install", "changelog"]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/pyjeebz/ephemera",
+      "website": "https://ephemera.run"
+    }
+  },
+  "contextual": {
+    "options": ["copy", "view", "claude", "chatgpt", "cursor"]
+  },
+  "seo": {
+    "metatags": {
+      "canonical": "https://ephemera.run/docs"
+    }
+  }
+}

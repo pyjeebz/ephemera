@@ -1,0 +1,111 @@
+---
+title: "Self-hosting"
+sidebarTitle: "Run your own server"
+description: "Run the central server yourself, next to your hosts, on one machine or many."
+icon: "house"
+---
+
+The hosted central server at `api.ephemera.run` is one way to run ephemera. The other is to run `ephemera-server` yourself. It's the same program, open source, and it keeps everything on machines you control: tokens, hosts and the run history too.
+
+Two parts run server-side:
+
+- The **central server** (`ephemera-server`) places sandboxes on hosts and keeps track of them. It never sees your files, command output or secrets.
+- A **host agent** (`ephemera-host`) runs sandboxes as Firecracker microVMs. The CLI talks to it directly to send files and stream output.
+
+One machine can run both. Add more hosts later and point them at the same central server.
+
+## What you need
+
+- **An x86_64 machine running Ubuntu 24.04**, with hardware virtualization (Intel VT-x or AMD-V) turned on. A bare-metal server, a spare PC, or a cloud VM with nested virtualization all work.
+- **A private network between your laptop and the machine.** Your laptop talks to hosts over TLS, checked against each host's own key, but the central server serves plain HTTP, so the installer refuses to serve on a public address. Use a LAN, or a VPN of your choice.
+- **About 2 GB of disk** for the guest image, plus room for sandboxes. Each sandbox's disk is sparse, so it takes only what the sandbox writes.
+
+Memory sets how many sandboxes fit. An idle sandbox costs the host about 50 to 60 MB, so a 16 GB machine holds well over a hundred idle ones. Busy sandboxes use what their workload uses, up to their limit, 1 GB by default.
+
+## Install
+
+On the machine, from a checkout of the repository:
+
+```bash
+git clone https://github.com/pyjeebz/ephemera.git && cd ephemera
+sudo deploy/host/bootstrap.sh --hostname ephemera-1
+sudo deploy/host/install.sh
+```
+
+`bootstrap.sh` prepares the machine. It checks KVM, then installs Firecracker and Go, creates an `ephemera` user, and joins Tailscale with SSH. On a server with a public IP, run it again with `--lock-public-ssh` once Tailscale works, so the machine accepts connections only over Tailscale.
+
+`install.sh` installs ephemera itself:
+
+1. Builds `ephemera`, `ephemera-server` and `ephemera-host` into `/usr/local/bin`.
+2. Builds the guest image into `/var/lib/ephemera/image`. This takes a few minutes and needs network.
+3. Writes `/etc/ephemera/ephemera.env` with the machine's addresses. It serves on the machine's Tailscale address, or another private one with `--listen-ip`.
+4. Starts both parts as systemd services, `ephemera-server` and `ephemera-host`, and waits until the host has connected.
+5. Creates the first API token, named `admin`, and prints it once.
+
+## Connect your laptop
+
+Install the CLI and log in with the server address and the token `install.sh` printed:
+
+```bash
+curl -fsSL https://ephemera.run/install | sh
+ephemera login --server http://100.64.0.1:7700
+```
+
+Then try it:
+
+```bash
+ephemera run -- echo hello from a microVM
+```
+
+If that fails, `ephemera doctor` says which step is broken, and how to fix it.
+
+## Tokens and limits
+
+Make one token per person, laptop, agent or CI system, so each can be limited and revoked on its own:
+
+```bash
+sudo ephemera-server token create ci --max-sandboxes 4 --max-minutes 600
+sudo ephemera-server token ls
+sudo ephemera-server token revoke ci
+```
+
+`--max-sandboxes` caps how many run at once, and `--max-minutes` caps sandbox-minutes per UTC day. `ephemera-server token limits <name>` changes them later. The server picks up changes without a restart.
+
+Every token belongs to an account, and a token only sees and destroys its own account's sandboxes. Tokens made without `--account` share the account `local`, which suits one person or a small team who trust each other. To keep people apart, give each their own account:
+
+```bash
+sudo ephemera-server token create sam-laptop --account sam
+```
+
+Each host belongs to the account whose join code it used, and runs only that account's sandboxes. To let people sign in with GitHub and make their own tokens, see [Postgres and GitHub sign-in](/self-hosting/postgres-github).
+
+## Add another host
+
+A new host joins the central server once, with a one-time code. On the server machine, make one; it works once, for 15 minutes:
+
+```bash
+sudo ephemera-server join-code create
+```
+
+Add `--account NAME` to join the host to that account instead of `local`. On the new machine, run `bootstrap.sh` as above, save the code to a file, and point the installer at the central server:
+
+```bash
+sudo deploy/host/install.sh --role host --server-url http://100.64.0.1:7700 --join-code-file /root/join-code
+```
+
+The host makes its own key, joins with the code, and from then on signs in with that key. Delete the code file afterwards; it can't be used again anyway. `ephemera-host join` prints the key's fingerprint, so you can check it against the server's logs or the dashboard.
+
+To take a host out of an account, `DELETE /v1/hosts/<id>` with one of the account's tokens. Its sandboxes are destroyed, and it can't sign in again until it joins with a new code.
+
+## Settings
+
+`/etc/ephemera/ephemera.env` holds the addresses and settings. To change them, run `install.sh` again with new options rather than editing the file:
+
+| Option | Meaning |
+| - | - |
+| `--listen-ip IP` | Serve on another private address instead of the Tailscale one |
+| `--name NAME` | The host's name in its account, in records and in `ephemera ls`. Set when the host joins |
+| `--host-args "..."` | Extra `ephemera-host` flags, such as `--capacity 40` (default 20), `--max-lifetime 8h` (default 24h) or `--max-snapshot-bytes` (default 20 GB) |
+| `--skip-image` | Don't build the guest image; it must already be in `/var/lib/ephemera/image` |
+
+Next: [Postgres and GitHub sign-in](/self-hosting/postgres-github), then [Upgrade and operate](/self-hosting/operate).

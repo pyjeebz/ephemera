@@ -1,0 +1,61 @@
+---
+title: "Network access"
+description: "Sandboxes have no network unless you allow it. Let through the hosts a command needs, and see everything it tried."
+icon: "network"
+---
+
+A sandbox starts with no network at all. To let a command reach the hosts it needs, name them:
+
+```bash
+ephemera run --allow registry.npmjs.org -- npm install
+ephemera run --allow github.com --allow '*.githubusercontent.com' -- ./fetch-deps.sh
+```
+
+Everything else stays blocked, and every attempt, allowed or blocked, is logged.
+
+## Three modes
+
+| Flags | Mode | What gets out |
+| - | - | - |
+| none | `none` | Nothing |
+| `--allow HOST` (repeatable) | `allow` | Those hosts only |
+| `--net` | `open` | Any public host |
+
+Even with `--net`, a sandbox can't reach private networks, localhost, cloud metadata services, carrier-grade NAT ranges (which include Tailscale addresses) or raw IP addresses. Those stay blocked in every mode.
+
+## Writing an allow list
+
+| Entry | Allows |
+| - | - |
+| `example.com` | That host, on ports 80 and 443 |
+| `*.example.com` | Its subdomains, such as `api.example.com`, on ports 80 and 443. Not `example.com` itself: add both if you need both |
+| `example.com:5432` | That host, on that port only |
+| `*` | Any public host, like `--net` |
+
+Entries are host names, not IP addresses. Quote entries with `*` so your shell leaves them alone.
+
+## What a run reports
+
+`ephemera run` ends with a summary that names each blocked host:
+
+```text
+ephemera: network: 14 allowed, 1 blocked
+ephemera:   blocked telemetry.example.com:443 (telemetry.example.com:443 is not on the sandbox's allow list)
+```
+
+`ephemera dev` reports blocked connections as they happen. `--json` emits a `connection` event for each attempt. The [signed record](/guides/records) lists every connection, with its host, port, the rule that let it through, and bytes in and out.
+
+## How it works
+
+A microVM has no network device. Programs in it reach the outside only through an HTTP proxy at `127.0.0.1:3128`; `HTTPS_PROXY` and `HTTP_PROXY` point there. That proxy carries each connection over vsock to an egress proxy on the host, one per sandbox, which:
+
+1. Checks the host and port against the sandbox's allow list.
+2. Resolves the name, and skips any address that isn't public. A name that resolves only to private addresses is refused.
+3. Connects to a public address, checking it again as the connection is made.
+4. Logs the attempt.
+
+Programs that ignore the proxy settings can't connect at all: there's nothing else to connect through. npm, pip, curl, git and Go programs read `HTTPS_PROXY` by themselves. Node.js's built-in `fetch` reads it only with `NODE_USE_ENV_PROXY=1` (Node.js 24), so pass `--env NODE_USE_ENV_PROXY=1` for scripts that use it.
+
+<Note>
+  Allow lists need hosts running Firecracker. On the Docker backend, which is for building ephemera itself, `--net` gives a container ordinary networking and `--allow` isn't available.
+</Note>

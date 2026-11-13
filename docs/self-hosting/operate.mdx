@@ -1,0 +1,59 @@
+---
+title: "Upgrade and operate"
+description: "Upgrade, watch, benchmark and remove a self-hosted install, and what lives where."
+icon: "wrench"
+---
+
+## Upgrade
+
+Pull and run the installer again:
+
+```bash
+git pull && sudo deploy/host/install.sh
+```
+
+It rebuilds the binaries, keeps the tokens, keys and image, and restarts the services. Restarting the host agent destroys the sandboxes running on it, so upgrade when none are in use.
+
+## Watch it
+
+```bash
+systemctl status ephemera-server ephemera-host
+journalctl -u ephemera-host -f
+```
+
+## Benchmark a host
+
+```bash
+sudo systemctl stop ephemera-host
+sudo ephemera-host bench
+```
+
+It measures the machine with the real backend, host agent, central server and client: cold boot, snapshot restore, `ephemera run` end to end, output latency, a setup snapshot's save and load, and 20 sandboxes started at once with their memory. It takes a few minutes, prints a table, and writes the results to `bench-<commit>-<time>.json`. `--compare` shows each result's change from an earlier report. Stop the host agent first, as above, so the two don't compete for the machine.
+
+## What lives where
+
+| Path | What |
+| - | - |
+| `/etc/ephemera/ephemera.env` | Addresses and settings, root only |
+| `/var/lib/ephemera/host.json` | Which server and account the host joined, and its host id |
+| `/var/lib/ephemera/host.key` | The key the host signs in and signs records with. Keep it to keep verifying old records |
+| `/var/lib/ephemera/server/` | API tokens as hashes, the hosts that joined, unused join codes as hashes, and the central server's state |
+| `/var/lib/ephemera/image/` | The guest kernel and root filesystem |
+| `/var/lib/ephemera/snapshots/` | Encrypted setup snapshots, least recently used dropped first |
+
+The central server runs as its own `ephemera-server` user, with no privileges and a read-only view of the system. The host agent runs as root because the jailer gives every microVM its own user, chroot and cgroup limits.
+
+## Uninstall
+
+```bash
+sudo deploy/host/install.sh --uninstall
+```
+
+This stops the services and removes the binaries, but keeps `/var/lib/ephemera` and `/etc/ephemera`. Add `--purge` to delete those too: tokens, the guest image, setup snapshots and the host key.
+
+## Security notes
+
+- **The central server serves plain HTTP**, API tokens included. Keep it on a private network, or put a TLS proxy in front of it. Don't serve it on a public address; the installer refuses to.
+- **Files, commands and output go from your laptop to a host over TLS 1.3**, with a certificate made from the host's own key, checked and pinned by the CLI. See [Security and data flow](/security).
+- **A join code lets a machine become a host in your account.** Anyone who uses it first can receive your sandboxes, and the code in them. It works once, for 15 minutes; hand it over the way you would a password.
+- **A host's key is its identity.** `/var/lib/ephemera/host.key` signs the host in and signs its records. Keep it root-only. If it leaks, remove the host and join again with a new key.

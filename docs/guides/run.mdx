@@ -1,0 +1,119 @@
+---
+title: "Run commands"
+description: "What goes into a sandbox, what comes back, exit codes, timeouts and JSON output."
+icon: "terminal"
+---
+
+`ephemera run` runs one command in a fresh sandbox and deletes the sandbox when the command ends:
+
+```bash
+ephemera run -- npm test
+ephemera run -- sh -c 'make && ./bin/check'
+```
+
+Everything after `--` is the command. To use shell features such as `&&`, pipes or globs, wrap it in `sh -c '...'`.
+
+## What goes in
+
+The CLI sends the files git would track: tracked files, and untracked files that aren't ignored. It works out the list itself from your repository, so uncommitted edits go in too. Ignored files, such as `node_modules`, `.env.local` and build output, stay on your laptop.
+
+To send an ignored file anyway, name it:
+
+```bash
+ephemera run --include .env.local -- npm test
+```
+
+`--dir` picks another worktree to send instead of the current folder. The files land in the sandbox's working directory, and the command runs there.
+
+## What comes back
+
+Output streams back as it happens, with standard output and standard error kept apart, so redirects and pipes on your laptop work as usual:
+
+```bash
+ephemera run -- npm test 2>errors.log | tee test.log
+```
+
+Nothing the command writes inside the sandbox comes back. Files it creates are deleted with the sandbox. If you need a build artifact, print it, or copy it somewhere it can reach.
+
+The CLI's own messages go to standard error, starting with `ephemera:`:
+
+```text
+ephemera: new host lab-1 (SHA256:qL3HdSf8UZXKjpVRma/Eo9jyxni9zZ8p6aDu+FxTJhA); pinned
+ephemera: signed record saved to ~/.config/ephemera/records/sbx_b5268cedc2cec984.json
+```
+
+## Exit codes
+
+| Exit code | Meaning |
+| - | - |
+| The command's own | The command ran and exited with it |
+| 124 | `--timeout` stopped the command |
+| 125 | ephemera itself failed: no login, no host with room, the host couldn't make the sandbox, and so on |
+
+So `ephemera run` works anywhere a plain command does: in `make`, in a `pre-push` hook, in CI.
+
+## Time, size and environment
+
+```bash
+ephemera run --timeout 10m -- npm test            # stop after ten minutes, exit 124
+ephemera run --env NODE_ENV=test -- npm test      # set a variable, repeatable
+ephemera run --cpus 4 --memory 4096 -- make -j4   # a bigger sandbox
+```
+
+```text
+ephemera: the command timed out after 10m0s and was stopped
+```
+
+Without `--cpus` and `--memory`, a sandbox gets the host's default size, which is also the size that starts fastest, from a snapshot. Every host also caps how long any sandbox may live, 24 hours by default.
+
+`--env` values go to the command only. They aren't kept in the record or in setup snapshots, and the central server never sees them.
+
+`--image` picks another image on hosts that have one. Most hosts have just the default guest image: Ubuntu 24.04 with git, Python, Node.js 24, npm and build tools.
+
+## Ctrl-C
+
+Pressing Ctrl-C stops the command and destroys the sandbox. Nothing is left running.
+
+## JSON output, for agents and scripts
+
+`--json` prints one JSON object per line instead of raw output:
+
+```bash
+ephemera run --json -- sh -c 'echo hello'
+```
+
+```json
+{"event":"sandbox","host":"lab-1","id":"sbx_09459d27f28c808c"}
+{"event":"synced","files":2}
+{"data":"hello\n","event":"output","stream":"stdout"}
+{"event":"destroyed","id":"sbx_09459d27f28c808c"}
+{"code":0,"duration_ms":466,"event":"exit","record":"/home/you/.config/ephemera/records/sbx_09459d27f28c808c.json","sandbox":"sbx_09459d27f28c808c"}
+```
+
+| Event | When | Fields |
+| - | - | - |
+| `sandbox` | The sandbox exists | `id`, `host` |
+| `synced` | The files are in | `files` |
+| `snapshot` | With `--setup`: whether a saved snapshot was used | `id`, `loaded`, `reason` |
+| `snapshot_saved` | With `--setup`: a new snapshot was saved | `id` |
+| `snapshot_error` | With `--setup`: the snapshot couldn't be saved; the run goes on | `error` |
+| `output` | The command wrote something | `stream` (`stdout` or `stderr`), `data` |
+| `connection` | The sandbox tried to reach a host | `host`, `port`, `kind` (`https` or `http`), `allowed`, and `rule`, `error`, `bytes_in`, `bytes_out` when there are any |
+| `destroyed` | The sandbox is gone | `id` |
+| `exit` | Last line | `code`, `duration_ms`, `sandbox`, `record` |
+
+## See what's running
+
+```bash
+ephemera ls            # sandboxes running in your account
+ephemera rm sbx_...    # destroy one
+ephemera usage         # sandbox-minutes today, and this token's limits
+```
+
+```text
+my-laptop, 2026-11-13 (UTC)
+  sandbox-minutes today  0.1 (no limit)
+  running now            0 (no limit)
+```
+
+The [dashboard](https://ephemera.run/dashboard) shows the same, plus every run in your account.

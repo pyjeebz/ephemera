@@ -1,0 +1,88 @@
+---
+title: "Signed records"
+description: "Every sandbox leaves a record of what it did, signed by its host. Check one with ephemera verify."
+icon: "file-check"
+---
+
+When a sandbox is destroyed, its host signs a record of what happened in it, and the CLI saves it on your laptop:
+
+```text
+ephemera: signed record saved to ~/.config/ephemera/records/sbx_b5268cedc2cec984.json
+```
+
+## What's in one
+
+- every command line, with its exit code, start time and duration,
+- every file sync: how many files, how many bytes,
+- every network connection, allowed or blocked: host, port, the rule that matched, bytes in and out,
+- the sandbox's settings, when it was made and destroyed, and how it ended,
+- that its disk was deleted,
+- the public key of the host that signed it.
+
+What's not in it: output, file contents, environment values. A record says what ran and what it reached, not what it saw.
+
+```json
+{
+  "record": {
+    "version": 1,
+    "sandbox": "sbx_b5268cedc2cec984",
+    "host": "lab-1",
+    "backend": "firecracker",
+    "spec": { "image": "ubuntu:24.04", "network": "none" },
+    "created": "2026-11-13T04:34:20.611581215Z",
+    "destroyed": "2026-11-13T04:34:21.422058641Z",
+    "ended": "destroyed",
+    "execs": [
+      {
+        "argv": ["sh", "-c", "ls -a; echo to-stderr >&2; exit 3"],
+        "started": "2026-11-13T04:34:21.153045184Z",
+        "duration_ms": 114,
+        "exit_code": 3
+      }
+    ],
+    "syncs": [{ "time": "2026-11-13T04:34:21.152426371Z", "files": 2, "bytes": 29 }],
+    "connections": [],
+    "disk_deleted": true,
+    "host_key": "KTSv0bKYrAe5r4LFcTHw0mbqU55ZJIZu0j658LB5JKs="
+  },
+  "signature": "7hoQLFPoK9z2ifLhkjQ0nyj56NxGl+++3HJ5pz2UZdjaN2bpk3lNe37/Ecu+yFhDHHmpnPp02jy0NkjY+jdBDA=="
+}
+```
+
+## Check one
+
+```bash
+ephemera verify ~/.config/ephemera/records/sbx_b5268cedc2cec984.json
+```
+
+```text
+Verified: signed by host lab-1; the key is the one the central server has for this host.
+
+Sandbox sbx_b5268cedc2cec984 on lab-1 (firecracker backend)
+  created    2026-11-13T04:34:20Z
+  destroyed  2026-11-13T04:34:21Z (destroyed, after 810ms)
+  network    none
+  disk       deleted
+
+Commands (1):
+  04:34:21  exit 3      114ms  sh -c ls -a; echo to-stderr >&2; exit 3
+
+File syncs (1):
+  04:34:21  2 files, 29 bytes
+
+Connections (0):
+```
+
+`verify` checks two things: that the signature matches the record, so any change to it fails, and that the signing key is the one the central server has on record for that host. It needs your login for the second check.
+
+A record is only as trustworthy as its host's key. The key lives on the host, in `/var/lib/ephemera/host.key`; if it leaks, remove the host and join it again with a new key.
+
+## Where records go
+
+| Setting | Records go to |
+| - | - |
+| default | `records/` in your config folder: `~/.config/ephemera/records` on Linux, `~/Library/Application Support/ephemera/records` on macOS |
+| `EPHEMERA_RECORDS=DIR` | That folder |
+| `--record FILE` | That file, for one run |
+
+`--json` names the record's path in its final `exit` event, and the [MCP tools](/guides/agents) return it too, so an agent can hand you the receipt for what it ran.

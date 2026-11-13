@@ -1,0 +1,72 @@
+---
+title: "Dev servers"
+description: "Keep a sandbox running, forward its ports to localhost, and sync your edits as you make them."
+icon: "globe"
+---
+
+`ephemera dev` is `run` for things that keep going: a dev server, a watcher, a REPL. It keeps the sandbox alive, forwards ports to your laptop, and sends each file you change as you save it, so hot reload works as usual.
+
+```bash
+ephemera dev -p 3000 --net -- sh -c 'npm install && npm run dev'
+```
+
+Then open [http://localhost:3000](http://localhost:3000). Ctrl-C stops the server and destroys the sandbox.
+
+Ports work even when the server listens only on the sandbox's own `127.0.0.1`: the host reaches it over vsock, and the CLI carries it to your laptop over the same TLS connection as everything else.
+
+## Edits
+
+While the session runs, the CLI watches your worktree and sends each change: new and edited files, and deletions. The same rule applies as for `run`: files git would track, plus anything you named with `--include`. Nothing flows back. Files the dev server writes stay in the sandbox and go with it.
+
+## Several branches on one port
+
+Run a dev server in each of your worktrees, all on port 3000. With `-p 3000`, the first session starts a small local router, and each session gets its own address named after its git branch:
+
+```text
+http://main.localhost:3000
+http://fix-login.localhost:3000
+```
+
+Plain `localhost:3000` shows the newest one. To choose:
+
+```bash
+ephemera routes              # sessions sharing ports, and their addresses
+ephemera focus fix-login     # make plain localhost:3000 show that one
+```
+
+`--name` names the session instead of the branch. The router exits 30 seconds after the last session ends.
+
+To skip the router and bind a local port for one session only, give both sides: `-p 8080:3000` serves the sandbox's port 3000 at `localhost:8080`.
+
+## Network
+
+A dev server usually needs to install packages, so `ephemera dev` takes the same `--allow` and `--net` flags as `run`. Blocked connections are reported as they happen:
+
+```text
+ephemera: blocked telemetry.example.com:443 (telemetry.example.com:443 is not on the sandbox's allow list)
+```
+
+See [Network access](/guides/network).
+
+## How long it lives
+
+Until you press Ctrl-C, or until `--timeout` runs out:
+
+```bash
+ephemera dev --timeout 2h -p 3000 -- npm run dev
+```
+
+The host's maximum lifetime applies too, 24 hours by default. With [`--setup`](/guides/setup), the install step is saved as a snapshot, so the next `ephemera dev` skips it.
+
+## Flags
+
+`dev` takes every flag `run` does, plus:
+
+| Flag | Meaning |
+| - | - |
+| `-p PORT` | Forward a port, shared by session at `http://<name>.localhost:PORT` (repeatable) |
+| `-p LOCAL:SANDBOX` | Bind `LOCAL` on your laptop to the sandbox's `SANDBOX`, for this session only |
+| `--name NAME` | Session name for shared ports. Default: the git branch |
+| `--timeout D` | Destroy the sandbox after this long, e.g. `2h` |
+
+The full list is in the [CLI reference](/reference/cli#ephemera-dev).

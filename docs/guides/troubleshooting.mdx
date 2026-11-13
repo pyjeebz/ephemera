@@ -1,0 +1,97 @@
+---
+title: "Troubleshooting"
+description: "Start with ephemera doctor. Then the errors you're most likely to see, and what to do about each."
+icon: "stethoscope"
+---
+
+## Run ephemera doctor
+
+```bash
+ephemera doctor
+```
+
+```text
+ok    login   server https://api.ephemera.run (from saved login), token from saved login
+ok    server  https://api.ephemera.run answers in 125ms
+ok    token   accepted, name my-laptop
+ok    hosts   lab-1 is online, its key is pinned, and https://10.0.0.12:7701 answers in 4ms
+```
+
+It checks, in order, the saved login, the central server, the token, and each host: online, key pinned, and reachable from this machine. For the first check that fails, it prints what's wrong and how to fix it, and exits 1. `--json` prints the same checks for scripts.
+
+## Errors
+
+<AccordionGroup>
+  <Accordion title="invalid token; run ephemera login">
+    The token was revoked, or this machine was never signed in to this server. Sign in again:
+
+    ```bash
+    ephemera login --server https://api.ephemera.run
+    ```
+
+    If `EPHEMERA_TOKEN` or `EPHEMERA_SERVER` is set in your shell, it overrides the saved login. Check with `env | grep EPHEMERA`.
+  </Accordion>
+
+  <Accordion title="none of this account's hosts is connected with room for a sandbox">
+    No host in your account is connected right now, or every connected one is full. `ephemera hosts` shows which are online. On the host, check the agent is running:
+
+    ```bash
+    systemctl status ephemera-host
+    journalctl -u ephemera-host -n 50
+    ```
+
+    A host that says `connection to central server lost; reconnecting` keeps trying, waiting up to a minute between tries. A host the central server has no record of, because it was removed, says so in its log: join it again with a new code.
+  </Accordion>
+
+  <Accordion title="The CLI can't reach a host">
+    Your laptop sends files and reads output straight from the host, at the address the host gave when it joined (`ephemera hosts` lists it). The host's connection to the central server can be fine while your laptop can't reach it. Check the two are on the same network or VPN, and that nothing blocks the host's port, 7701 by default.
+  </Accordion>
+
+  <Accordion title="host lab-1's key changed">
+    The host presented a different key from the one this CLI pinned. If you rebuilt the host or joined it again, that's expected; accept the new key:
+
+    ```bash
+    ephemera hosts trust lab-1
+    ```
+
+    If you didn't, don't: something may be between you and the host.
+  </Accordion>
+
+  <Accordion title="A command can't reach the internet">
+    That's the default. The end of the run names what was blocked:
+
+    ```text
+    ephemera: network: 0 allowed, 1 blocked
+    ephemera:   blocked registry.npmjs.org:443 (registry.npmjs.org:443 is not on the sandbox's allow list)
+    ```
+
+    Add the host with `--allow registry.npmjs.org`. If the summary shows nothing at all, the program ignores proxy settings; Node.js's built-in `fetch` needs `--env NODE_USE_ENV_PROXY=1`. See [Network access](/guides/network).
+  </Accordion>
+
+  <Accordion title="allow lists need the firecracker backend">
+    The host runs the Docker backend, which is for building ephemera only. Run the host with `--backend firecracker`; the installer does.
+  </Accordion>
+
+  <Accordion title="limit reached">
+    The token has a limit on sandboxes at once or on sandbox-minutes a day:
+
+    ```text
+    limit reached: ci may run 2 sandboxes at once; destroy one first
+    limit reached: ci has used today's 600 sandbox-minutes; it resets at midnight UTC
+    ```
+
+    `ephemera usage` shows the token's use and limits. To change them, make a new token with other limits in the dashboard and revoke the old one, or, on a server you run, use `ephemera-server token limits`. See [Tokens and CI](/guides/tokens).
+  </Accordion>
+
+  <Accordion title="the code expired before it was approved">
+    A sign-in code from `ephemera login` works for 10 minutes. Run `ephemera login` again and approve the new code.
+  </Accordion>
+
+  <Accordion title="ephemera run exits 125">
+    125 means ephemera itself failed before or around your command: the message above it says why. Your command's own exit codes pass through untouched; 124 means `--timeout` stopped it.
+  </Accordion>
+</AccordionGroup>
+
+## Still stuck
+
+Open an issue on [GitHub](https://github.com/pyjeebz/ephemera/issues) with the output of `ephemera doctor` and `ephemera version`. Neither prints your token.

@@ -1,0 +1,50 @@
+---
+title: "Setup snapshots"
+description: "Install dependencies once, snapshot the result, and start every later run from it."
+icon: "layers"
+---
+
+Most commands need something installed first. `--setup` runs that step, saves the prepared sandbox as a snapshot on the host, and later runs start from it and skip the step:
+
+```bash
+ephemera run --setup "npm ci" --allow registry.npmjs.org -- npm test
+```
+
+The first run installs and saves. Every run after that starts from the snapshot, with `node_modules` already there. It works with `ephemera dev` too.
+
+## When a snapshot is reused
+
+A snapshot is tied to:
+
+- the project,
+- the setup command,
+- the sandbox size,
+- the project's dependency files, at the top of the worktree, when they're there:
+  `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `requirements.txt`, `requirements-dev.txt`, `pyproject.toml`, `poetry.lock`, `Pipfile.lock`, `uv.lock`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `Gemfile`, `Gemfile.lock`, `composer.json`, `composer.lock`.
+
+Change any of them and the next run makes a new one. If setup depends on another file, name it:
+
+```bash
+ephemera run --setup "./scripts/bootstrap.sh" --setup-input scripts/bootstrap.sh -- make test
+```
+
+With `--json`, a `snapshot` event says whether a snapshot was used, and why not when it wasn't.
+
+## Where snapshots live
+
+On the host that made them, in `/var/lib/ephemera/snapshots`. A snapshot holds your code and its dependencies, so the host keeps it only encrypted, with AES-256-GCM:
+
+- The key is made on your laptop, one per project, and stays in your config folder (`snapshot-keys/`).
+- It goes straight to the host when a snapshot is saved or loaded, never through the central server.
+- The host decrypts a snapshot only into the folder of the sandbox using it, which is deleted with the sandbox.
+
+A host drops snapshots made on an older guest image, and drops the least recently used once they pass 20 GB in total (`--max-snapshot-bytes`). A snapshot made on one host isn't used on another: the first run on each host makes its own.
+
+## Secrets stay out
+
+Setup runs before your secrets arrive:
+
+- Files sent with `--include`, such as `.env.local`, are added after setup finishes and the snapshot is saved.
+- `--env` values go to the main command only.
+
+So setup can't read them, and they never end up in a snapshot. The flip side: a setup step that needs a credential, such as a token for a private package registry, isn't supported yet.

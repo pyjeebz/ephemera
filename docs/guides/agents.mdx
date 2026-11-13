@@ -1,0 +1,70 @@
+---
+title: "Coding agents"
+description: "Let Claude Code, Cursor or any MCP agent run commands in sandboxes instead of on your machine."
+icon: "bot"
+---
+
+A coding agent that runs `npm install`, a test suite or a script it just wrote is running code on your laptop. `ephemera mcp` gives it a sandbox instead, over the Model Context Protocol. The agent still edits files in your worktree; when it runs something, it runs in a fresh microVM with no network unless it asks for one, and you get a signed record of what it did.
+
+## Connect your agent
+
+You need the CLI installed and signed in first: see the [quickstart](/quickstart).
+
+<Tabs>
+  <Tab title="Claude Code">
+    ```bash
+    claude mcp add ephemera -- ephemera mcp
+    ```
+  </Tab>
+  <Tab title="Other agents">
+    Add a stdio MCP server with the command `ephemera mcp`. Most agents take it as JSON:
+
+    ```json
+    {
+      "mcpServers": {
+        "ephemera": { "command": "ephemera", "args": ["mcp"] }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+`ephemera mcp` sends the worktree it was started in. `--dir DIR` picks another, and each call can override it.
+
+## The tools
+
+| Tool | Does |
+| - | - |
+| `run_command` | Runs a shell command in a fresh sandbox holding the worktree's files, then destroys it. Returns the exit code, output, a network summary naming blocked hosts, and the record's path |
+| `list_sandboxes` | Lists running sandboxes |
+| `destroy_sandbox` | Destroys a sandbox by `id` and saves its record |
+| `verify_record` | Checks a record at `path` against the host keys the central server knows, and shows what the sandbox did |
+
+`run_command` takes:
+
+| Field | Type | Meaning |
+| - | - | - |
+| `command` | string, required | Run with `sh -c` in the worktree |
+| `allow` | string array | Hosts it may reach, such as `registry.npmjs.org` or `*.github.com` |
+| `network_open` | boolean | Any public host instead of a list |
+| `timeout_seconds` | integer | Stop the command after this long, exit code 124 |
+| `include` | string array | Ignored files to send anyway, such as `.env.local` |
+| `env` | object of strings | Environment variables for the command |
+| `dir` | string | The worktree to send. Default: where `ephemera mcp` started |
+
+## Tell the agent to use it
+
+Agents use the tools they're told about. A line in your `CLAUDE.md`, `AGENTS.md` or rules file is enough:
+
+```markdown
+Run commands, tests and installs with the ephemera run_command tool, not the shell.
+Allow only the hosts a command needs, such as registry.npmjs.org for npm.
+```
+
+To be strict, take shell access away from the agent in its own settings, so `run_command` is the only way it can run anything.
+
+## What you get back
+
+Every run leaves a [signed record](/guides/records) on your laptop: each command the agent ran, its exit code, and every host it tried to reach. If an agent's script tried to send something somewhere, the record names the host, whether or not it was let through.
+
+Prefer the CLI? Agents that can only run shell commands can use `ephemera run --json`, which prints one JSON event per line. See [Run commands](/guides/run#json-output-for-agents-and-scripts).

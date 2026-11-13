@@ -1,0 +1,72 @@
+---
+title: "Tokens and CI"
+description: "Device tokens for your machines, API tokens for CI and agents, and limits on what each may use."
+icon: "key-round"
+---
+
+Everything that talks to the central server uses a token. There are two kinds:
+
+| Kind | Made by | For |
+| - | - | - |
+| Device | `ephemera login`, approved in the browser | Your own machines. Named after the machine |
+| API | You, in the dashboard | CI, hosted agents, any machine that can't open a browser |
+
+Each token is shown once, when it's made. The central server keeps only a SHA-256 of it. Every token belongs to your account, and sees and stops only your account's sandboxes.
+
+## Make an API token
+
+In the [dashboard](https://ephemera.run/dashboard/tokens), under Tokens, give it a name and, if you like, limits, then **Make token**. Copy it then: it isn't shown again.
+
+## Use it in CI
+
+Set two variables, and `ephemera run` needs no login:
+
+```bash
+export EPHEMERA_SERVER=https://api.ephemera.run
+export EPHEMERA_TOKEN=eph_...
+```
+
+They override any saved login. In GitHub Actions, keep the token as a secret:
+
+```yaml
+- name: Test in a sandbox
+  env:
+    EPHEMERA_SERVER: https://api.ephemera.run
+    EPHEMERA_TOKEN: ${{ secrets.EPHEMERA_TOKEN }}
+  run: |
+    curl -fsSL https://ephemera.run/install | EPHEMERA_INSTALL_DIR="$HOME/bin" sh
+    "$HOME/bin/ephemera" run --allow registry.npmjs.org -- sh -c 'npm ci && npm test'
+```
+
+On a long-lived machine, `EPHEMERA_STRICT_HOSTS=1` refuses any host it hasn't pinned yet, so a host key can't be trusted silently. A fresh CI runner has pinned nothing, so it would refuse every host; leave it off there. The CLI still checks each host's key against the central server's record either way.
+
+To save a token on a machine instead, pipe it in:
+
+```bash
+echo "$EPHEMERA_TOKEN" | ephemera login --server https://api.ephemera.run --with-token
+```
+
+## Limits
+
+A token can have two limits, set when it's made:
+
+| Limit | Caps |
+| - | - |
+| Sandboxes at once | How many may run at the same time |
+| Minutes a day | Sandbox-minutes per UTC day |
+
+Over a limit, new sandboxes are refused with a message saying which. A new sandbox's lifetime is capped at the minutes left today, and running ones are stopped when the day's minutes run out. `ephemera usage` shows a token's use and limits:
+
+```text
+ci, 2026-11-13 (UTC)
+  sandbox-minutes today  41.5 (limit 600)
+  running now            1 (limit 2)
+```
+
+Give each CI system and agent a token of its own, with limits, so a runaway job stops at its limit and you can revoke one without touching the others.
+
+## Revoke a token
+
+In the dashboard, under Tokens, choose **Revoke**. It stops working at once.
+
+`ephemera logout` removes the saved login from a machine, but the token itself still works until it's revoked: revoke it too if the machine is gone.

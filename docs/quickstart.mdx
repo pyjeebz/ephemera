@@ -1,0 +1,77 @@
+---
+title: "Quickstart"
+description: "Install the CLI, sign in, add a host and run your first sandbox."
+icon: "rocket"
+---
+
+This uses the hosted central server at `api.ephemera.run`. You need a GitHub account, a laptop running Linux or macOS (Windows works too, from the zip on the releases page), and one Linux machine with KVM to be your host. To run the central server yourself instead, start with [Self-hosting](/self-hosting).
+
+<Steps>
+  <Step title="Install the CLI">
+    ```bash
+    curl -fsSL https://ephemera.run/install | sh
+    ```
+
+    It downloads the latest release for your OS and CPU, checks it against the release's checksums, and puts `ephemera` in `/usr/local/bin`, or `~/.local/bin` if that isn't writable. Check it with `ephemera version`.
+  </Step>
+
+  <Step title="Sign in">
+    ```bash
+    ephemera login --server https://api.ephemera.run
+    ```
+
+    The CLI shows a code such as `K7QM-2XRT` and opens a page in your browser. Sign in with GitHub if you haven't, check the code matches, and approve. The CLI saves a token for this machine, named after it. The code works for 10 minutes.
+
+    ```text
+    To sign in, open this page and check it shows K7QM-2XRT:
+
+      https://ephemera.run/device?code=K7QM-2XRT
+
+    Waiting for you to approve it… (Ctrl-C to stop)
+    Logged in to https://api.ephemera.run as my-laptop (saved in ~/.config/ephemera/config.json)
+    ```
+
+    No browser on that machine, as on CI? Make a token in the [dashboard](https://ephemera.run/dashboard/tokens) and use it instead: see [Tokens and CI](/guides/tokens).
+  </Step>
+
+  <Step title="Add a host">
+    A host is the Linux machine your sandboxes run on: x86_64, with KVM. In the [dashboard](https://ephemera.run/dashboard/hosts), make a join code. It works once, for 15 minutes. Then install the host agent on that machine and join it with the code; [Add a host](/guides/hosts) has the steps.
+
+    The host connects out to `api.ephemera.run`, so it needs no open ports for the central server. Your laptop does talk to it directly, to send files and read output, so it must be able to reach the host's address: the same network, or a VPN between them.
+  </Step>
+
+  <Step title="Run something">
+    In any git repository:
+
+    ```bash
+    ephemera run -- echo hello from a microVM
+    ```
+
+    ```text
+    ephemera: new host lab-1 (SHA256:qL3HdSf8UZXKjpVRma/Eo9jyxni9zZ8p6aDu+FxTJhA); pinned
+    hello from a microVM
+    ephemera: signed record saved to ~/.config/ephemera/records/sbx_b5268cedc2cec984.json
+    ```
+
+    The first time you use a host, the CLI pins its key, like ssh does. The sandbox got the files git tracks, ran the command, and was deleted. `ephemera run` exits with the command's exit code.
+  </Step>
+</Steps>
+
+If a step fails, run `ephemera doctor`. It checks the login, the central server, the token and each host in turn, and says how to fix the first thing that's wrong.
+
+## Next
+
+<Columns cols={2}>
+  <Card title="Run commands" icon="terminal" href="/guides/run">
+    What goes into a sandbox, exit codes, timeouts and JSON output.
+  </Card>
+  <Card title="Dev servers" icon="globe" href="/guides/dev">
+    Keep a sandbox running, forward ports, and sync edits as you make them.
+  </Card>
+  <Card title="Network access" icon="network" href="/guides/network">
+    Let a sandbox reach the hosts it needs, and see what it tried.
+  </Card>
+  <Card title="Coding agents" icon="bot" href="/guides/agents">
+    Hand the sandbox to Claude Code or any MCP agent.
+  </Card>
+</Columns>

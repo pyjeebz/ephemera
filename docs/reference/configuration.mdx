@@ -1,0 +1,80 @@
+---
+title: "Configuration"
+description: "Environment variables, the files ephemera writes, the ports it uses, and its timers."
+icon: "settings"
+---
+
+## Environment variables
+
+### CLI
+
+| Variable | Meaning |
+| - | - |
+| `EPHEMERA_SERVER` | Central server URL. Overrides the saved login |
+| `EPHEMERA_TOKEN` | API token. Overrides the saved login |
+| `EPHEMERA_CONFIG` | Where the login is saved. Pinned host keys go next to it |
+| `EPHEMERA_STRICT_HOSTS=1` | Refuse hosts not pinned yet, instead of pinning them |
+| `EPHEMERA_RECORDS` | Folder for signed records |
+| `EPHEMERA_SNAPSHOT_KEYS` | Folder for setup snapshot keys |
+| `EPHEMERA_ROUTER_SOCKET` | The local router's socket, for `ephemera dev` |
+| `EPHEMERA_NO_BROWSER=1` | `ephemera login` prints the approval link without opening a browser |
+
+### Central server
+
+| Variable | Meaning |
+| - | - |
+| `EPHEMERA_DATABASE_URL` | Postgres URL. Without it, state is kept in files |
+| `EPHEMERA_GITHUB_CLIENT_ID`, `EPHEMERA_GITHUB_CLIENT_SECRET` | The GitHub OAuth app, for sign-in |
+| `EPHEMERA_PUBLIC_URL` | Where browsers reach the server |
+| `EPHEMERA_DASHBOARD_URL` | Where people land after signing in |
+
+The host agent takes flags, not variables: see [ephemera-host](/reference/host).
+
+## Files
+
+### On your laptop
+
+Your config folder is `~/.config/ephemera` on Linux and `~/Library/Application Support/ephemera` on macOS (`%AppData%\ephemera` on Windows).
+
+| File | What |
+| - | - |
+| `config.json` | The saved login: server URL and token. Readable only by you |
+| `known_hosts.json` | Host keys this CLI has pinned |
+| `records/` | Signed records, one per sandbox |
+| `snapshot-keys/` | One key per project, for setup snapshots |
+| `router.sock` | The local router, while `ephemera dev` sessions share ports |
+
+### On a host
+
+| Path | What |
+| - | - |
+| `/var/lib/ephemera/host.key` | The host's Ed25519 key |
+| `/var/lib/ephemera/host.json` | What it joined: server, account, host id |
+| `/var/lib/ephemera/image/` | The guest kernel and root filesystem |
+| `/var/lib/ephemera/snapshots/` | Encrypted setup snapshots |
+| `/var/lib/ephemera/vms/`, `jail/`, `templates/` | Per-sandbox working folders, jails, and the boot snapshot |
+| `/etc/ephemera/ephemera.env` | Settings written by the installer |
+
+## Ports
+
+| Port | Where | What |
+| - | - | - |
+| 7700 | Central server | The API, when you run your own. The hosted one is on 443 |
+| 7701 | Host | The CLI's TLS connection for files, commands, output and ports |
+| 3128 | Inside each microVM, `127.0.0.1` | The proxy every outbound connection goes through |
+
+A host needs no port open for the central server: it connects out.
+
+## Timers
+
+| What | How long |
+| - | - |
+| A sandbox's longest life | 24 hours, per host (`--max-lifetime`) |
+| A host's check-in | Every 15 seconds |
+| A host reconnecting | Waits 1 second, doubling up to 60 |
+| A join code | 15 minutes, once |
+| A sign-in code from `ephemera login` | 10 minutes |
+| A dashboard session | 30 days |
+| Wrong codes on the approval page | 10 per account per hour |
+| The local router | Exits 30 seconds after the last `ephemera dev` session ends |
+| Usage limits | Reset at midnight UTC |

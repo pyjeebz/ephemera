@@ -1,0 +1,53 @@
+---
+title: "Install and update"
+description: "The install script, what it checks, pinning a version, and installing by hand."
+icon: "download"
+---
+
+## The install script
+
+```bash
+curl -fsSL https://ephemera.run/install | sh
+```
+
+`ephemera.run/install` redirects to `install.sh` from the latest GitHub release. The script:
+
+1. Picks the archive for your OS and CPU: Linux or macOS, x86_64 or arm64.
+2. Downloads it and the release's `checksums.txt` over HTTPS, and checks the archive's SHA-256.
+3. Installs one binary, `ephemera`, in `/usr/local/bin` if that's writable, or `~/.local/bin` otherwise.
+
+Nothing else on the machine is changed. It needs `curl` or `wget`.
+
+| Variable | Meaning |
+| - | - |
+| `EPHEMERA_VERSION` | A release tag such as `v0.1.1`. Default: the latest |
+| `EPHEMERA_INSTALL_DIR` | Where to put the binary |
+| `EPHEMERA_DOWNLOAD_URL` | A mirror holding the release files. Default: GitHub |
+
+Pin a version in CI so a new release can't change a build under you:
+
+```bash
+curl -fsSL https://ephemera.run/install | EPHEMERA_VERSION=v0.1.1 sh
+```
+
+## Update
+
+Run the script again. It replaces the binary with the latest release, or the one `EPHEMERA_VERSION` names. Your login, pinned host keys and records stay where they are.
+
+## By hand
+
+Download the archive for your platform and `checksums.txt` from the [releases page](https://github.com/pyjeebz/ephemera/releases), check the archive with `sha256sum -c`, and put `ephemera` on your `PATH`. On Windows, download the zip.
+
+## Hosts and servers
+
+The host agent and central server are for x86_64 Linux. See [Add a host](/guides/hosts) and [Self-hosting](/self-hosting).
+
+## Check it
+
+```bash
+ephemera version
+```
+
+```text
+ephemera v0.1.1
+```

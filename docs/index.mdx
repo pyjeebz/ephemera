@@ -1,0 +1,55 @@
+---
+title: "A throwaway microVM for every command"
+sidebarTitle: "Introduction"
+description: "Run tests, dev servers and coding agents in locked-down sandboxes on your own machines, while you keep editing locally."
+icon: "box"
+---
+
+ephemera runs your commands in a fresh Firecracker microVM, on a machine you own, and deletes it when the command ends. You keep editing on your laptop. The sandbox gets the files git tracks, has no network unless you allow it, and leaves a signed record of what it did.
+
+```bash
+# tests in a fresh microVM
+ephemera run -- npm test
+
+# one host allowed, everything else blocked
+ephemera run --allow registry.npmjs.org -- npm install
+
+# a dev server at localhost:3000
+ephemera dev -p 3000 --net -- npm run dev
+```
+
+What that gets you:
+
+- **Nothing runs on your laptop.** An agent's `rm -rf`, a postinstall script, a test that phones home: each one happens in a microVM that is gone a second later.
+- **No network unless you say so.** A sandbox has no network device at all. `--allow` lets named hosts through; every attempt, allowed or blocked, is logged.
+- **Fast.** A sandbox starts from a snapshot in about 65 ms. An idle one costs its host about 60 MB of memory.
+- **Your machines.** Sandboxes run on hosts you bring: a spare PC, a server, a cloud VM with nested virtualization. Your code goes from your laptop straight to them.
+- **A receipt.** When a sandbox is destroyed, its host signs a record of every command, file sync and network connection. `ephemera verify` checks it.
+
+<Columns cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the CLI, sign in, add a host and run your first sandbox.
+  </Card>
+  <Card title="How it works" icon="workflow" href="/how-it-works">
+    What runs on your laptop, on a host, and on the central server.
+  </Card>
+  <Card title="Security and data flow" icon="shield" href="/security">
+    Every hop your code takes, and what ephemera can and can't see.
+  </Card>
+  <Card title="Coding agents" icon="bot" href="/guides/agents">
+    Give Claude Code or any MCP agent a sandbox instead of your shell.
+  </Card>
+</Columns>
+
+## Hosted or self-hosted
+
+There are two ways to run the central server, the small service that keeps track of hosts and places sandboxes:
+
+- **Hosted**, at `api.ephemera.run`. Sign in with GitHub, add your hosts, and go. This is what the [quickstart](/quickstart) uses.
+- **Self-hosted.** Run `ephemera-server` yourself, next to your hosts. See [Self-hosting](/self-hosting).
+
+Either way the hosts are yours, and the central server never sees your files, commands' output or secrets.
+
+<Note>
+  ephemera is early: v0.1 is out, and the hosted central server is new. It's open source under Apache-2.0, on [GitHub](https://github.com/pyjeebz/ephemera).
+</Note>

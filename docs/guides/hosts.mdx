@@ -1,0 +1,104 @@
+---
+title: "Add a host"
+description: "Bring a Linux machine with KVM, join it to your account with a one-time code, and manage it."
+icon: "server"
+---
+
+A host is a machine you own that runs your sandboxes as Firecracker microVMs. Add as many as you like; each sandbox goes to the connected host running the fewest, among those with room.
+
+## What a host needs
+
+- **x86_64 Linux with KVM.** Ubuntu 24.04 is what ephemera is tested on. Check with `ls /dev/kvm`. A bare-metal server, a spare PC, or a cloud VM with nested virtualization all work.
+- **About 2 GB of disk** for the guest image, plus what sandboxes write. Each sandbox's disk is sparse: it takes only what's written.
+- **Memory** sets how many sandboxes fit. An idle sandbox costs about 60 MB, so a 16 GB machine holds well over a hundred idle ones. A busy one uses what its workload uses, up to its limit, 1 GB by default.
+- **A way for your laptop to reach it.** The host connects out to the central server by itself and needs no open port for it. But your laptop sends files and reads output straight from the host, on port 7701, so the two must share a network: the same LAN, or a VPN of your choice.
+
+## Join it to your account
+
+<Steps>
+  <Step title="Make a join code">
+    In the [dashboard](https://ephemera.run/dashboard/hosts), under Hosts, choose **Make a join code**. It looks like `ej_` and 26 letters and digits, works once, and lasts 15 minutes.
+
+    On a [central server you run](/self-hosting), make one with `sudo ephemera-server join-code create` instead.
+  </Step>
+
+  <Step title="Install the host agent">
+    {/* TODO: replace this step with the one-line installer at ephemera.run/host once it exists. bootstrap.sh also installs and joins Tailscale today, which the hosted setup shouldn't require. */}
+
+    On the machine, from a checkout of the repository, prepare it and install the host agent, joining with the code:
+
+    ```bash
+    git clone https://github.com/pyjeebz/ephemera.git && cd ephemera
+    sudo deploy/host/bootstrap.sh --hostname lab-1
+    echo 'ej_...' | sudo tee /root/join-code >/dev/null
+    sudo deploy/host/install.sh --role host --server-url https://api.ephemera.run \
+      --join-code-file /root/join-code --listen-ip 10.0.0.12
+    ```
+
+    `bootstrap.sh` checks KVM and installs Firecracker and Go. Today it also installs Tailscale and asks you to sign in to it, for SSH to the machine; a one-line host installer without that is on the way. `install.sh` builds the binaries and the guest image (a few minutes, with network), joins with the code, and runs the host agent as the `ephemera-host` systemd service. `--listen-ip` is the private address your laptop reaches the host on.
+  </Step>
+
+  <Step title="Check it">
+    The installer waits until the host is connected, then prints its key's fingerprint:
+
+    ```text
+    Key fingerprint: SHA256:qL3HdSf8UZXKjpVRma/Eo9jyxni9zZ8p6aDu+FxTJhA
+    ```
+
+    The dashboard shows the host online, with the same fingerprint. From your laptop:
+
+    ```bash
+    ephemera hosts
+    ```
+
+    ```text
+    NAME   ID             ONLINE  KEY                                                 PINNED
+    lab-1  host_0b275ef1  yes     SHA256:qL3HdSf8UZXKjpVRma/Eo9jyxni9zZ8p6aDu+FxTJhA  no
+    ```
+  </Step>
+</Steps>
+
+Delete the code file afterwards. It can't be used again anyway.
+
+## Already have ephemera-host
+
+To join a machine that has the binary:
+
+```bash
+sudo ephemera-host join --server https://api.ephemera.run ej_...
+```
+
+It makes the host's key in `/var/lib/ephemera/host.key` if there isn't one, joins, and saves what it joined as in `/var/lib/ephemera/host.json`. From then on the host signs in with that key; there's no shared secret. `--name` sets its name in your account; the default is the machine's hostname.
+
+## Keys and pinning
+
+Every host has an Ed25519 key. It signs the host in, makes the host's TLS certificate, and signs its records. The first time your CLI uses a host, it checks the key against the central server's record and pins it. If the key changes later, the CLI refuses the host until you accept it:
+
+```bash
+ephemera hosts trust lab-1
+```
+
+Do that only when you know why it changed, such as a rebuilt machine.
+
+## Settings
+
+Pass host agent flags through the installer, for example:
+
+```bash
+sudo deploy/host/install.sh --role host --server-url https://api.ephemera.run \
+  --host-args "--capacity 40 --max-lifetime 8h"
+```
+
+| Flag | Default | Meaning |
+| - | - | - |
+| `--capacity` | 20 | Most sandboxes on this host at once |
+| `--max-lifetime` | 24h | Destroy any sandbox this long after it was made |
+| `--max-snapshot-bytes` | 20 GB | Space for [setup snapshots](/guides/setup) |
+
+The [host reference](/reference/host) lists every flag.
+
+## Remove a host
+
+In the dashboard, under Hosts, choose **Remove**. Its sandboxes are destroyed, and it can't sign in again until it joins with a new code. With a token instead: `DELETE /v1/hosts/<id>`, see the [API reference](/reference/api).
+
+To take ephemera off the machine itself: `sudo deploy/host/install.sh --uninstall`, and `--purge` to delete its data and key too.
