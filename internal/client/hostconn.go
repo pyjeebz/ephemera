@@ -64,6 +64,7 @@ func hostHTTP(fp string) *http.Client {
 	t := upgradeTransport.Clone()
 	t.TLSClientConfig = &tls.Config{
 		MinVersion:         tls.VersionTLS13,
+		NextProtos:         []string{"http/1.1"},
 		InsecureSkipVerify: true, // checked below, against the pinned key
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {

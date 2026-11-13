@@ -217,6 +217,11 @@ var upgradeTransport = func() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.ForceAttemptHTTP2 = false
 	t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	// Offer only HTTP/1.1, in the handshake too: a proxy that is offered
+	// h2, as Fly's is, answers in h2, which has no upgrades.
+	t.Protocols = new(http.Protocols)
+	t.Protocols.SetHTTP1(true)
+	t.TLSClientConfig = &tls.Config{NextProtos: []string{"http/1.1"}}
 	return t
 }()
 
