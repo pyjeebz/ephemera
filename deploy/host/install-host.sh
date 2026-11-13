@@ -177,8 +177,13 @@ main() {
 		die "no join code: make one in the dashboard, under Hosts, and run: curl -fsSL https://ephemera.run/host | sudo sh -s -- <code>"
 	fi
 
-	# The server and the address the laptop reaches are kept from the last
-	# install unless given, so an upgrade changes neither.
+	# A host that joined keeps its server and name; the address the laptop
+	# reaches is kept from the last install unless given. So an upgrade
+	# changes none of them.
+	if [ -f "$IDENTITY" ]; then
+		[ -n "$server" ] || server="$(sed -n 's/.*"server": *"\([^"]*\)".*/\1/p' "$IDENTITY" | head -n1)"
+		[ -n "$name" ] || name="$(sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' "$IDENTITY" | head -n1)"
+	fi
 	if [ -f "$ENV_FILE" ]; then
 		[ -n "$server" ] || server="$(sed -n 's/^EPHEMERA_SERVER_URL=//p' "$ENV_FILE")"
 		[ -n "$address" ] || address="$(sed -n 's/^EPHEMERA_HOST_LISTEN=\(.*\):7701$/\1/p' "$ENV_FILE")"
@@ -267,6 +272,7 @@ main() {
 
 	# --- Guest image --------------------------------------------------------
 	# Built again whenever the guest agent changes, so host and guest match.
+	changed=""
 	mkdir -p "$DATA"
 	chmod 0755 "$DATA"
 	guest_sum="$(sha256sum "$src/ephemera-guest" | cut -d' ' -f1)"
@@ -277,26 +283,37 @@ main() {
 		say "building the guest image (a few minutes; it downloads Ubuntu's packages)"
 		bash "$src/build-image.sh" "$DATA/image" "$src/ephemera-guest"
 		echo "$guest_sum" >"$DATA/image/guest.sha256"
+		changed=1
 	fi
 
 	# --- Service --------------------------------------------------------------
-	if systemctl is-active --quiet ephemera-host.service; then
-		say "stopping the running host agent to upgrade it (its sandboxes are destroyed)"
-		systemctl stop ephemera-host.service
-	fi
-	install -m 0755 "$src/ephemera-host" "$BIN/ephemera-host"
 	mkdir -p /etc/ephemera
 	chmod 0700 /etc/ephemera
 	umask 077
-	cat >"$ENV_FILE.tmp" <<EOF
+	cat >"$ENV_FILE.new" <<EOF
 # Written by the ephemera host installer; run it again to change these.
 EPHEMERA_SERVER_URL=$server
 EPHEMERA_HOST_LISTEN=$address:7701
 EPHEMERA_HOST_URL=https://$address:7701
 EPHEMERA_HOST_ARGS=$host_args
 EOF
-	mv "$ENV_FILE.tmp" "$ENV_FILE"
 	umask 022
+	cmp -s "$src/ephemera-host" "$BIN/ephemera-host" || changed=1
+	cmp -s "$ENV_FILE.new" "$ENV_FILE" || changed=1
+	cmp -s "$src/ephemera-host.service" "$UNIT" || changed=1
+	running=""
+	systemctl is-active --quiet ephemera-host.service && running=1
+	if [ -n "$running" ] && [ -z "$changed" ]; then
+		rm -f "$ENV_FILE.new"
+		say "$name is up to date ($version) and running; left it alone"
+		exit 0
+	fi
+	if [ -n "$running" ]; then
+		say "stopping the running host agent to upgrade it (its sandboxes are destroyed)"
+		systemctl stop ephemera-host.service
+	fi
+	install -m 0755 "$src/ephemera-host" "$BIN/ephemera-host"
+	mv "$ENV_FILE.new" "$ENV_FILE"
 	install -m 0644 "$src/ephemera-host.service" "$UNIT"
 	systemctl daemon-reload
 	systemctl enable --quiet ephemera-host.service
