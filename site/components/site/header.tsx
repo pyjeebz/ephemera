@@ -1,14 +1,12 @@
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
-import { CHANGELOG, DOCS, GITHUB, SECURITY, SELF_HOST } from "@/lib/site"
+import { DOCS, GITHUB, SELF_HOST } from "@/lib/site"
 import { GitHubMark, PourMark } from "./icons"
 
 const NAV: [string, string][] = [
   ["Docs", DOCS],
   ["Self-host", SELF_HOST],
-  ["Security", SECURITY],
-  ["Changelog", CHANGELOG],
 ]
 
 export function Header() {

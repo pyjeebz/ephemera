@@ -104,8 +104,12 @@
 
 .header, main, .footer { position: relative; z-index: 1; }
 
-/* Header */
+/* Header: stays at the top while the page scrolls under it. */
+html { scroll-padding-top: 64px; }
 .header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: space-between;
