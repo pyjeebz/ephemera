@@ -4,7 +4,7 @@ import Link from "next/link"
 import { GitHubButton } from "@/components/app/github-button"
 import { TetrisDrop } from "@/components/app/tetris-drop"
 import { PourMark } from "@/components/site/icons"
-import { API } from "@/lib/sample"
+import { API } from "@/lib/api"
 
 export const metadata: Metadata = { title: "Sign in" }
 

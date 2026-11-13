@@ -2,8 +2,8 @@ import type { Metadata } from "next"
 import Link from "next/link"
 
 import { FirstRun } from "@/components/app/first-run"
-import { Onboarding, Waiting } from "@/components/app/onboarding"
-import { SandBox } from "@/components/app/sand-box"
+import { Onboarding } from "@/components/app/onboarding"
+import { RunWait } from "@/components/app/onboarding-live"
 
 export const metadata: Metadata = { title: "First run" }
 
@@ -18,12 +18,7 @@ export default function Run() {
     >
       <FirstRun />
       <div className="mt-10">
-        <Waiting
-          title="Waiting for your first sandbox…"
-          box={<SandBox cols={14} rows={9} mode="trickle" className="h-16 w-24" />}
-        >
-          Usually a second after you press enter. This page updates by itself.
-        </Waiting>
+        <RunWait />
       </div>
       <p className="mt-4 text-[13px] text-faint">
         Something went wrong? <code className="font-mono text-muted-foreground">ephemera doctor</code> says which step

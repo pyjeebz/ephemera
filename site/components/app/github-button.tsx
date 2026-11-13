@@ -12,14 +12,26 @@ import { Button } from "@/components/ui/button"
 // motion go straight there.
 const LAND_MS = 950
 
-export function GitHubButton({ href }: { href: string }) {
+// withNext passes on where to land after signing in, from this page's
+// ?next=, if it's a path on this site.
+function withNext(href: string) {
+  const next = new URLSearchParams(window.location.search).get("next")
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return href
+  return `${href}?next=${encodeURIComponent(next)}`
+}
+
+export function GitHubButton({ href: base }: { href: string }) {
   const [going, setGoing] = useState(false)
   return (
     <Button asChild size="xl" className="mt-8 w-full gap-2.5 bg-foreground text-background hover:bg-foreground/90">
       <a
-        href={href}
+        href={base}
         aria-busy={going}
         onClick={(e) => {
+          // Set before anything else, so a click that opens a new tab
+          // carries it too.
+          const href = withNext(base)
+          e.currentTarget.href = href
           if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
           if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
           e.preventDefault()

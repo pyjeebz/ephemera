@@ -1,8 +1,13 @@
+"use client"
+
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useState } from "react"
 
 import { PourMark } from "@/components/site/icons"
-import { ACCOUNT } from "@/lib/sample"
+import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { useAccount } from "./account"
 
 const NAV = [
   ["Overview", "/dashboard"],
@@ -64,15 +69,42 @@ export function DashboardHeader({ active }: { active: (typeof NAV)[number][0] })
           </Link>
         ))}
       </nav>
-      <div className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
-        <span className="hidden font-mono text-xs sm:inline">{ACCOUNT.login}</span>
-        <span
-          aria-hidden
-          className="flex size-7 items-center justify-center border border-border bg-card text-xs font-medium text-foreground"
-        >
-          {ACCOUNT.name[0]}
-        </span>
-      </div>
+      <Me />
     </header>
+  )
+}
+
+// Who is signed in, and the way out.
+function Me() {
+  const me = useAccount()
+  const router = useRouter()
+  const [leaving, setLeaving] = useState(false)
+  return (
+    <div className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
+      <button
+        type="button"
+        disabled={leaving || !me}
+        onClick={async () => {
+          setLeaving(true)
+          await api("/auth/logout", { method: "POST" }).catch(() => {})
+          router.replace("/")
+        }}
+        className="hidden text-xs transition-colors hover:text-foreground sm:inline"
+      >
+        {leaving ? "Signing out…" : "Sign out"}
+      </button>
+      <span className="hidden font-mono text-xs sm:inline">{me?.login ?? "\u00a0"}</span>
+      <span
+        aria-hidden
+        className="flex size-7 items-center justify-center overflow-hidden border border-border bg-card text-xs font-medium text-foreground"
+      >
+        {me?.avatar_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={me.avatar_url} alt="" className="size-full object-cover" />
+        ) : (
+          (me?.name ?? me?.login ?? "")[0]
+        )}
+      </span>
+    </div>
   )
 }

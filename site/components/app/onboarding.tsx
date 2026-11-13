@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 
+import { SignedIn } from "./account"
 import { OnboardingHeader } from "./app-header"
 import { Steps, type Step } from "./steps"
 
@@ -15,23 +16,25 @@ export function Onboarding({
 }: {
   step: Step | "done"
   progress: number
-  title: string
+  title: ReactNode
   rest: string
   lede: ReactNode
   children: ReactNode
 }) {
   return (
-    <div className="min-h-dvh">
-      <OnboardingHeader progress={progress} />
-      <main className="mx-auto w-full max-w-[600px] px-6 pb-24 pt-20">
-        <Steps current={step} />
-        <h1 className="mt-10 text-[34px] font-bold leading-[40px] tracking-[-0.025em]">
-          {title} <span className="text-muted-foreground">{rest}</span>
-        </h1>
-        <p className="mt-4 max-w-[520px] text-[15px] leading-[23px] text-muted-foreground">{lede}</p>
-        <div className="mt-10">{children}</div>
-      </main>
-    </div>
+    <SignedIn>
+      <div className="min-h-dvh">
+        <OnboardingHeader progress={progress} />
+        <main className="mx-auto w-full max-w-[600px] px-6 pb-24 pt-20">
+          <Steps current={step} />
+          <h1 className="mt-10 text-[34px] font-bold leading-[40px] tracking-[-0.025em]">
+            {title} <span className="text-muted-foreground">{rest}</span>
+          </h1>
+          <p className="mt-4 max-w-[520px] text-[15px] leading-[23px] text-muted-foreground">{lede}</p>
+          <div className="mt-10">{children}</div>
+        </main>
+      </div>
+    </SignedIn>
   )
 }
 

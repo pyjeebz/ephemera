@@ -1,8 +1,10 @@
 import Link from "next/link"
 import type { ReactNode } from "react"
 
-import type { Host, Run } from "@/lib/sample"
+import type { Host, Run } from "@/lib/api"
+import { network } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { SignedIn } from "./account"
 import { DashboardHeader } from "./app-header"
 import { SandBox } from "./sand-box"
 
@@ -14,10 +16,12 @@ export function Dashboard({
   children: ReactNode
 }) {
   return (
-    <div className="min-h-dvh">
-      <DashboardHeader active={active} />
-      <main className="mx-auto w-full max-w-[1200px] px-4 pb-24 pt-12 sm:px-8">{children}</main>
-    </div>
+    <SignedIn>
+      <div className="min-h-dvh">
+        <DashboardHeader active={active} />
+        <main className="mx-auto w-full max-w-[1200px] px-4 pb-24 pt-12 sm:px-8">{children}</main>
+      </div>
+    </SignedIn>
   )
 }
 
@@ -62,28 +66,32 @@ export function MoreLink({ href, children }: { href: string; children: ReactNode
   )
 }
 
-// How a run ended, in a word, with failures standing out.
+// How a run ended, in a word, with the ones that didn't finish standing
+// out. The CLI destroys a sandbox when its command ends, so "destroyed"
+// is the usual end.
+export const ENDED = {
+  destroyed: ["ended", "The CLI destroyed it when the command ended, or someone stopped it."],
+  limit: ["minutes ran out", "Its token used up the day’s sandbox-minutes."],
+  gone: ["host lost it", "Its host stopped reporting it, so it’s gone."],
+  failed: ["didn’t start", "The host couldn’t make it."],
+} as const
+
 export function Result({ run }: { run: Run }) {
-  if (run.ended === "exited") {
-    return (
-      <span className={cn("font-mono text-[13px]", run.exit === 0 ? "text-muted-foreground" : "text-destructive")}>
-        exit {run.exit}
-      </span>
-    )
-  }
-  const word = {
-    destroyed: "stopped",
-    limit: "minutes ran out",
-    gone: "host lost it",
-    expired: "too old",
-  }[run.ended]
-  return <span className="font-mono text-[13px] text-faint">{word}</span>
+  if (!run.ended_at) return <span className="font-mono text-[13px] text-sand">running</span>
+  const reason = run.end_reason ?? "destroyed"
+  return (
+    <span
+      className={cn("font-mono text-[13px]", reason === "destroyed" ? "text-muted-foreground" : "text-destructive")}
+    >
+      {ENDED[reason][0]}
+    </span>
+  )
 }
 
-export function Network({ run }: { run: Pick<Run, "allowed" | "blocked"> }) {
+export function Network({ run }: { run: Pick<Run, "spec"> }) {
   return (
-    <span className="font-mono text-[13px] text-muted-foreground">
-      {run.allowed} allowed · <span className={run.blocked ? "text-sand" : undefined}>{run.blocked} blocked</span>
+    <span className={cn("font-mono text-[13px]", run.spec.network === "open" ? "text-sand" : "text-muted-foreground")}>
+      {network(run.spec)}
     </span>
   )
 }
@@ -99,15 +107,31 @@ export function HostDot({ host }: { host: Pick<Host, "online"> }) {
 }
 
 export function Capacity({ host }: { host: Host }) {
+  const cap = host.capacity || 0
   return (
     <div className="flex items-center gap-3">
       <div aria-hidden className="h-1 w-20 bg-border">
-        <div className="h-full bg-sand" style={{ width: `${(host.running / host.capacity) * 100}%` }} />
+        <div className="h-full bg-sand" style={{ width: `${cap ? Math.min(1, host.running / cap) * 100 : 0}%` }} />
       </div>
       <span className="font-mono text-xs text-muted-foreground">
-        {host.running} of {host.capacity}
+        {host.running} of {cap || "?"}
       </span>
     </div>
+  )
+}
+
+// Empty is what a list says before there's anything in it.
+export function Empty({ children }: { children: ReactNode }) {
+  return <div className="border border-border px-5 py-8 text-[13px] text-muted-foreground">{children}</div>
+}
+
+// Problem shows that the API couldn't be read, and keeps trying.
+export function Problem({ error }: { error?: string }) {
+  if (!error) return null
+  return (
+    <p role="alert" className="mt-6 border border-destructive/40 px-4 py-3 text-[13px] text-destructive">
+      Couldn’t reach ephemera: {error}. Trying again.
+    </p>
   )
 }
 

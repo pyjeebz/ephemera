@@ -4,7 +4,7 @@ import Link from "next/link"
 import { InstallTabs } from "@/components/app/install-tabs"
 import { Label, Onboarding } from "@/components/app/onboarding"
 import { Button } from "@/components/ui/button"
-import { ACCOUNT } from "@/lib/sample"
+import { Welcome } from "@/components/app/onboarding-live"
 
 export const metadata: Metadata = { title: "Install the CLI" }
 
@@ -13,7 +13,7 @@ export default function Install() {
     <Onboarding
       step="install"
       progress={0.2}
-      title={`Welcome, ${ACCOUNT.name}.`}
+      title={<Welcome />}
       rest="Let’s pour your first sandbox."
       lede="A few minutes from here. Your code stays on your laptop; when you run something, only the files git tracks go in."
     >
