@@ -1,14 +1,15 @@
 ---
 title: "Network access"
 description: "Sandboxes have no network unless you allow it. Let through the hosts a command needs, and see everything it tried."
-icon: "network"
+sidebarTitle: "Network"
 ---
 
 A sandbox starts with no network at all. To let a command reach the hosts it needs, name them:
 
 ```bash
 ephemera run --allow registry.npmjs.org -- npm install
-ephemera run --allow github.com --allow '*.githubusercontent.com' -- ./fetch-deps.sh
+ephemera run --allow github.com --allow '*.githubusercontent.com' \
+  -- ./fetch-deps.sh
 ```
 
 Everything else stays blocked, and every attempt, allowed or blocked, is logged.

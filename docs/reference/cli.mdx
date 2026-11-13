@@ -1,7 +1,7 @@
 ---
 title: "ephemera"
 description: "Every command of the CLI, exactly as its help prints it."
-icon: "terminal"
+sidebarTitle: "CLI reference"
 ---
 
 `ephemera help` prints:
@@ -21,7 +21,8 @@ Usage:
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
   ephemera logout
-  ephemera hosts [trust <host>]     the account's hosts, and the keys this CLI has pinned
+  ephemera hosts                    the account's hosts, and the keys this CLI has pinned
+  ephemera trust <host>             pin a host's current key, after it was rebuilt or re-joined
   ephemera doctor [--json]          why the CLI can't reach the server or a host
   ephemera version
 
@@ -209,10 +210,18 @@ ephemera verify <record.json>
 
 ## ephemera hosts
 
-List the account's hosts and the keys this CLI has pinned. `trust` accepts a host's new key.
+List the account's hosts, their keys, and which this CLI has pinned.
 
 ```text
-ephemera hosts [trust <host>]
+ephemera hosts
+```
+
+## ephemera trust
+
+Pin a host's current key, after you rebuilt it or joined it again. See [Hosts](/guides/hosts#keys-and-pinning).
+
+```text
+ephemera trust <host>
 ```
 
 ## ephemera logout

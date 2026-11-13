@@ -1,8 +1,7 @@
 ---
 title: "A throwaway microVM for every command"
-sidebarTitle: "Introduction"
 description: "Run tests, dev servers and coding agents in locked-down sandboxes on your own machines, while you keep editing locally."
-icon: "box"
+sidebarTitle: "ephemera"
 ---
 
 ephemera runs your commands in a fresh Firecracker microVM, on a machine you own, and deletes it when the command ends. You keep editing on your laptop. The sandbox gets the files git tracks, has no network unless you allow it, and leaves a signed record of what it did.
@@ -27,16 +26,16 @@ What that gets you:
 - **A receipt.** When a sandbox is destroyed, its host signs a record of every command, file sync and network connection. `ephemera verify` checks it.
 
 <Columns cols={2}>
-  <Card title="Quickstart" icon="rocket" href="/quickstart">
+  <Card title="Quickstart" href="/quickstart">
     Install the CLI, sign in, add a host and run your first sandbox.
   </Card>
-  <Card title="How it works" icon="workflow" href="/how-it-works">
+  <Card title="How it works" href="/how-it-works">
     What runs on your laptop, on a host, and on the central server.
   </Card>
-  <Card title="Security and data flow" icon="shield" href="/security">
+  <Card title="Security and data flow" href="/security">
     Every hop your code takes, and what ephemera can and can't see.
   </Card>
-  <Card title="Coding agents" icon="bot" href="/guides/agents">
+  <Card title="Coding agents" href="/guides/agents">
     Give Claude Code or any MCP agent a sandbox instead of your shell.
   </Card>
 </Columns>

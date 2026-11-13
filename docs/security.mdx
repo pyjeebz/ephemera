@@ -1,7 +1,7 @@
 ---
 title: "Security and data flow"
 description: "Every hop your code takes, what the central server stores, and every secret in the system."
-icon: "shield"
+sidebarTitle: "Security and data flow"
 ---
 
 Your files go from your laptop to your host, over TLS 1.3 checked against the host's own key. Output comes back the same way. The central server, hosted at `api.ephemera.run` or run by you, places sandboxes and keeps lists: ids, names, times and keys. It never receives a file, a command's output or an environment value, and it can't open a sandbox.
@@ -37,7 +37,7 @@ The CLI connects to a host over TLS 1.3. The host's certificate is made from the
 1. The key in the certificate is the key the central server has on record for that host.
 2. It matches the key the CLI pinned the first time it used that host, in `known_hosts.json` next to your login, like ssh's known_hosts.
 
-If a host's key ever changes, the CLI refuses to connect and says so. `ephemera hosts trust <host>` accepts the new key on purpose, for a host you rebuilt. `EPHEMERA_STRICT_HOSTS=1` refuses hosts that aren't pinned yet, for machines that should only ever use hosts you've already checked.
+If a host's key ever changes, the CLI refuses to connect and says so. `ephemera trust <host>` accepts the new key on purpose, for a host you rebuilt. `EPHEMERA_STRICT_HOSTS=1` refuses hosts that aren't pinned yet, for machines that should only ever use hosts you've already checked.
 
 ## Who can open a sandbox
 

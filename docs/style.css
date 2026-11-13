@@ -1,0 +1,170 @@
+/* The ephemera.run palette on Mintlify's sequoia theme: warm grays on
+   near-black, square corners, monochrome code, sand only for selection. */
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root:root {
+  --gray-50: 239 237 230;
+  --gray-100: 239 237 230;
+  --gray-200: 228 226 219;
+  --gray-300: 196 193 184;
+  --gray-400: 162 159 148;
+  --gray-500: 140 137 127;
+  --gray-600: 104 101 93;
+  --gray-700: 70 68 62;
+  --gray-800: 44 42 37;
+  --gray-900: 23 22 20;
+  --gray-950: 14 13 11;
+  --primary: 239 237 230;
+  --primary-light: 239 237 230;
+  --primary-dark: 239 237 230;
+  --background-dark: 11 10 9;
+  --background-light: 11 10 9;
+
+  --mint-background: #171614;
+  --mint-foreground: #c9c6bc;
+  --mint-token-function: #efede6;
+  --mint-token-keyword: #efede6;
+  --mint-token-constant: #efede6;
+  --mint-token-string: #c9c6bc;
+  --mint-token-string-expression: #c9c6bc;
+  --mint-token-comment: #8c897f;
+  --mint-token-punctuation: #a29f94;
+  --mint-token-parameter: #c9c6bc;
+  --mint-token-link: #efede6;
+  --ephemera-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+*:not(.cursor-grab, .cursor-grab *),
+*:not(.cursor-grab, .cursor-grab *)::before,
+*:not(.cursor-grab, .cursor-grab *)::after {
+  border-radius: 0 !important;
+}
+
+code, kbd, pre, samp, .code-block, .code-block * {
+  font-family: var(--ephemera-mono) !important;
+}
+
+::selection {
+  background: #e6c287;
+  color: #0b0a09;
+}
+
+:focus-visible {
+  outline: 2px solid #e6c287;
+  outline-offset: 2px;
+}
+
+img.nav-logo {
+  height: 1.75rem !important;
+  width: auto !important;
+}
+
+/* Headings: no eyebrow, a heavier weight, a rule above each section. */
+#header .eyebrow {
+  display: none;
+}
+
+#page-title {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+#content > h2 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  border-top: 1px solid rgb(var(--gray-800));
+  padding-top: 1.5rem;
+  margin-top: 3rem;
+}
+
+#content > h3 {
+  font-weight: 600;
+}
+
+#content h2 code,
+#content h3 code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.95em;
+}
+
+/* Inline code and code blocks. */
+#content :not(pre) > code {
+  background: rgb(var(--gray-900));
+  border: 1px solid rgb(var(--gray-800));
+  color: rgb(var(--gray-50));
+  font-weight: 400;
+  padding: 0.1em 0.35em;
+}
+
+.code-block {
+  border: 1px solid rgb(var(--gray-800)) !important;
+  box-shadow: none !important;
+  --tw-ring-color: transparent !important;
+}
+
+/* Links: plain text, underlined. */
+#content a:not(.card):not([class*="button"]) {
+  color: rgb(var(--gray-50));
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgb(var(--gray-700));
+  font-weight: 400;
+}
+
+#content a:not(.card):not([class*="button"]):hover {
+  text-decoration-color: rgb(var(--gray-50));
+}
+
+[data-component-name="primary-header-button"] {
+  background: rgb(var(--gray-50)) !important;
+  color: #0b0a09 !important;
+  box-shadow: none !important;
+}
+
+/* Cards and callouts: flat panels. */
+.card, a.card, .callout {
+  background: rgb(var(--gray-950)) !important;
+  border: 1px solid rgb(var(--gray-800)) !important;
+  box-shadow: none !important;
+}
+
+a.card:hover {
+  border-color: rgb(var(--gray-700)) !important;
+}
+
+.callout [data-component-part="callout-content"] {
+  color: rgb(var(--gray-300)) !important;
+}
+
+.callout [data-component-part="callout-icon"] svg,
+.callout code {
+  color: rgb(var(--gray-50)) !important;
+}
+
+/* Tables and lists. */
+#content table {
+  border-collapse: collapse;
+}
+
+#content th {
+  color: rgb(var(--gray-400));
+  font-weight: 500;
+}
+
+#content th, #content td {
+  border-bottom: 1px solid rgb(var(--gray-800));
+}
+
+#content td:first-child code {
+  white-space: nowrap;
+}
+
+#content ul > li::before {
+  background-color: rgb(var(--gray-700)) !important;
+}
+
+#search-bar-entry {
+  box-shadow: none !important;
+}

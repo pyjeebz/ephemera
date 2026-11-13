@@ -1,12 +1,12 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "maple",
+  "theme": "sequoia",
   "name": "ephemera",
   "description": "Run commands, dev servers and coding agents in throwaway microVMs on your own machines.",
   "colors": {
-    "primary": "#8C6A3D",
-    "light": "#E6C287",
-    "dark": "#8C6A3D"
+    "primary": "#EFEDE6",
+    "light": "#EFEDE6",
+    "dark": "#EFEDE6"
   },
   "logo": {
     "light": "/logo/light.svg",
@@ -20,77 +20,105 @@
     "format": "woff2"
   },
   "appearance": {
-    "default": "dark"
+    "default": "dark",
+    "strict": true
   },
   "background": {
     "color": {
-      "light": "#FAF8F3",
+      "light": "#0B0A09",
       "dark": "#0B0A09"
     }
   },
-  "icons": {
-    "library": "lucide"
+  "styling": {
+    "codeblocks": {
+      "theme": "css-variables"
+    }
   },
   "navbar": {
     "links": [
-      { "type": "github", "href": "https://github.com/pyjeebz/ephemera" }
+      {
+        "label": "ephemera.run",
+        "href": "https://ephemera.run"
+      }
     ],
-    "primary": { "type": "button", "label": "Dashboard", "href": "https://ephemera.run/dashboard" }
+    "primary": {
+      "type": "button",
+      "label": "Get started",
+      "href": "https://ephemera.run/login"
+    }
   },
   "navigation": {
-    "tabs": [
+    "groups": [
       {
-        "tab": "Docs",
-        "groups": [
-          {
-            "group": "Get started",
-            "pages": ["index", "quickstart", "how-it-works", "security"]
-          },
-          {
-            "group": "Use it",
-            "pages": [
-              "guides/run",
-              "guides/dev",
-              "guides/network",
-              "guides/setup",
-              "guides/records",
-              "guides/agents",
-              "guides/troubleshooting"
-            ]
-          },
-          {
-            "group": "Hosts and access",
-            "pages": ["guides/hosts", "guides/tokens"]
-          },
-          {
-            "group": "Self-hosting",
-            "pages": ["self-hosting/index", "self-hosting/postgres-github", "self-hosting/operate"]
-          }
+        "group": "Get started",
+        "pages": [
+          "index",
+          "quickstart",
+          "guides/agents",
+          "how-it-works"
         ]
       },
       {
-        "tab": "Reference",
-        "groups": [
-          {
-            "group": "Commands",
-            "pages": ["reference/cli", "reference/host", "reference/server"]
-          },
-          {
-            "group": "Reference",
-            "pages": ["reference/configuration", "reference/api", "reference/install", "changelog"]
-          }
+        "group": "Guides",
+        "pages": [
+          "guides/run",
+          "guides/dev",
+          "guides/network",
+          "guides/setup",
+          "guides/records",
+          "guides/hosts",
+          "guides/tokens",
+          "self-hosting/index",
+          "guides/troubleshooting"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/cli",
+          "reference/host",
+          "reference/server",
+          "reference/api",
+          "reference/configuration",
+          "reference/install",
+          "self-hosting/operate",
+          "security",
+          "changelog"
         ]
       }
     ]
   },
   "footer": {
-    "socials": {
-      "github": "https://github.com/pyjeebz/ephemera",
-      "website": "https://ephemera.run"
-    }
+    "links": [
+      {
+        "header": "ephemera",
+        "items": [
+          {
+            "label": "ephemera.run",
+            "href": "https://ephemera.run"
+          },
+          {
+            "label": "Dashboard",
+            "href": "https://ephemera.run/dashboard"
+          },
+          {
+            "label": "GitHub",
+            "href": "https://github.com/pyjeebz/ephemera"
+          }
+        ]
+      }
+    ]
   },
   "contextual": {
-    "options": ["copy", "view", "claude", "chatgpt", "cursor"]
+    "options": [
+      "copy",
+      "view",
+      "claude",
+      "chatgpt",
+      "cursor",
+      "vscode"
+    ],
+    "display": "header"
   },
   "seo": {
     "metatags": {

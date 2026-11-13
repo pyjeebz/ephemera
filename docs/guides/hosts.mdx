@@ -1,7 +1,7 @@
 ---
 title: "Add a host"
 description: "Bring a Linux machine with KVM, join it to your account with a one-time code, and manage it."
-icon: "server"
+sidebarTitle: "Hosts"
 ---
 
 A host is a machine you own that runs your sandboxes as Firecracker microVMs. Add as many as you like; each sandbox goes to the connected host running the fewest, among those with room.
@@ -75,7 +75,7 @@ It makes the host's key in `/var/lib/ephemera/host.key` if there isn't one, join
 Every host has an Ed25519 key. It signs the host in, makes the host's TLS certificate, and signs its records. The first time your CLI uses a host, it checks the key against the central server's record and pins it. If the key changes later, the CLI refuses the host until you accept it:
 
 ```bash
-ephemera hosts trust lab-1
+ephemera trust lab-1
 ```
 
 Do that only when you know why it changed, such as a rebuilt machine.

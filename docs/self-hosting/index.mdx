@@ -1,8 +1,7 @@
 ---
 title: "Self-hosting"
-sidebarTitle: "Run your own server"
 description: "Run the central server yourself, next to your hosts, on one machine or many."
-icon: "house"
+sidebarTitle: "Self-hosting"
 ---
 
 The hosted central server at `api.ephemera.run` is one way to run ephemera. The other is to run `ephemera-server` yourself. It's the same program, open source, and it keeps everything on machines you control: tokens, hosts and the run history too.
@@ -77,7 +76,7 @@ Every token belongs to an account, and a token only sees and destroys its own ac
 sudo ephemera-server token create sam-laptop --account sam
 ```
 
-Each host belongs to the account whose join code it used, and runs only that account's sandboxes. To let people sign in with GitHub and make their own tokens, see [Postgres and GitHub sign-in](/self-hosting/postgres-github).
+Each host belongs to the account whose join code it used, and runs only that account's sandboxes.
 
 ## Add another host
 
@@ -108,4 +107,4 @@ To take a host out of an account, `DELETE /v1/hosts/<id>` with one of the accoun
 | `--host-args "..."` | Extra `ephemera-host` flags, such as `--capacity 40` (default 20), `--max-lifetime 8h` (default 24h) or `--max-snapshot-bytes` (default 20 GB) |
 | `--skip-image` | Don't build the guest image; it must already be in `/var/lib/ephemera/image` |
 
-Next: [Postgres and GitHub sign-in](/self-hosting/postgres-github), then [Upgrade and operate](/self-hosting/operate).
+Upgrades, logs, benchmarks and where everything lives: [Self-hosting reference](/self-hosting/operate).

@@ -1,7 +1,7 @@
 ---
 title: "Troubleshooting"
 description: "Start with ephemera doctor. Then the errors you're most likely to see, and what to do about each."
-icon: "stethoscope"
+sidebarTitle: "Troubleshooting"
 ---
 
 ## Run ephemera doctor
@@ -51,7 +51,7 @@ It checks, in order, the saved login, the central server, the token, and each ho
     The host presented a different key from the one this CLI pinned. If you rebuilt the host or joined it again, that's expected; accept the new key:
 
     ```bash
-    ephemera hosts trust lab-1
+    ephemera trust lab-1
     ```
 
     If you didn't, don't: something may be between you and the host.
