@@ -104,7 +104,7 @@ func TestChangedKeyRefused(t *testing.T) {
 	}
 	_, err = c.Connections(ctx, sb, 0)
 	var kc *client.HostKeyChangedError
-	if !errors.As(err, &kc) || !strings.Contains(err.Error(), "ephemera hosts trust box") {
+	if !errors.As(err, &kc) || !strings.Contains(err.Error(), "ephemera trust box") {
 		t.Fatalf("err = %v, want a key-changed error naming the fix", err)
 	}
 }

@@ -39,7 +39,7 @@ func (c *Client) hostKey(id, name, key string, pin bool) (string, error) {
 		return fp, nil
 	}
 	if c.Strict {
-		return "", fmt.Errorf("%w %s (%s): EPHEMERA_STRICT_HOSTS is set; pin it first with: ephemera hosts trust %s", ErrUnknownHost, name, fp, name)
+		return "", fmt.Errorf("%w %s (%s): EPHEMERA_STRICT_HOSTS is set; pin it first with: ephemera trust %s", ErrUnknownHost, name, fp, name)
 	}
 	if !pin {
 		return fp, nil

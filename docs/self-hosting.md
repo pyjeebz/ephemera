@@ -196,7 +196,7 @@ This stops the services and removes the binaries, but keeps `/var/lib/ephemera` 
 
 ## Security notes
 
-- **Files, commands and output go from your laptop to a host over TLS 1.3**, with a certificate made from the host's own key. The CLI checks that key against the one the host joined with, and pins it in `known_hosts.json` next to your login the first time, like ssh. If a host's key ever changes, the CLI refuses to connect and says so; `ephemera hosts trust <host>` accepts the new key on purpose. Set `EPHEMERA_STRICT_HOSTS=1` to refuse hosts not pinned yet, for CI. `ephemera hosts` lists each host's key and whether it's pinned.
+- **Files, commands and output go from your laptop to a host over TLS 1.3**, with a certificate made from the host's own key. The CLI checks that key against the one the host joined with, and pins it in `known_hosts.json` next to your login the first time, like ssh. If a host's key ever changes, the CLI refuses to connect and says so; `ephemera trust <host>` accepts the new key on purpose. Set `EPHEMERA_STRICT_HOSTS=1` to refuse hosts not pinned yet, for CI. `ephemera hosts` lists each host's key and whether it's pinned.
 - **The central server still serves plain HTTP**, including API tokens. Keep it on a private network, or put a TLS proxy in front of it. Don't serve it on a public address; the installer refuses to.
 - **A join code lets a machine become a host in your account.** Anyone who uses it first can receive your sandboxes, and the code in them. It works once, for 15 minutes; hand it over the way you would a password.
 - **A host's key is its identity.** `/var/lib/ephemera/host.key` signs the host in and signs its records. Keep it root-only. If it leaks, remove the host and join again with a new key.

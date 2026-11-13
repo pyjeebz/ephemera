@@ -95,7 +95,7 @@ type HostKeyChangedError struct {
 }
 
 func (e *HostKeyChangedError) Error() string {
-	return fmt.Sprintf("host %s's key changed: pinned %s, now %s. If you rebuilt or re-joined it, accept the new key with: ephemera hosts trust %s. If not, don't: something may be between you and the host",
+	return fmt.Sprintf("host %s's key changed: pinned %s, now %s. If you rebuilt or re-joined it, accept the new key with: ephemera trust %s. If not, don't: something may be between you and the host",
 		e.Name, e.Pinned, e.Now, e.Name)
 }
 

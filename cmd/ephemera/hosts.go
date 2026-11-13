@@ -17,7 +17,7 @@ import (
 // pinned host keys.
 func needsHosts(cmd string) bool {
 	switch cmd {
-	case "run", "dev", "mcp", "hosts", "router", "routes", "focus":
+	case "run", "dev", "mcp", "hosts", "trust", "router", "routes", "focus":
 		return true
 	}
 	return false
@@ -36,37 +36,48 @@ func loadPins() (*client.Pins, error) {
 	return pins, nil
 }
 
-// cmdHosts lists the account's hosts with their keys and pins, or, with
-// "trust", pins the key the central server has for a host now.
-func cmdHosts(ctx context.Context, c *client.Client, args []string, stdout, stderr io.Writer) int {
+// cmdTrust pins the key the central server has for a host now, by name
+// or id.
+func cmdTrust(ctx context.Context, c *client.Client, args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "Usage: ephemera trust <host>")
+		return 2
+	}
 	hosts, err := c.Hosts(ctx)
 	if err != nil {
 		fmt.Fprintln(stderr, "ephemera:", err)
 		return exitFailure
 	}
-	if len(args) == 2 && args[0] == "trust" {
-		for _, h := range hosts {
-			if h.Name != args[1] && h.ID != args[1] {
-				continue
-			}
-			fp, err := record.Fingerprint(h.PublicKey)
-			if err != nil {
-				fmt.Fprintln(stderr, "ephemera: host", h.Name+":", err)
-				return exitFailure
-			}
-			if err := c.Pins.Set(h.ID, client.Pin{Name: h.Name, Fingerprint: fp, FirstSeen: time.Now().UTC()}); err != nil {
-				fmt.Fprintln(stderr, "ephemera:", err)
-				return exitFailure
-			}
-			fmt.Fprintf(stdout, "Pinned %s (%s): %s\n", h.Name, h.ID, fp)
-			return 0
+	for _, h := range hosts {
+		if h.Name != args[0] && h.ID != args[0] {
+			continue
 		}
-		fmt.Fprintf(stderr, "ephemera: no host %q in this account; ephemera hosts lists them\n", args[1])
-		return exitFailure
+		fp, err := record.Fingerprint(h.PublicKey)
+		if err != nil {
+			fmt.Fprintln(stderr, "ephemera: host", h.Name+":", err)
+			return exitFailure
+		}
+		if err := c.Pins.Set(h.ID, client.Pin{Name: h.Name, Fingerprint: fp, FirstSeen: time.Now().UTC()}); err != nil {
+			fmt.Fprintln(stderr, "ephemera:", err)
+			return exitFailure
+		}
+		fmt.Fprintf(stdout, "Pinned %s (%s): %s\n", h.Name, h.ID, fp)
+		return 0
 	}
+	fmt.Fprintf(stderr, "ephemera: no host %q in this account; ephemera hosts lists them\n", args[0])
+	return exitFailure
+}
+
+// cmdHosts lists the account's hosts with their keys and pins.
+func cmdHosts(ctx context.Context, c *client.Client, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
-		fmt.Fprintln(stderr, "Usage: ephemera hosts [trust <name-or-id>]")
+		fmt.Fprintln(stderr, "Usage: ephemera hosts")
 		return 2
+	}
+	hosts, err := c.Hosts(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, "ephemera:", err)
+		return exitFailure
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tID\tONLINE\tKEY\tPINNED")

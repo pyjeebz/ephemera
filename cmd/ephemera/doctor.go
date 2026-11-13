@@ -261,7 +261,7 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 			fail := check{Name: "hosts", Status: "fail", Detail: fmt.Sprintf("%s is online, but %v", h.Name, err)}
 			if keyChanged(err) {
 				fail.Detail = err.Error()
-				fail.Fix = "If you rebuilt or re-joined it, accept the new key: ephemera hosts trust " + h.Name
+				fail.Fix = "If you rebuilt or re-joined it, accept the new key: ephemera trust " + h.Name
 			}
 			out = append(out, fail)
 			continue

@@ -43,7 +43,8 @@ Usage:
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
   ephemera logout
-  ephemera hosts [trust <host>]     the account's hosts, and the keys this CLI has pinned
+  ephemera hosts                    the account's hosts, and the keys this CLI has pinned
+  ephemera trust <host>             pin a host's current key, after it was rebuilt or re-joined
   ephemera doctor [--json]          why the CLI can't reach the server or a host
   ephemera version
 
@@ -102,6 +103,8 @@ func realMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return cmdVerify(ctx, c, args[1:], stdout, stderr)
 	case "hosts":
 		return cmdHosts(ctx, c, args[1:], stdout, stderr)
+	case "trust":
+		return cmdTrust(ctx, c, args[1:], stdout, stderr)
 	case "login":
 		return cmdLogin(ctx, args[1:], stdin, stdout, stderr)
 	case "logout":
