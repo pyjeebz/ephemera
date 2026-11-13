@@ -5,7 +5,7 @@
 ### Added
 
 - `ephemera doctor` says why the CLI can't run a sandbox. It checks the login, the central server, the token and each host in turn, and prints a fix for the first that fails. Exit 1 if a check fails. `--json` prints the same checks.
-- `GET /v1/hosts` returns each host's `url`, `online` (true while it checks in often enough to get sandboxes), `capacity`, `version`, `running` (how many of the account's sandboxes are on it) and `joined`.
+- `GET /v1/hosts` returns each host's `url`, `online` (true while it checks in often enough to get sandboxes), `capacity`, `version`, `running` (how many of the account's sandboxes are on it), `joined` and the key's `fingerprint`.
 - The dashboard, signed in with a session, can use `GET /v1/hosts`, `GET /v1/sandboxes` and `GET /v1/usage`, stop sandboxes and remove hosts, all for the whole account. A session can't make sandboxes. `GET /v1/usage` with a session adds up the whole account's day.
 - `GET /v1/runs` lists the account's sandboxes, running and finished, newest first, 100 at a time; `?before=<time>` pages back. Each has its host, token name, spec, start and end, and why it ended. Postgres only, as files don't keep finished sandboxes.
 - Postgres. With `EPHEMERA_DATABASE_URL` (or `--database`), the central server keeps tokens, sandboxes and usage in Postgres instead of files, and keeps finished sandboxes as a history. It creates and updates its tables itself. Files stay the default.

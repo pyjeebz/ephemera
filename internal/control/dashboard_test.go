@@ -8,9 +8,20 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/control"
+	"github.com/pyjeebz/ephemera/internal/host"
 	"github.com/pyjeebz/ephemera/internal/host/hosttest"
 	"github.com/pyjeebz/ephemera/internal/pgstore/pgtest"
+	"github.com/pyjeebz/ephemera/internal/record"
 )
+
+func fingerprint(t *testing.T, hs *host.Server) string {
+	t.Helper()
+	fp, err := record.FingerprintKey(hs.Key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fp
+}
 
 // The dashboard, signed in with a session, sees and stops its own
 // account's hosts and sandboxes, and nobody else's. It can't make
@@ -50,7 +61,7 @@ func TestDashboardSession(t *testing.T) {
 
 	hosts := decode[[]api.Host](t, w.do("GET", "/v1/hosts", session(octo, ""), nil))
 	if len(hosts) != 1 || !hosts[0].Online || hosts[0].Running != 1 || hosts[0].Capacity != 5 ||
-		hosts[0].Version != "v9.9.9" || hosts[0].Joined.IsZero() {
+		hosts[0].Version != "v9.9.9" || hosts[0].Joined.IsZero() || hosts[0].Fingerprint != fingerprint(t, hs) {
 		t.Errorf("octo's hosts = %+v", hosts)
 	}
 	if got := decode[[]api.Host](t, w.do("GET", "/v1/hosts", session(other, ""), nil)); len(got) != 0 {

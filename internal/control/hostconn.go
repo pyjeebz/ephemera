@@ -19,6 +19,7 @@ import (
 
 	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/host"
+	"github.com/pyjeebz/ephemera/internal/record"
 )
 
 // hostState is a joined host the server has heard from.
@@ -348,6 +349,7 @@ func (s *Server) hostList(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	for _, rec := range recs {
 		h := api.Host{ID: rec.ID, Name: rec.Name, PublicKey: rec.PublicKey, Joined: rec.Joined.UTC()}
+		h.Fingerprint, _ = record.Fingerprint(rec.PublicKey)
 		if st := s.hosts[rec.ID]; st != nil {
 			h.LastSeen, h.URL, h.Online = st.lastSeen.UTC(), st.URL, st.conn != nil
 			h.Capacity, h.Version = st.Capacity, st.Version

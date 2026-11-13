@@ -228,6 +228,8 @@ type Host struct {
 	// Running is how many of the account's sandboxes are on it now.
 	Running int       `json:"running"`
 	Joined  time.Time `json:"joined"`
+	// Fingerprint is PublicKey as ephemera-host join printed it.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // Run is a sandbox in the run history, running or finished. The central
