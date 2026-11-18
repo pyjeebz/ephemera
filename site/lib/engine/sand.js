@@ -25,7 +25,7 @@ const word = (hex) => {
 TONES.forEach((t, i) => { PAL[i + 1] = word(t); });
 PAL[UNTRUSTED] = word('#C4633F');
 PAL[FLASH] = word('#FFE7B8');
-PAL[WALL] = word('#2C2A25');
+PAL[WALL] = word('#2C2C2C');
 
 const tone = () => 1 + ((Math.random() * 6) | 0);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -266,7 +266,7 @@ function footerScene() {
   const canvas = document.getElementById('pit-sand');
   if (!pit || !canvas) return null;
 
-  const MOLD = word('#171614');
+  const MOLD = word('#1A1A1A');
   const STATES = { hold: 3 * 60, empty: 1.2 * 60 };
   let grid, view, entry, glyphCells, columns;
   let drops = []; // grains falling from the top of the footer into the letters

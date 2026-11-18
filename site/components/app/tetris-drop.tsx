@@ -76,9 +76,9 @@ const DISSOLVE = [4.2, 6.2] // cube by cube, into sand
 // Night-desert palette, as on the rest of the site.
 const INK = "#EFEDE6"
 const DIM = "#8C897F"
-const RULE = "#2C2A25"
+const RULE = "#2C2C2C"
 const SAND = ["#F3DCAE", "#E6C287", "#D9B070", "#C99B5A", "#B98A4D", "#A67840"]
-const FACE = { top: "#2A2722", left: "#1E1C19", right: "#161513" }
+const FACE = { top: "#2A2A2A", left: "#202020", right: "#181818" }
 
 // The idle loop runs a little slower than the beats above.
 const SPEED = 0.85
