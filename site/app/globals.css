@@ -450,3 +450,11 @@ a.inline { color: var(--bone); text-decoration: underline; text-underline-offset
   .pour-host:hover .pour-grain,
   .pour-host:focus-visible .pour-grain { animation: none; }
 }
+
+/* The overview's day in sand: the grains of sandboxes still running
+   breathe. */
+.grain-live { animation: grain-live 2.4s ease-in-out infinite; }
+@keyframes grain-live { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .grain-live { animation: none; }
+}

@@ -24,3 +24,15 @@ export const AGENT_PROMPT = `Set up ephemera for this project, so your shell com
 4. Add ephemera as an MCP server. For Claude Code: \`claude mcp add ephemera -- ephemera mcp\`. Other agents take { "command": "ephemera", "args": ["mcp"] } in their MCP settings.
 
 Docs: ${MCP}`
+
+// What the dashboard's "Copy setup prompt" copies: the same as above for an
+// account on ephemera.run, where signing in is a browser approval.
+export const DASHBOARD_PROMPT = `Set up ephemera for this project, so your shell commands run in throwaway sandboxes instead of on my machine.
+
+1. Install the CLI: ${INSTALL}
+2. Run \`ephemera login\`. It prints a code and opens a page; tell me to approve it there. Don't print or store any token yourself.
+3. Run \`ephemera doctor\` and fix anything it reports.
+4. Add ephemera as an MCP server. For Claude Code: \`claude mcp add ephemera -- ephemera mcp\`. Other agents take { "command": "ephemera", "args": ["mcp"] } in their MCP settings.
+5. Name each sandbox for what it's doing, like \`--name api-tests\`, so I can tell them apart in the dashboard.
+
+Docs: ${MCP}`

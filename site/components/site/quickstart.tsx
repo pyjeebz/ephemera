@@ -59,7 +59,7 @@ const STEPS: { title: string; body: ReactNode; link: [string, string]; script: L
       ["", "  ✓ 41 tests passed"],
       ["", "ephemera: network: 14 allowed, 1 blocked"],
       ["!", "ephemera:   blocked telemetry.example.com:443 (not on the allow list)"],
-      ["", "ephemera: signed record saved to ~/.config/ephemera/records/sbx_6abe91d8.json"],
+      ["", "ephemera: signed record saved to ~/.config/ephemera/records/amber-dune-42-sbx_6abe91d8.json"],
       ["$", 'ephemera run --setup "npm ci" --allow registry.npmjs.org -- npm test'],
       ["", "ephemera: started from the project snapshot; setup skipped"],
       ["", "  ✓ 41 tests passed"],

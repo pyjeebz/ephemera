@@ -1,22 +1,10 @@
 "use client"
 
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { useState } from "react"
 
 import { PourMark } from "@/components/site/icons"
-import { api } from "@/lib/api"
-import { cn } from "@/lib/utils"
-import { useAccount } from "./account"
 
-const NAV = [
-  ["Overview", "/dashboard"],
-  ["Runs", "/dashboard/runs"],
-  ["Hosts", "/dashboard/hosts"],
-  ["Tokens", "/dashboard/tokens"],
-] as const
-
-function Logo() {
+export function Logo() {
   return (
     <Link
       href="/"
@@ -44,67 +32,5 @@ export function OnboardingHeader({ progress }: { progress: number }) {
         style={{ width: `${Math.round(progress * 100)}%` }}
       />
     </header>
-  )
-}
-
-// The dashboard header, with the section that's open.
-export function DashboardHeader({ active }: { active: (typeof NAV)[number][0] }) {
-  return (
-    <header className="flex h-14 items-center gap-5 border-b border-border px-4 sm:gap-10 sm:px-8">
-      <Logo />
-      <nav className="flex h-full items-stretch gap-4 text-sm sm:gap-7">
-        {NAV.map(([label, href]) => (
-          <Link
-            key={label}
-            href={href}
-            aria-current={label === active ? "page" : undefined}
-            className={cn(
-              "-mb-px flex items-center border-b transition-colors duration-150",
-              label === active
-                ? "border-sand text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {label}
-          </Link>
-        ))}
-      </nav>
-      <Me />
-    </header>
-  )
-}
-
-// Who is signed in, and the way out.
-function Me() {
-  const me = useAccount()
-  const router = useRouter()
-  const [leaving, setLeaving] = useState(false)
-  return (
-    <div className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
-      <button
-        type="button"
-        disabled={leaving || !me}
-        onClick={async () => {
-          setLeaving(true)
-          await api("/auth/logout", { method: "POST" }).catch(() => {})
-          router.replace("/")
-        }}
-        className="hidden text-xs transition-colors hover:text-foreground sm:inline"
-      >
-        {leaving ? "Signing out…" : "Sign out"}
-      </button>
-      <span className="hidden font-mono text-xs sm:inline">{me?.login ?? "\u00a0"}</span>
-      <span
-        aria-hidden
-        className="flex size-7 items-center justify-center overflow-hidden border border-border bg-card text-xs font-medium text-foreground"
-      >
-        {me?.avatar_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={me.avatar_url} alt="" className="size-full object-cover" />
-        ) : (
-          (me?.name ?? me?.login ?? "")[0]
-        )}
-      </span>
-    </div>
   )
 }

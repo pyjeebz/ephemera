@@ -68,3 +68,9 @@ export function network(spec: Spec) {
 export function firstName(name: string | undefined, login: string) {
   return name?.trim().split(/\s+/)[0] || login
 }
+
+// sandboxName is what a sandbox is called: its name, or its id from
+// before sandboxes had names.
+export function sandboxName(s: { id: string; name?: string }) {
+  return s.name || s.id
+}

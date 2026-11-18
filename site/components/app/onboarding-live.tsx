@@ -7,7 +7,7 @@ import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { type Host, type Run, type Token } from "@/lib/api"
 import { useApi } from "@/lib/use-api"
-import { duration, firstName, network, since } from "@/lib/format"
+import { duration, firstName, network, sandboxName, since } from "@/lib/format"
 import { useNow } from "@/lib/use-now"
 import { useAccount } from "./account"
 import { CopyLine } from "./copy-line"
@@ -226,7 +226,7 @@ export function DoneSummary() {
       <p className="mt-4 text-[13px] leading-5 text-muted-foreground">
         The record of what ran, and what its network tried, is on your laptop. Check it with{" "}
         <code className="font-mono whitespace-normal! text-foreground [overflow-wrap:anywhere]">
-          ephemera verify ~/.config/ephemera/records/{run.id}.json
+          ephemera verify {sandboxName(run)}
         </code>
       </p>
     </>

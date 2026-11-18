@@ -29,6 +29,9 @@ export type Spec = {
 
 export type Sandbox = {
   id: string
+  // name is what the CLI was told with --name, or one it made up. Runs
+  // from before names existed have none.
+  name?: string
   host: string
   host_id: string
   spec: Spec
@@ -38,6 +41,7 @@ export type Sandbox = {
 
 export type Run = {
   id: string
+  name?: string
   host: string
   host_id: string
   owner: string

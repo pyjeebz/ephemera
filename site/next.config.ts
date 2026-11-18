@@ -8,6 +8,8 @@ const nextConfig: NextConfig = {
   // install script. Temporary, so a new release is picked up at once.
   async redirects() {
     return [
+      // Runs became the Sandboxes page.
+      { source: "/dashboard/runs", destination: "/dashboard/sandboxes", permanent: false },
       {
         source: "/install",
         destination: "https://github.com/pyjeebz/ephemera/releases/latest/download/install.sh",

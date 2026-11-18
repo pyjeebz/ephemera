@@ -100,7 +100,7 @@ export function Features() {
               connections, and that the disk was deleted. Output and file contents are never recorded.
             </p>
             <div className="mono-list">
-              <span>$ ephemera verify sbx_6abe91d8.json</span>
+              <span>$ ephemera verify api-tests</span>
               <span className="dim">Verified: signed by host host-1; the key is the one the central server has for this host.</span>
             </div>
           </div>
