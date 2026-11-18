@@ -98,9 +98,15 @@ func (c *Client) server() string { return strings.TrimRight(c.Server, "/") }
 // access token here and sends the server only its hash, so the server
 // can't open the sandbox; only this client can.
 func (c *Client) Create(ctx context.Context, spec api.Spec) (*api.Sandbox, error) {
+	return c.CreateNamed(ctx, spec, "")
+}
+
+// CreateNamed is Create with a name for the sandbox; empty lets the server
+// pick one, like amber-dune-42.
+func (c *Client) CreateNamed(ctx context.Context, spec api.Spec, name string) (*api.Sandbox, error) {
 	token := api.NewToken()
 	resp, err := c.do(ctx, http.MethodPost, c.server()+"/v1/sandboxes", c.Token,
-		jsonBody(api.CreateSandboxRequest{Spec: spec, TokenHash: api.HashSandboxToken(token)}), "application/json")
+		jsonBody(api.CreateSandboxRequest{Name: name, Spec: spec, TokenHash: api.HashSandboxToken(token)}), "application/json")
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox: %w", err)
 	}

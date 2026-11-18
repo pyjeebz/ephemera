@@ -35,9 +35,9 @@ You need the CLI installed and signed in first: see the [quickstart](/quickstart
 
 | Tool | Does |
 | - | - |
-| `run_command` | Runs a shell command in a fresh sandbox holding the worktree's files, then destroys it. Returns the exit code, output, a network summary naming blocked hosts, and the record's path |
-| `list_sandboxes` | Lists running sandboxes |
-| `destroy_sandbox` | Destroys a sandbox by `id` and saves its record |
+| `run_command` | Runs a shell command in a fresh sandbox holding the worktree's files, then destroys it. Returns the exit code, output, a network summary naming blocked hosts, and the record's path. `name` names the sandbox, like `api-tests` |
+| `list_sandboxes` | Lists running sandboxes, by name |
+| `destroy_sandbox` | Destroys a sandbox by name or id (`id`) and saves its record |
 | `verify_record` | Checks a record at `path` against the host keys the central server knows, and shows what the sandbox did |
 
 `run_command` takes:

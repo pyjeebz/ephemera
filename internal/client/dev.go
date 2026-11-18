@@ -69,6 +69,9 @@ type DevOptions struct {
 	Router      *router.Client
 	StartRouter func() error
 	Name        string
+	// SandboxName is what to call the sandbox; empty lets the server pick
+	// one.
+	SandboxName string
 	Stdout      io.Writer
 	Stderr      io.Writer
 	// Events receives progress: "sandbox", "synced", "forwarding",
@@ -134,11 +137,11 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 		}
 	}
 
-	sb, err := c.Create(ctx, o.Spec)
+	sb, err := c.CreateNamed(ctx, o.Spec, o.SandboxName)
 	if err != nil {
 		return 0, err
 	}
-	emit("sandbox", map[string]any{"id": sb.ID, "host": sb.Host})
+	emit("sandbox", map[string]any{"id": sb.ID, "name": sb.Name, "host": sb.Host})
 	defer func() {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
@@ -150,7 +153,7 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 			err = errors.Join(err, derr)
 			return
 		}
-		emit("destroyed", map[string]any{"id": sb.ID})
+		emit("destroyed", map[string]any{"id": sb.ID, "name": sb.Name})
 	}()
 
 	synced := func() error {

@@ -144,6 +144,7 @@ var tools = []map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":         map[string]any{"type": "string", "description": "shell command, run with sh -c in the worktree"},
+				"name":            map[string]any{"type": "string", "description": "name the sandbox for what it's for, e.g. api-tests: lowercase letters, digits and hyphens, at most 40 (default: one like amber-dune-42)"},
 				"allow":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "hosts it may reach, e.g. registry.npmjs.org or *.github.com"},
 				"network_open":    map[string]any{"type": "boolean", "description": "allow any public host instead of a list"},
 				"timeout_seconds": map[string]any{"type": "integer", "description": "stop the command after this long (exit code 124)"},
@@ -164,7 +165,7 @@ var tools = []map[string]any{
 		"description": "Destroy a sandbox and save its signed record.",
 		"inputSchema": map[string]any{
 			"type":       "object",
-			"properties": map[string]any{"id": map[string]any{"type": "string"}},
+			"properties": map[string]any{"id": map[string]any{"type": "string", "description": "the sandbox's name, like api-tests, or its id"}},
 			"required":   []string{"id"},
 		},
 	},
@@ -201,7 +202,11 @@ func (s *Server) call(ctx context.Context, name string, args json.RawMessage) ma
 			b.WriteString("no sandboxes are running")
 		}
 		for _, sb := range list {
-			fmt.Fprintf(&b, "%s on %s, network %s, up %v\n", sb.ID, sb.Host, sb.Spec.Network, time.Since(sb.CreatedAt).Round(time.Second))
+			name := sb.Name
+			if name == "" {
+				name = sb.ID
+			}
+			fmt.Fprintf(&b, "%s (%s) on %s, network %s, up %v\n", name, sb.ID, sb.Host, sb.Spec.Network, time.Since(sb.CreatedAt).Round(time.Second))
 		}
 		return textResult(b.String(), false, map[string]any{"sandboxes": list})
 	case "destroy_sandbox":
@@ -209,7 +214,7 @@ func (s *Server) call(ctx context.Context, name string, args json.RawMessage) ma
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(args, &a) != nil || a.ID == "" {
-			return textResult("id is required", true, nil)
+			return textResult("id is required: the sandbox's name or id", true, nil)
 		}
 		sr, err := s.Client.Destroy(ctx, a.ID)
 		if err != nil {
@@ -244,6 +249,7 @@ func (s *Server) call(ctx context.Context, name string, args json.RawMessage) ma
 
 type runArgs struct {
 	Command        string            `json:"command"`
+	Name           string            `json:"name"`
 	Allow          []string          `json:"allow"`
 	NetworkOpen    bool              `json:"network_open"`
 	TimeoutSeconds int               `json:"timeout_seconds"`
@@ -262,6 +268,11 @@ func (s *Server) runCommand(ctx context.Context, raw json.RawMessage) map[string
 	}
 	if a.TimeoutSeconds < 0 {
 		return textResult("timeout_seconds cannot be negative", true, nil)
+	}
+	if a.Name != "" {
+		if err := api.ValidName(a.Name); err != nil {
+			return textResult(err.Error(), true, nil)
+		}
 	}
 	spec := api.Spec{}
 	switch {
@@ -282,7 +293,7 @@ func (s *Server) runCommand(ctx context.Context, raw json.RawMessage) map[string
 		dir = s.Dir
 	}
 	stdout, stderr := &tailBuffer{max: MaxOutput}, &tailBuffer{max: MaxOutput}
-	res, err := s.Client.Run(ctx, client.RunOptions{Dir: dir, Include: a.Include, Spec: spec, Exec: exec, Stdout: stdout, Stderr: stderr})
+	res, err := s.Client.Run(ctx, client.RunOptions{Name: a.Name, Dir: dir, Include: a.Include, Spec: spec, Exec: exec, Stdout: stdout, Stderr: stderr})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			err = errors.New("cancelled; the sandbox was destroyed")
@@ -321,7 +332,7 @@ func (s *Server) runCommand(ctx context.Context, raw json.RawMessage) map[string
 	}
 	return textResult(b.String(), false, map[string]any{
 		"exit_code": res.ExitCode, "stdout": stdout.String(), "stderr": stderr.String(),
-		"sandbox": res.SandboxID, "duration_ms": res.Duration.Milliseconds(),
+		"sandbox": res.SandboxID, "name": res.SandboxName, "duration_ms": res.Duration.Milliseconds(),
 		"network": map[string]any{"allowed": allowed, "blocked": blocked}, "record": recPath,
 	})
 }

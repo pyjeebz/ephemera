@@ -38,7 +38,7 @@ Usage:
   ephemera focus <session>          make plain localhost show that session
   ephemera ls [--json]
   ephemera usage                    sandbox-minutes used today and this token's limits
-  ephemera rm <sandbox-id>...
+  ephemera rm <sandbox>...          destroy sandboxes, by name or id
   ephemera verify <record.json>
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
@@ -138,6 +138,7 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
 // sandboxFlags are the flags run and dev share.
 type sandboxFlags struct {
+	name    string
 	spec    api.Spec
 	include stringList
 	env     stringList
@@ -152,6 +153,7 @@ type sandboxFlags struct {
 }
 
 func (f *sandboxFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&f.name, "name", "", "name the sandbox for what it's for, e.g. api-tests: lowercase letters, digits and hyphens (default: one like amber-dune-42); dev: also the session name for shared ports (default: the git branch)")
 	fs.StringVar(&f.spec.Image, "image", "", "sandbox image (default: the host's default)")
 	fs.Float64Var(&f.spec.CPUs, "cpus", 0, "CPU limit, e.g. 2 or 0.5 (default: no limit)")
 	fs.IntVar(&f.spec.MemoryMB, "memory", 0, "memory limit in MB (default: no limit)")
@@ -180,6 +182,11 @@ func (f *sandboxFlags) buildSetup(stderr io.Writer) (*client.Setup, error) {
 }
 
 func (f *sandboxFlags) check() error {
+	if f.name != "" {
+		if err := api.ValidName(f.name); err != nil {
+			return fmt.Errorf("--name: %w", err)
+		}
+	}
 	if f.openNet && len(f.allow) > 0 {
 		return fmt.Errorf("use either --net (any host) or --allow (listed hosts), not both")
 	}
@@ -244,6 +251,7 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 	}
 
 	opts := client.RunOptions{
+		Name:    f.name,
 		Dir:     f.dir,
 		Include: f.include,
 		Spec:    f.spec,
@@ -292,7 +300,7 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		}
 	}
 	if f.jsonOut {
-		ev := map[string]any{"code": res.ExitCode, "duration_ms": res.Duration.Milliseconds(), "sandbox": res.SandboxID}
+		ev := map[string]any{"code": res.ExitCode, "duration_ms": res.Duration.Milliseconds(), "sandbox": res.SandboxID, "name": res.SandboxName}
 		if recPath != "" {
 			ev["record"] = recPath
 		}
@@ -325,7 +333,6 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 	f.register(fs)
 	var ports stringList
 	fs.Var(&ports, "p", "forward a port: PORT is shared by session at http://<name>.localhost:PORT; LOCAL:SANDBOX binds LOCAL for this session only (repeatable)")
-	name := fs.String("name", "", "session name for shared ports (default: the git branch)")
 	argv, ok := parseCommand("dev", fs, args, stderr)
 	if !ok {
 		return 2
@@ -371,7 +378,10 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		opts.Router = rc
 		opts.StartRouter = func() error { return startRouter(rc) }
 	}
-	opts.Name = *name
+	// --name names the sandbox and the session. Without it the session is
+	// the branch and the server names the sandbox, so two checkouts of one
+	// branch don't clash.
+	opts.Name, opts.SandboxName = f.name, f.name
 	if opts.Name == "" {
 		opts.Name = sessionName(f.dir)
 	}
@@ -385,7 +395,7 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		opts.Events = func(ev string, m map[string]any) {
 			switch ev {
 			case "sandbox":
-				fmt.Fprintf(stderr, "ephemera: sandbox %s on %s\n", m["id"], m["host"])
+				fmt.Fprintf(stderr, "ephemera: sandbox %s on %s\n", m["name"], m["host"])
 			case "synced":
 				if m["initial"] == true {
 					fmt.Fprintf(stderr, "ephemera: synced %s; watching for changes\n", plural(m["files"], "file"))
@@ -406,7 +416,7 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 			case "sync_error", "port_error":
 				fmt.Fprintf(stderr, "ephemera: %s\n", m["error"])
 			case "destroyed":
-				fmt.Fprintf(stderr, "ephemera: sandbox %s destroyed\n", m["id"])
+				fmt.Fprintf(stderr, "ephemera: sandbox %s destroyed\n", m["name"])
 				if recPath != "" {
 					fmt.Fprintf(stderr, "ephemera: signed record saved to %s\n", recPath)
 				}
@@ -489,9 +499,13 @@ func cmdLs(ctx context.Context, c *client.Client, args []string, stdout, stderr 
 		return 0
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tHOST\tNETWORK\tAGE")
+	fmt.Fprintln(tw, "NAME\tID\tHOST\tNETWORK\tAGE")
 	for _, sb := range list {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", sb.ID, sb.Host, sb.Spec.Network, time.Since(sb.CreatedAt).Round(time.Second))
+		name := sb.Name
+		if name == "" {
+			name = "-" // made before names
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, sb.ID, sb.Host, sb.Spec.Network, time.Since(sb.CreatedAt).Round(time.Second))
 	}
 	tw.Flush()
 	return 0
@@ -515,9 +529,10 @@ func cmdUsage(ctx context.Context, c *client.Client, stdout, stderr io.Writer) i
 	return 0
 }
 
+// cmdRm destroys sandboxes, each named by its name or its id.
 func cmdRm(ctx context.Context, c *client.Client, ids []string, stderr io.Writer) int {
 	if len(ids) == 0 {
-		fmt.Fprintln(stderr, "Usage: ephemera rm <sandbox-id>...")
+		fmt.Fprintln(stderr, "Usage: ephemera rm <sandbox>...   (a name like api-tests, or an id)")
 		return 2
 	}
 	code := 0

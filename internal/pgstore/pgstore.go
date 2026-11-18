@@ -233,9 +233,9 @@ func (s *Store) StartSandbox(ctx context.Context, sb api.Sandbox) error {
 	}
 	_, err = s.pool.Exec(ctx, `
 		WITH a AS (INSERT INTO accounts (id) VALUES ($2) ON CONFLICT DO NOTHING)
-		INSERT INTO sandboxes (id, account_id, owner, host, host_id, host_url, spec, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		sb.ID, accountOr(sb.Account), sb.Owner, sb.Host, sb.HostID, sb.HostURL, spec, sb.CreatedAt)
+		INSERT INTO sandboxes (id, account_id, owner, host, host_id, host_url, spec, created_at, name)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		sb.ID, accountOr(sb.Account), sb.Owner, sb.Host, sb.HostID, sb.HostURL, spec, sb.CreatedAt, sb.Name)
 	return err
 }
 
@@ -257,7 +257,7 @@ func (s *Store) EndSandbox(ctx context.Context, id string, at time.Time, reason 
 // RunningSandboxes implements control.StateStore.
 func (s *Store) RunningSandboxes(ctx context.Context) ([]api.Sandbox, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, account_id, owner, host, host_id, host_url, spec, created_at
+		SELECT id, name, account_id, owner, host, host_id, host_url, spec, created_at
 		FROM sandboxes WHERE ended_at IS NULL ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
@@ -265,7 +265,7 @@ func (s *Store) RunningSandboxes(ctx context.Context) ([]api.Sandbox, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (api.Sandbox, error) {
 		var sb api.Sandbox
 		var spec []byte
-		if err := r.Scan(&sb.ID, &sb.Account, &sb.Owner, &sb.Host, &sb.HostID, &sb.HostURL, &spec, &sb.CreatedAt); err != nil {
+		if err := r.Scan(&sb.ID, &sb.Name, &sb.Account, &sb.Owner, &sb.Host, &sb.HostID, &sb.HostURL, &spec, &sb.CreatedAt); err != nil {
 			return sb, err
 		}
 		sb.CreatedAt = sb.CreatedAt.UTC()
@@ -303,7 +303,7 @@ var _ control.RunStore = (*Store)(nil)
 // AccountRuns implements control.RunStore.
 func (s *Store) AccountRuns(ctx context.Context, account string, before time.Time, limit int) ([]api.Run, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, owner, host, host_id, spec, created_at, ended_at, coalesce(end_reason, '')
+		SELECT id, name, owner, host, host_id, spec, created_at, ended_at, coalesce(end_reason, '')
 		FROM sandboxes WHERE account_id = $1 AND created_at < $2
 		ORDER BY created_at DESC, id DESC LIMIT $3`, account, before, limit)
 	if err != nil {
@@ -312,7 +312,7 @@ func (s *Store) AccountRuns(ctx context.Context, account string, before time.Tim
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (api.Run, error) {
 		var run api.Run
 		var spec []byte
-		if err := r.Scan(&run.ID, &run.Owner, &run.Host, &run.HostID, &spec, &run.CreatedAt, &run.EndedAt, &run.EndReason); err != nil {
+		if err := r.Scan(&run.ID, &run.Name, &run.Owner, &run.Host, &run.HostID, &spec, &run.CreatedAt, &run.EndedAt, &run.EndReason); err != nil {
 			return run, err
 		}
 		run.CreatedAt = run.CreatedAt.UTC()

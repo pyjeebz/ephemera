@@ -12,6 +12,8 @@ import (
 
 // RunOptions configure Run.
 type RunOptions struct {
+	// Name is what to call the sandbox; empty lets the server pick one.
+	Name    string
 	Dir     string   // worktree to sync
 	Include []string // ignored files to send anyway
 	Spec    api.Spec
@@ -31,6 +33,7 @@ type RunOptions struct {
 // RunResult reports what happened.
 type RunResult struct {
 	SandboxID   string
+	SandboxName string
 	Files       int
 	ExitCode    int
 	Duration    time.Duration
@@ -52,12 +55,12 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (res RunResult, err erro
 	if err != nil {
 		return res, err
 	}
-	sb, err := c.Create(ctx, o.Spec)
+	sb, err := c.CreateNamed(ctx, o.Spec, o.Name)
 	if err != nil {
 		return res, err
 	}
-	res.SandboxID = sb.ID
-	emit("sandbox", map[string]any{"id": sb.ID, "host": sb.Host})
+	res.SandboxID, res.SandboxName = sb.ID, sb.Name
+	emit("sandbox", map[string]any{"id": sb.ID, "name": sb.Name, "host": sb.Host})
 
 	defer func() {
 		// Always clean up, even when ctx was cancelled by Ctrl-C.
@@ -73,7 +76,7 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (res RunResult, err erro
 			}
 			return
 		}
-		emit("destroyed", map[string]any{"id": sb.ID})
+		emit("destroyed", map[string]any{"id": sb.ID, "name": sb.Name})
 	}()
 
 	upload := func(fs []string) error {

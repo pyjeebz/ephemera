@@ -109,7 +109,7 @@ func State(t *testing.T, open func(t *testing.T) control.StateStore) {
 
 	t.Run("sandboxes", func(t *testing.T) {
 		st := open(t)
-		a := api.Sandbox{ID: "sbx_a", Host: "h1", HostURL: "http://h1:7701", Token: "secret",
+		a := api.Sandbox{ID: "sbx_a", Name: "api-tests", Host: "h1", HostURL: "http://h1:7701", Token: "secret",
 			Spec: api.Spec{Image: "node", CPUs: 2, MemoryMB: 1024}, CreatedAt: at, Owner: "laptop", Account: "alice"}
 		b := api.Sandbox{ID: "sbx_b", Host: "h2", HostURL: "http://h2:7701", CreatedAt: at.Add(time.Second), Owner: "ci"}
 		for _, sb := range []api.Sandbox{a, b} {
@@ -130,7 +130,7 @@ func State(t *testing.T, open func(t *testing.T) control.StateStore) {
 			t.Error("the sandbox's access token was stored")
 		}
 		a.Token = ""
-		if got.ID != a.ID || got.Host != a.Host || got.HostURL != a.HostURL || got.Owner != a.Owner ||
+		if got.ID != a.ID || got.Name != a.Name || got.Host != a.Host || got.HostURL != a.HostURL || got.Owner != a.Owner ||
 			got.Account != a.Account || !reflect.DeepEqual(got.Spec, a.Spec) || !got.CreatedAt.Equal(a.CreatedAt) {
 			t.Errorf("stored %+v, want %+v", got, a)
 		}

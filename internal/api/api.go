@@ -83,7 +83,10 @@ type Connection struct {
 
 // CreateSandboxRequest is sent by the CLI to the central server.
 type CreateSandboxRequest struct {
-	Spec Spec `json:"spec"`
+	// Name is what to call the sandbox; see ValidName. Empty means the
+	// server picks one.
+	Name string `json:"name,omitempty"`
+	Spec Spec   `json:"spec"`
 	// TokenHash is the hex SHA-256 of the sandbox's access token, which
 	// the CLI makes and keeps. The central server passes the hash to the
 	// host and never sees the token, so it can't open the sandbox.
@@ -102,7 +105,11 @@ func HashSandboxToken(token string) string {
 // to the host directly, so files and output never pass through the central
 // server. The central server only ever sees its hash, and never sends it.
 type Sandbox struct {
-	ID      string `json:"id"`
+	ID string `json:"id"`
+	// Name is what people call it. It is unique among the account's
+	// running sandboxes; ended ones may share it. Empty on sandboxes made
+	// before names.
+	Name    string `json:"name"`
 	Host    string `json:"host"`    // its name
 	HostID  string `json:"host_id"` // unique; names are only unique within an account
 	HostURL string `json:"host_url"`
@@ -237,6 +244,7 @@ type Host struct {
 // ended.
 type Run struct {
 	ID        string     `json:"id"`
+	Name      string     `json:"name"`
 	Host      string     `json:"host"`
 	HostID    string     `json:"host_id"`
 	Owner     string     `json:"owner"` // the token's name

@@ -34,7 +34,7 @@ ephemera routes              # sessions sharing ports, and their addresses
 ephemera focus fix-login     # make plain localhost:3000 show that one
 ```
 
-`--name` names the session instead of the branch. The router exits 30 seconds after the last session ends.
+`--name` names the session instead of the branch, and gives the sandbox the same name. Without it, the session is the branch and the sandbox gets a made-up name like `amber-dune-42`, so two checkouts of one branch don't clash. The router exits 30 seconds after the last session ends.
 
 To skip the router and bind a local port for one session only, give both sides: `-p 8080:3000` serves the sandbox's port 3000 at `localhost:8080`.
 
@@ -66,7 +66,7 @@ The host's maximum lifetime applies too, 24 hours by default. With [`--setup`](/
 | - | - |
 | `-p PORT` | Forward a port, shared by session at `http://<name>.localhost:PORT` (repeatable) |
 | `-p LOCAL:SANDBOX` | Bind `LOCAL` on your laptop to the sandbox's `SANDBOX`, for this session only |
-| `--name NAME` | Session name for shared ports. Default: the git branch |
+| `--name NAME` | Names the session and the sandbox: lowercase letters, digits and hyphens. Default: the git branch for the session, and a made-up name for the sandbox |
 | `--timeout D` | Destroy the sandbox after this long, e.g. `2h` |
 
 The full list is in the [CLI reference](/reference/cli#ephemera-dev).

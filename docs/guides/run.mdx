@@ -83,31 +83,43 @@ ephemera run --json -- sh -c 'echo hello'
 ```
 
 ```json
-{"event":"sandbox","host":"lab-1","id":"sbx_09459d27f28c808c"}
+{"event":"sandbox","host":"lab-1","id":"sbx_09459d27f28c808c","name":"amber-dune-42"}
 {"event":"synced","files":2}
 {"data":"hello\n","event":"output","stream":"stdout"}
-{"event":"destroyed","id":"sbx_09459d27f28c808c"}
-{"code":0,"duration_ms":466,"event":"exit","record":"/home/you/.config/ephemera/records/sbx_09459d27f28c808c.json","sandbox":"sbx_09459d27f28c808c"}
+{"event":"destroyed","id":"sbx_09459d27f28c808c","name":"amber-dune-42"}
+{"code":0,"duration_ms":466,"event":"exit","name":"amber-dune-42","record":"/home/you/.config/ephemera/records/sbx_09459d27f28c808c.json","sandbox":"sbx_09459d27f28c808c"}
 ```
 
 | Event | When | Fields |
 | - | - | - |
-| `sandbox` | The sandbox exists | `id`, `host` |
+| `sandbox` | The sandbox exists | `id`, `name`, `host` |
 | `synced` | The files are in | `files` |
 | `snapshot` | With `--setup`: whether a saved snapshot was used | `id`, `loaded`, `reason` |
 | `snapshot_saved` | With `--setup`: a new snapshot was saved | `id` |
 | `snapshot_error` | With `--setup`: the snapshot couldn't be saved; the run goes on | `error` |
 | `output` | The command wrote something | `stream` (`stdout` or `stderr`), `data` |
 | `connection` | The sandbox tried to reach a host | `host`, `port`, `kind` (`https` or `http`), `allowed`, and `rule`, `error`, `bytes_in`, `bytes_out` when there are any |
-| `destroyed` | The sandbox is gone | `id` |
-| `exit` | Last line | `code`, `duration_ms`, `sandbox`, `record` |
+| `destroyed` | The sandbox is gone | `id`, `name` |
+| `exit` | Last line | `code`, `duration_ms`, `sandbox` (its id), `name`, `record` |
+
+## Name it
+
+Every sandbox has a name. Give it one that says what it's for, so you and your agents can tell them apart:
+
+```bash
+ephemera run --name api-tests -- npm test
+```
+
+Names are lowercase letters, digits and hyphens, up to 40 characters, like `api-tests` or `pr-1234`. Leave `--name` off and you get one like `amber-dune-42`.
+
+Only one running sandbox in your account can have a given name. A second `api-tests` while the first is still running is refused; once it ends, the name is free again. Your run history keeps the name either way.
 
 ## See what's running
 
 ```bash
-ephemera ls            # sandboxes running in your account
-ephemera rm sbx_...    # destroy one
-ephemera usage         # sandbox-minutes today, and this token's limits
+ephemera ls              # sandboxes running in your account, by name
+ephemera rm api-tests    # destroy one, by name or id
+ephemera usage           # sandbox-minutes today, and this token's limits
 ```
 
 ```text

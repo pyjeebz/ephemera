@@ -2,11 +2,15 @@ package pgstore_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/pyjeebz/ephemera/internal/api"
 	"github.com/pyjeebz/ephemera/internal/control"
 	"github.com/pyjeebz/ephemera/internal/control/storetest"
 	"github.com/pyjeebz/ephemera/internal/pgstore"
@@ -61,5 +65,36 @@ func TestSameNameInTwoAccounts(t *testing.T) {
 	}
 	if err := s.RevokeToken(ctx, a.ID); err != nil {
 		t.Errorf("revoking by id: %v", err)
+	}
+}
+
+// Runs keep their names after they end; sandboxes from before names have
+// none.
+func TestRunNames(t *testing.T) {
+	s, _ := pgtest.Open(t)
+	ctx := context.Background()
+	at := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	for i, name := range []string{"api-tests", "", "api-tests"} {
+		sb := api.Sandbox{ID: fmt.Sprintf("sbx_%d", i), Name: name, Account: "alice", Owner: "laptop",
+			Host: "h1", CreatedAt: at.Add(time.Duration(i) * time.Second)}
+		if err := s.StartSandbox(ctx, sb); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			if err := s.EndSandbox(ctx, sb.ID, at.Add(time.Minute), control.EndDestroyed); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	runs, err := s.AccountRuns(ctx, "alice", at.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range runs {
+		got = append(got, r.ID+"="+r.Name)
+	}
+	if want := []string{"sbx_2=api-tests", "sbx_1=", "sbx_0=api-tests"}; !slices.Equal(got, want) {
+		t.Errorf("runs = %v, want %v", got, want)
 	}
 }

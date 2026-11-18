@@ -29,7 +29,7 @@ A token or a session sees only its own account's sandboxes and hosts. Another ac
 | `GET /v1/whoami` | token | The token's name and account |
 | `POST /v1/sandboxes` | token | Make a sandbox |
 | `GET /v1/sandboxes` | token or session | The account's running sandboxes |
-| `DELETE /v1/sandboxes/{id}` | token or session | Destroy a sandbox |
+| `DELETE /v1/sandboxes/{id}` | token or session | Destroy a sandbox, by its id or its name |
 | `GET /v1/runs` | token or session | The account's sandboxes, running and finished, newest first |
 | `GET /v1/usage` | token or session | Sandbox-minutes today, and limits |
 | `GET /v1/hosts` | token or session | The account's hosts |
@@ -53,6 +53,7 @@ A token or a session sees only its own account's sandboxes and hosts. Another ac
 
 ```json
 {
+  "name": "api-tests",
   "spec": {
     "image": "",
     "cpus": 2,
@@ -65,13 +66,14 @@ A token or a session sees only its own account's sandboxes and hosts. Another ac
 }
 ```
 
-`token_hash` is the hex SHA-256 of an access token you make and keep; the host checks requests for the sandbox against it. Every `spec` field is optional. `network` is `none`, `allow` or `open`; with `allow` entries, it defaults to `allow`.
+`token_hash` is the hex SHA-256 of an access token you make and keep; the host checks requests for the sandbox against it. `name` is optional: lowercase letters, digits and hyphens, up to 40 characters, starting and ending with a letter or digit. Leave it out and the server makes one up, like `amber-dune-42`. A bad name gets `400`; a name one of the account's running sandboxes already has gets `409`. Every `spec` field is optional. `network` is `none`, `allow` or `open`; with `allow` entries, it defaults to `allow`.
 
 It answers `201` with the sandbox:
 
 ```json
 {
   "id": "sbx_09459d27f28c808c",
+  "name": "api-tests",
   "host": "lab-1",
   "host_id": "host_0b275ef1",
   "host_url": "https://10.0.0.12:7701",
@@ -93,6 +95,7 @@ The newest 100, newest first. `?before=<RFC 3339 time>` returns the 100 before t
 [
   {
     "id": "sbx_09459d27f28c808c",
+    "name": "api-tests",
     "host": "lab-1",
     "host_id": "host_0b275ef1",
     "owner": "ci",
@@ -104,7 +107,7 @@ The newest 100, newest first. `?before=<RFC 3339 time>` returns the 100 before t
 ]
 ```
 
-`ended_at` is missing while a sandbox runs. `end_reason` is `destroyed` (the CLI or someone destroyed it), `limit` (its token ran out of minutes), `gone` (its host stopped reporting it) or `failed` (the host couldn't make it).
+`ended_at` is missing while a sandbox runs. `name` is empty for sandboxes made before names. `end_reason` is `destroyed` (the CLI or someone destroyed it), `limit` (its token ran out of minutes), `gone` (its host stopped reporting it) or `failed` (the host couldn't make it).
 
 ### `GET /v1/usage`
 

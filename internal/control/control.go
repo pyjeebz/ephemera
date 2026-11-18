@@ -439,6 +439,12 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		host.WriteError(w, http.StatusBadRequest, "token_hash is missing; this ephemera is older than the server, so upgrade it")
 		return
 	}
+	if req.Name != "" {
+		if err := api.ValidName(req.Name); err != nil {
+			host.WriteError(w, http.StatusBadRequest, "%v", err)
+			return
+		}
+	}
 	p := principal(r)
 	if msg, ok := s.admit(p, &req.Spec); !ok {
 		host.WriteError(w, http.StatusTooManyRequests, "%s", msg)
@@ -461,12 +467,26 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Account:   p.Account,
 	}
 	// Count it against the host before the slow call, so concurrent
-	// creates spread out.
-	rec := *sb
+	// creates spread out. Its name is claimed in the same step, so two
+	// creates can't both take one.
 	s.mu.Lock()
 	if s.sandboxes == nil {
 		s.sandboxes = map[string]*api.Sandbox{}
 	}
+	sb.Name = req.Name
+	if sb.Name == "" {
+		for i := 0; sb.Name == "" || s.nameTakenLocked(p.Account, sb.Name); i++ {
+			sb.Name = api.NewName()
+			if i >= 20 { // a crowded account: a longer name is still readable
+				sb.Name += "-" + strings.TrimPrefix(api.NewID("x"), "x_")[:4]
+			}
+		}
+	} else if s.nameTakenLocked(p.Account, sb.Name) {
+		s.mu.Unlock()
+		host.WriteError(w, http.StatusConflict, "a sandbox named %s is already running; pick another name or stop it", sb.Name)
+		return
+	}
+	rec := *sb
 	s.sandboxes[sb.ID] = &rec
 	s.mu.Unlock()
 	// Stored before the host makes it, so a crash in between leaves a
@@ -493,7 +513,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		host.WriteError(w, http.StatusBadGateway, "host %s: %v", h.Name, err)
 		return
 	}
-	s.log().Info("sandbox placed", "sandbox", sb.ID, "host", h.Name)
+	s.log().Info("sandbox placed", "sandbox", sb.ID, "name", sb.Name, "host", h.Name)
 	writeJSON(w, http.StatusCreated, sb)
 }
 
@@ -528,16 +548,42 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// nameTakenLocked reports whether one of the account's running sandboxes
+// is called name. s.mu must be held.
+func (s *Server) nameTakenLocked(account, name string) bool {
+	return s.byNameLocked(account, name) != nil
+}
+
+func (s *Server) byNameLocked(account, name string) *api.Sandbox {
+	if name == "" {
+		return nil
+	}
+	for _, sb := range s.sandboxes {
+		if sb.Account == account && sb.Name == name {
+			return sb
+		}
+	}
+	return nil
+}
+
+// destroy destroys a sandbox, named by its id or its name.
 func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	ref := r.PathValue("id")
+	account := principal(r).Account
 	s.mu.Lock()
-	sb, ok := s.sandboxes[id]
+	sb, ok := s.sandboxes[ref]
+	if !ok || sb.Account != account {
+		// Ids have a "_" and names never do, so a name can't shadow an id.
+		sb = s.byNameLocked(account, ref)
+		ok = sb != nil
+	}
 	s.mu.Unlock()
 	// Another account's sandbox is "not found" too, so ids can't be probed.
-	if !ok || sb.Account != principal(r).Account {
-		host.WriteError(w, http.StatusNotFound, "sandbox %s not found", id)
+	if !ok {
+		host.WriteError(w, http.StatusNotFound, "sandbox %s not found", ref)
 		return
 	}
+	id := sb.ID
 	// The host answers with the sandbox's signed record. It is passed on
 	// to the caller and not kept here.
 	res, err := s.hostDo(r.Context(), sb.HostID, api.HostMessage{Type: "destroy", Sandbox: id})

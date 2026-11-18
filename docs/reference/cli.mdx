@@ -16,7 +16,7 @@ Usage:
   ephemera focus <session>          make plain localhost show that session
   ephemera ls [--json]
   ephemera usage                    sandbox-minutes used today and this token's limits
-  ephemera rm <sandbox-id>...
+  ephemera rm <sandbox>...          destroy sandboxes, by name or id
   ephemera verify <record.json>
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
@@ -61,6 +61,8 @@ Flags:
     	print newline-delimited JSON events instead of raw output
   -memory int
     	memory limit in MB (default: no limit)
+  -name string
+    	name the sandbox for what it's for, e.g. api-tests: lowercase letters, digits and hyphens (default: one like amber-dune-42); dev: also the session name for shared ports (default: the git branch)
   -net
     	allow outbound access to any public host (blocked by default; still logged)
   -record string
@@ -98,7 +100,7 @@ Flags:
   -memory int
     	memory limit in MB (default: no limit)
   -name string
-    	session name for shared ports (default: the git branch)
+    	name the sandbox for what it's for, e.g. api-tests: lowercase letters, digits and hyphens (default: one like amber-dune-42); dev: also the session name for shared ports (default: the git branch)
   -net
     	allow outbound access to any public host (blocked by default; still logged)
   -p value
@@ -160,12 +162,18 @@ Usage of mcp:
 
 ## ephemera ls
 
-List the account's running sandboxes.
+List the account's running sandboxes, by name.
 
 ```text
 Usage of ls:
   -json
     	print JSON
+```
+
+```text
+NAME           ID                    HOST   NETWORK  AGE
+api-tests      sbx_09459d27f28c808c  lab-1  none     12s
+amber-dune-42  sbx_b5268cedc2cec984  lab-1  allow    3m4s
 ```
 
 ## ephemera routes
@@ -194,10 +202,10 @@ ephemera usage
 
 ## ephemera rm
 
-Destroy sandboxes by id.
+Destroy sandboxes by name or id.
 
 ```text
-ephemera rm <sandbox-id>...
+ephemera rm <sandbox>...
 ```
 
 ## ephemera verify
