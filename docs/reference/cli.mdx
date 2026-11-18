@@ -17,7 +17,7 @@ Usage:
   ephemera ls [--json]
   ephemera usage                    sandbox-minutes used today and this token's limits
   ephemera rm <sandbox>...          destroy sandboxes, by name or id
-  ephemera verify <record.json>
+  ephemera verify [<sandbox>]        check a sandbox's signed record: by name, id or file; the newest if none
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
   ephemera logout
@@ -213,8 +213,10 @@ ephemera rm <sandbox>...
 Check a signed record and print what the sandbox did. See [Signed records](/guides/records).
 
 ```text
-ephemera verify <record.json>
+ephemera verify [<name> | <id> | <record.json>]
 ```
+
+A name checks that name's newest record, an id that sandbox's record, and a path that file. With nothing, it checks the newest record of all. Records are looked up in the records folder on this machine. Exit 1 if the record isn't fully verified.
 
 ## ephemera hosts
 

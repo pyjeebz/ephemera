@@ -24,8 +24,12 @@ func cmdMCP(ctx context.Context, c *client.Client, args []string, stdin io.Reade
 		Client:     c,
 		Dir:        *dir,
 		Version:    version,
-		SaveRecord: func(sr *api.SignedRecord) (string, error) { return saveRecord(sr, "") },
-		VerifyRecord: func(ctx context.Context, path string) (string, bool, error) {
+		SaveRecord: func(sr *api.SignedRecord, name string) (string, error) { return saveRecord(sr, "", name) },
+		VerifyRecord: func(ctx context.Context, sandbox string) (string, bool, error) {
+			path, err := findRecord(sandbox)
+			if err != nil {
+				return "", false, err
+			}
 			return verifyFile(ctx, c, path)
 		},
 	}

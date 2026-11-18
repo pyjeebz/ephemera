@@ -85,7 +85,7 @@ func TestVerify(t *testing.T) {
 
 	// Records are written the way the CLI saves them.
 	write := func(sr api.SignedRecord) string {
-		p, err := saveRecord(&sr, filepath.Join(t.TempDir(), "rec.json"))
+		p, err := saveRecord(&sr, filepath.Join(t.TempDir(), "rec.json"), "")
 		if err != nil {
 			t.Fatal(err)
 		}

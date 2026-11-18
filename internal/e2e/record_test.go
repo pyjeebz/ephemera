@@ -141,8 +141,17 @@ func TestMCP(t *testing.T) {
 	s := newStack(t, be, "unused")
 	dir := worktree(t, map[string]string{"greeting.txt": "hello from the worktree\n"})
 	var saved []*api.SignedRecord
+	var savedAs, asked []string
 	srv := &mcp.Server{Client: s.client, Dir: dir, Version: "test",
-		SaveRecord: func(sr *api.SignedRecord) (string, error) { saved = append(saved, sr); return "/records/x.json", nil }}
+		SaveRecord: func(sr *api.SignedRecord, name string) (string, error) {
+			saved = append(saved, sr)
+			savedAs = append(savedAs, name)
+			return "/records/x.json", nil
+		},
+		VerifyRecord: func(_ context.Context, sandbox string) (string, bool, error) {
+			asked = append(asked, sandbox)
+			return "Verified", true, nil
+		}}
 
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
@@ -166,7 +175,7 @@ func TestMCP(t *testing.T) {
 	}
 
 	res := m.call("tools/call", map[string]any{"name": "run_command", "arguments": map[string]any{
-		"command": "cat greeting.txt; echo oops >&2; exit 3", "env": map[string]string{"X": "1"}}})
+		"command": "cat greeting.txt; echo oops >&2; exit 3", "env": map[string]string{"X": "1"}, "name": "greet"}})
 	sc := res["structuredContent"].(map[string]any)
 	if res["isError"] != false || sc["exit_code"] != float64(3) || sc["stdout"] != "hello from the worktree\n" || sc["stderr"] != "oops\n" {
 		t.Errorf("run_command: %v", res)
@@ -175,8 +184,19 @@ func TestMCP(t *testing.T) {
 	if !strings.Contains(text, "exit code: 3") || !strings.Contains(text, "signed record: /records/x.json") {
 		t.Errorf("text: %q", text)
 	}
-	if len(saved) != 1 {
-		t.Errorf("%d records saved, want 1", len(saved))
+	if len(saved) != 1 || savedAs[0] != "greet" {
+		t.Errorf("records saved as %q, want one as greet", savedAs)
+	}
+
+	// verify_record finds a record by name, id or path, or the newest.
+	for _, args := range []map[string]any{{"sandbox": "greet"}, {"path": "/records/x.json"}, {}} {
+		res := m.call("tools/call", map[string]any{"name": "verify_record", "arguments": args})
+		if res["isError"] != false {
+			t.Errorf("verify_record %v: %v", args, res)
+		}
+	}
+	if strings.Join(asked, ",") != "greet,/records/x.json," {
+		t.Errorf("verify_record asked for %q", asked)
 	}
 
 	res = m.call("tools/call", map[string]any{"name": "run_command", "arguments": map[string]any{}})

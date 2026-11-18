@@ -29,10 +29,13 @@ type Server struct {
 	Client  *client.Client
 	Dir     string // default worktree for run_command
 	Version string
-	// SaveRecord stores a sandbox's signed record and returns its path.
-	SaveRecord func(*api.SignedRecord) (string, error)
-	// VerifyRecord checks a saved record and describes it.
-	VerifyRecord func(ctx context.Context, path string) (string, bool, error)
+	// SaveRecord stores a sandbox's signed record, filed under its name,
+	// and returns its path.
+	SaveRecord func(rec *api.SignedRecord, name string) (string, error)
+	// VerifyRecord checks a saved record and describes it. sandbox is a
+	// name (its newest record), an id, a record's path, or "" for the
+	// newest record of all.
+	VerifyRecord func(ctx context.Context, sandbox string) (string, bool, error)
 }
 
 type request struct {
@@ -171,11 +174,13 @@ var tools = []map[string]any{
 	},
 	{
 		"name":        "verify_record",
-		"description": "Check a sandbox record's signature against the host keys the central server knows, and show what the sandbox did.",
+		"description": "Check a sandbox's signed record against the host keys the central server knows, and show what the sandbox did: its commands, file syncs and every connection it tried. Records are saved when a sandbox ends.",
 		"inputSchema": map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"path": map[string]any{"type": "string"}},
-			"required":   []string{"path"},
+			"type": "object",
+			"properties": map[string]any{
+				"sandbox": map[string]any{"type": "string", "description": "the sandbox's name, like api-tests (its newest record), its id, or a record file's path; leave out for the newest record"},
+				"path":    map[string]any{"type": "string", "description": "a record file's path; same as sandbox"},
+			},
 		},
 	},
 }
@@ -222,22 +227,31 @@ func (s *Server) call(ctx context.Context, name string, args json.RawMessage) ma
 		}
 		msg := "destroyed " + a.ID
 		if sr != nil && s.SaveRecord != nil {
-			if p, err := s.SaveRecord(sr); err == nil {
+			name := ""
+			if api.ValidName(a.ID) == nil {
+				name = a.ID
+			}
+			if p, err := s.SaveRecord(sr, name); err == nil {
 				msg += "; signed record saved to " + p
 			}
 		}
 		return textResult(msg, false, nil)
 	case "verify_record":
 		var a struct {
-			Path string `json:"path"`
+			Sandbox string `json:"sandbox"`
+			Path    string `json:"path"`
 		}
-		if json.Unmarshal(args, &a) != nil || a.Path == "" {
-			return textResult("path is required", true, nil)
+		if len(args) > 0 && json.Unmarshal(args, &a) != nil {
+			return textResult("sandbox must be a name, an id or a record's path", true, nil)
 		}
 		if s.VerifyRecord == nil {
 			return textResult("verifying is not available", true, nil)
 		}
-		text, ok, err := s.VerifyRecord(ctx, a.Path)
+		what := a.Sandbox
+		if what == "" {
+			what = a.Path
+		}
+		text, ok, err := s.VerifyRecord(ctx, what)
 		if err != nil {
 			return textResult(err.Error(), true, nil)
 		}
@@ -325,7 +339,7 @@ func (s *Server) runCommand(ctx context.Context, raw json.RawMessage) map[string
 	}
 	recPath := ""
 	if res.Record != nil && s.SaveRecord != nil {
-		if p, err := s.SaveRecord(res.Record); err == nil {
+		if p, err := s.SaveRecord(res.Record, res.SandboxName); err == nil {
 			recPath = p
 			fmt.Fprintf(&b, "signed record: %s\n", p)
 		}

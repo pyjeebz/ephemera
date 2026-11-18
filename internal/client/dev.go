@@ -78,8 +78,9 @@ type DevOptions struct {
 	// "connection", "sync_error", "port_error", "destroyed". It may be called from
 	// several goroutines, never at the same time.
 	Events func(event string, fields map[string]any)
-	// OnRecord receives the sandbox's signed record when it is destroyed.
-	OnRecord func(*api.SignedRecord)
+	// OnRecord receives the sandbox's signed record, and its name, when it
+	// is destroyed.
+	OnRecord func(rec *api.SignedRecord, name string)
 	// Setup, if set, prepares the sandbox before the dev command, from a
 	// project snapshot when one exists.
 	Setup *Setup
@@ -147,7 +148,7 @@ func (c *Client) Dev(ctx context.Context, o DevOptions) (code int, err error) {
 		defer cancel()
 		rec, derr := c.Destroy(dctx, sb.ID)
 		if rec != nil && o.OnRecord != nil {
-			o.OnRecord(rec)
+			o.OnRecord(rec, sb.Name)
 		}
 		if derr != nil {
 			err = errors.Join(err, derr)

@@ -7,8 +7,10 @@ sidebarTitle: "Records"
 When a sandbox is destroyed, its host signs a record of what happened in it, and the CLI saves it on your laptop:
 
 ```text
-ephemera: signed record saved to ~/.config/ephemera/records/sbx_b5268cedc2cec984.json
+ephemera: signed record saved to ~/.config/ephemera/records/api-tests-sbx_b5268cedc2cec984.json
 ```
+
+The file is named for the sandbox first, then its id, so the folder reads by name and every run of `api-tests` keeps its own record.
 
 ## What's in one
 
@@ -51,14 +53,17 @@ What's not in it: output, file contents, environment values. A record says what 
 
 ## Check one
 
+Name the sandbox, and you don't need the file:
+
 ```bash
-ephemera verify ~/.config/ephemera/records/sbx_b5268cedc2cec984.json
+ephemera verify api-tests
 ```
 
 ```text
+Record /home/you/.config/ephemera/records/api-tests-sbx_b5268cedc2cec984.json
 Verified: signed by host lab-1; the key is the one the central server has for this host.
 
-Sandbox sbx_b5268cedc2cec984 on lab-1 (firecracker backend)
+Sandbox api-tests (sbx_b5268cedc2cec984) on lab-1 (firecracker backend)
   created    2026-11-13T04:34:20Z
   destroyed  2026-11-13T04:34:21Z (destroyed, after 810ms)
   network    none
@@ -73,7 +78,16 @@ File syncs (1):
 Connections (0):
 ```
 
-`verify` checks two things: that the signature matches the record, so any change to it fails, and that the signing key is the one the central server has on record for that host. It needs your login for the second check.
+`verify` finds the record from whatever you have:
+
+| You type | It checks |
+| - | - |
+| `ephemera verify` | the newest record of all: the sandbox that just ended |
+| `ephemera verify api-tests` | the newest record of a sandbox named `api-tests` |
+| `ephemera verify sbx_b5268cedc2cec984` | that sandbox's record |
+| `ephemera verify ./receipt.json` | that file, wherever it is |
+
+Then it checks two things: that the signature matches the record, so any change to it fails, and that the signing key is the one the central server has on record for that host. It needs your login for the second check.
 
 A record is only as trustworthy as its host's key. The key lives on the host, in `/var/lib/ephemera/host.key`; if it leaks, remove the host and join it again with a new key.
 

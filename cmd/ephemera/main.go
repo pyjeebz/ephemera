@@ -39,7 +39,7 @@ Usage:
   ephemera ls [--json]
   ephemera usage                    sandbox-minutes used today and this token's limits
   ephemera rm <sandbox>...          destroy sandboxes, by name or id
-  ephemera verify <record.json>
+  ephemera verify [<sandbox>]        check a sandbox's signed record: by name, id or file; the newest if none
   ephemera mcp [--dir DIR]          serve ephemera to a coding agent over MCP
   ephemera login [--server URL]
   ephemera logout
@@ -293,7 +293,7 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 	}
 	recPath := ""
 	if res.Record != nil {
-		if p, err := saveRecord(res.Record, f.record); err != nil {
+		if p, err := saveRecord(res.Record, f.record, res.SandboxName); err != nil {
 			fmt.Fprintln(stderr, "ephemera: saving the record:", err)
 		} else {
 			recPath = p
@@ -359,8 +359,8 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 	}
 	opts.Setup = setup
 	recPath := ""
-	opts.OnRecord = func(sr *api.SignedRecord) {
-		if p, err := saveRecord(sr, f.record); err == nil {
+	opts.OnRecord = func(sr *api.SignedRecord, name string) {
+		if p, err := saveRecord(sr, f.record, name); err == nil {
 			recPath = p
 		} else {
 			fmt.Fprintln(stderr, "ephemera: saving the record:", err)
