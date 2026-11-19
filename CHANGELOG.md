@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The host installer joined a v0.1 host to its old self-hosted server instead of `https://api.ephemera.run`: with a join code and no `--server`, it took the server from the v0.1 env file, so the join failed with "connection refused" and the code had to be used again with `--server https://api.ephemera.run`. A host that hasn't joined yet now joins the hosted server unless given `--server`; a joined host still keeps its server and name on upgrade, and every host keeps its address.
+
 ## v0.2.0 (2026-11-18)
 
 **Upgrade the CLI, the central server and every host together.** v0.1 CLIs, servers and hosts don't work with v0.2. Hosts now connect out to the central server and join an account once with a one-time code; the CLI sends the server only a hash of each sandbox's token. Re-join each host with the host installer, `curl -fsSL https://ephemera.run/host | sudo sh -s -- <join code>`, after making a code in the dashboard or with `ephemera-server join-code create`.

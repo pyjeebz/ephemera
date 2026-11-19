@@ -93,6 +93,22 @@ addresses() {
 	}'
 }
 
+# previous fills in what the last install chose, for anything not given.
+# A host that joined keeps its server and name, so an upgrade changes
+# neither. The address the laptop reaches is kept from the last install's
+# env file. A host that hasn't joined, such as one moving from v0.1, doesn't
+# take that file's server: its code is for --server, or the hosted one.
+previous() {
+	if [ -f "$IDENTITY" ]; then
+		[ -n "$server" ] || server="$(sed -n 's/.*"server": *"\([^"]*\)".*/\1/p' "$IDENTITY" | head -n1)"
+		[ -n "$name" ] || name="$(sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' "$IDENTITY" | head -n1)"
+	fi
+	if [ -f "$ENV_FILE" ]; then
+		[ -n "$address" ] || address="$(sed -n 's/^EPHEMERA_HOST_LISTEN=\(.*\):7701$/\1/p' "$ENV_FILE")"
+	fi
+	[ -n "$server" ] || server="https://api.ephemera.run"
+}
+
 usage() {
 	cat <<'EOF'
 Usage: curl -fsSL https://ephemera.run/host | sudo sh -s -- [CODE] [options]
@@ -177,18 +193,7 @@ main() {
 		die "no join code: make one in the dashboard, under Hosts, and run: curl -fsSL https://ephemera.run/host | sudo sh -s -- <code>"
 	fi
 
-	# A host that joined keeps its server and name; the address the laptop
-	# reaches is kept from the last install unless given. So an upgrade
-	# changes none of them.
-	if [ -f "$IDENTITY" ]; then
-		[ -n "$server" ] || server="$(sed -n 's/.*"server": *"\([^"]*\)".*/\1/p' "$IDENTITY" | head -n1)"
-		[ -n "$name" ] || name="$(sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' "$IDENTITY" | head -n1)"
-	fi
-	if [ -f "$ENV_FILE" ]; then
-		[ -n "$server" ] || server="$(sed -n 's/^EPHEMERA_SERVER_URL=//p' "$ENV_FILE")"
-		[ -n "$address" ] || address="$(sed -n 's/^EPHEMERA_HOST_LISTEN=\(.*\):7701$/\1/p' "$ENV_FILE")"
-	fi
-	[ -n "$server" ] || server="https://api.ephemera.run"
+	previous
 	case "$server" in
 	https://* | http://*) ;;
 	*) die "--server must be a URL such as https://api.ephemera.run" ;;
@@ -350,4 +355,5 @@ EOF
 }
 
 # Everything runs from main, so a download cut off halfway runs nothing.
-main "$@"
+# EPHEMERA_INSTALL_TEST loads the functions without running, for tests.
+[ -n "${EPHEMERA_INSTALL_TEST:-}" ] || main "$@"
