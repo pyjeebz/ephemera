@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2026-11-18)
+
+**Upgrade the CLI, the central server and every host together.** v0.1 CLIs, servers and hosts don't work with v0.2. Hosts now connect out to the central server and join an account once with a one-time code; the CLI sends the server only a hash of each sandbox's token. Re-join each host with the host installer, `curl -fsSL https://ephemera.run/host | sudo sh -s -- <join code>`, after making a code in the dashboard or with `ephemera-server join-code create`.
 
 ### Added
 
