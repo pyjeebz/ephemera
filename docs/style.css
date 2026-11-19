@@ -20,7 +20,7 @@
   --background-dark: 11 10 9;
   --background-light: 11 10 9;
 
-  --mint-background: #171614;
+  --mint-background: #1a1a1a;
   --mint-foreground: #c9c6bc;
   --mint-token-function: #efede6;
   --mint-token-keyword: #efede6;
@@ -46,7 +46,7 @@ code, kbd, pre, samp, .code-block, .code-block * {
 
 ::selection {
   background: #e6c287;
-  color: #0b0a09;
+  color: #121212;
 }
 
 :focus-visible {
@@ -119,7 +119,7 @@ img.nav-logo {
 
 [data-component-name="primary-header-button"] {
   background: rgb(var(--gray-50)) !important;
-  color: #0b0a09 !important;
+  color: #121212 !important;
   box-shadow: none !important;
 }
 
