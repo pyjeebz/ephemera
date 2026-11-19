@@ -16,7 +16,7 @@
   "favicon": "/favicon.svg",
   "fonts": {
     "family": "Satoshi",
-    "source": "/fonts/Satoshi-Variable.woff2",
+    "source": "https://ephemera.mintlify.site/docs/fonts/Satoshi-Variable.woff2",
     "format": "woff2"
   },
   "appearance": {

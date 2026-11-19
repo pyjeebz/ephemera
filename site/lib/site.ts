@@ -1,17 +1,19 @@
 export const GITHUB = "https://github.com/pyjeebz/ephemera"
 export const INSTALL = "curl -fsSL https://ephemera.run/install | sh"
 
-// The docs live in the repo for now, so every docs link points at GitHub.
+// The docs are the Mintlify site at ephemera.run/docs. Links stay absolute,
+// as the copy prompts hand them to coding agents.
 const BLOB = `${GITHUB}/blob/main`
-export const DOCS = `${GITHUB}#readme`
-export const INSTALL_DOCS = `${GITHUB}#install-the-cli`
-export const HOW_IT_WORKS = `${GITHUB}#how-it-works`
-export const SNAPSHOTS = `${GITHUB}#setup-snapshots`
-export const MCP = `${GITHUB}#coding-agents-mcp`
+export const DOCS_ROOT = "https://ephemera.run/docs"
+export const DOCS = DOCS_ROOT
+export const INSTALL_DOCS = `${DOCS_ROOT}/reference/install`
+export const HOW_IT_WORKS = `${DOCS_ROOT}/how-it-works`
+export const SNAPSHOTS = `${DOCS_ROOT}/guides/setup`
+export const MCP = `${DOCS_ROOT}/guides/agents`
 export const BENCHMARKS = `${GITHUB}#benchmarks`
-export const SELF_HOST = `${BLOB}/docs/self-hosting.md`
-export const SECURITY = `${BLOB}/docs/self-hosting.md#security-notes`
-export const CHANGELOG = `${BLOB}/CHANGELOG.md`
+export const SELF_HOST = `${DOCS_ROOT}/self-hosting`
+export const SECURITY = `${DOCS_ROOT}/security`
+export const CHANGELOG = `${DOCS_ROOT}/changelog`
 export const LICENSE = `${BLOB}/LICENSE`
 
 // What "copy the prompt" puts on the clipboard: enough for a coding agent to

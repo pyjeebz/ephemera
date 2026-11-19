@@ -23,6 +23,19 @@ const nextConfig: NextConfig = {
       },
     ]
   },
+  // ephemera.run/docs is the Mintlify site, served through this one. Its
+  // scripts, styles and assets load from the root, so those paths go to
+  // Mintlify too.
+  async rewrites() {
+    const docs = "https://ephemera.mintlify.site"
+    return [
+      { source: "/docs", destination: `${docs}/docs` },
+      { source: "/docs/:match*", destination: `${docs}/docs/:match*` },
+      { source: "/_mintlify/:path*", destination: `${docs}/_mintlify/:path*` },
+      { source: "/mintlify-assets/:path+", destination: `${docs}/mintlify-assets/:path+` },
+      { source: "/api/request", destination: `${docs}/_mintlify/api/request` },
+    ]
+  },
   turbopack: {
     rules: {
       "*.css": {

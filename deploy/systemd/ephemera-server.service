@@ -3,7 +3,7 @@
 # user with a read-only view of the system. Installed by deploy/host/install.sh.
 [Unit]
 Description=ephemera central server
-Documentation=https://github.com/pyjeebz/ephemera/blob/main/docs/self-hosting.md
+Documentation=https://ephemera.run/docs/self-hosting
 Wants=network-online.target
 After=network-online.target tailscaled.service
 
