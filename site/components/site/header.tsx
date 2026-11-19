@@ -29,7 +29,7 @@ export function Header() {
           GitHub
         </a>
         <Button asChild>
-          <a href="#get-started">Get started</a>
+          <a href="/login">Get started</a>
         </Button>
       </div>
     </header>

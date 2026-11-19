@@ -35,7 +35,7 @@ export function Footer() {
           </p>
           <div className="buttons">
             <Button asChild size="xl">
-              <a href="#get-started">Get started</a>
+              <a href="/login">Get started</a>
             </Button>
             <Button asChild size="xl" variant="outline">
               <a href={SELF_HOST}>Set up a host</a>

@@ -35,7 +35,7 @@ export function Hero() {
         <div className="cta">
           <div className="buttons">
             <Button asChild size="xl" className="solid">
-              <a href="#get-started">Get started</a>
+              <a href="/login">Get started</a>
             </Button>
             <Button asChild size="xl" variant="outline" className="solid">
               <a href={DOCS}>Read the docs</a>
