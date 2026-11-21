@@ -6,7 +6,8 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { API, api, type Token } from "@/lib/api"
 import { useApi } from "@/lib/use-api"
-import { date } from "@/lib/format"
+import { ago, date } from "@/lib/format"
+import { useNow } from "@/lib/use-now"
 import { cn } from "@/lib/utils"
 import { CopyLine } from "./copy-line"
 import { PageHeader, pageAction, Panel, PanelBar, Problem, Quiet, Tabs, td, th } from "./dash"
@@ -19,12 +20,14 @@ function limits(t: Token) {
 }
 
 function TokenTable({ tokens, onRevoked }: { tokens: Token[]; onRevoked: () => void }) {
+  const now = useNow()
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] table-fixed">
+      <table className="w-full min-w-[720px] table-fixed">
         <colgroup>
-          <col className="w-[44%]" />
-          <col className="w-[26%]" />
+          <col className="w-[34%]" />
+          <col className="w-[22%]" />
+          <col className="w-[14%]" />
           <col className="w-[14%]" />
           <col className="w-[16%]" />
         </colgroup>
@@ -33,6 +36,7 @@ function TokenTable({ tokens, onRevoked }: { tokens: Token[]; onRevoked: () => v
             <th className={th}>Name</th>
             <th className={th}>Limits</th>
             <th className={th}>Made</th>
+            <th className={th}>Last used</th>
             <th className={th}>
               <span className="sr-only">Actions</span>
             </th>
@@ -48,6 +52,9 @@ function TokenTable({ tokens, onRevoked }: { tokens: Token[]; onRevoked: () => v
               </td>
               <td className={cn(td, "text-muted-foreground")}>{limits(t)}</td>
               <td className={cn(td, "tabular-nums text-muted-foreground")}>{date(t.created)}</td>
+              <td className={cn(td, "tabular-nums text-muted-foreground")} title={t.last_used}>
+                {t.last_used ? (now ? ago(t.last_used, now) : "") : "never"}
+              </td>
               <td className={cn(td, "text-right")}>
                 <Revoke token={t} onRevoked={onRevoked} />
               </td>

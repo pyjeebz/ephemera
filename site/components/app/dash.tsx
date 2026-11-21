@@ -276,8 +276,14 @@ export function Result({ run }: { run: Run }) {
     )
   }
   const reason = run.end_reason ?? "destroyed"
+  const code = run.exit_code
   return (
-    <span className={reason === "destroyed" ? "text-muted-foreground" : "text-destructive"}>{ENDED[reason][0]}</span>
+    <span className={reason === "destroyed" ? "text-muted-foreground" : "text-destructive"}>
+      {ENDED[reason][0]}
+      {code !== undefined && (
+        <span className={code === 0 ? "text-muted-foreground" : "text-destructive"}> · exit {code}</span>
+      )}
+    </span>
   )
 }
 

@@ -109,8 +109,8 @@ export function Sandboxes() {
         )}
       </Panel>
       <p className="mt-4 text-[13px] text-faint">
-        ephemera keeps when each sandbox ran, where, how it ended and what it could reach. Never the command, files or
-        output.
+        ephemera keeps when each sandbox ran, where, how it ended and what it could reach, plus the last command’s exit
+        code and how many connections were allowed and blocked. Never the command, files or output.
       </p>
     </>
   )
@@ -317,6 +317,20 @@ export function Stop({ run, onStopped }: { run: { id: string; name?: string }; o
   )
 }
 
+// Connections is how many connections the host let through and stopped,
+// when it said. A sandbox with no network that tried nothing says nothing.
+function Connections({ run }: { run: Run }) {
+  const allowed = run.connections_allowed
+  const blocked = run.connections_blocked
+  if (allowed === undefined || blocked === undefined) return null
+  if ((run.spec.network ?? "none") === "none" && allowed + blocked === 0) return null
+  return (
+    <p className="mt-1 text-[13px] tabular-nums text-muted-foreground">
+      {allowed} allowed, {blocked} blocked
+    </p>
+  )
+}
+
 function Detail({ run }: { run: Run }) {
   const s = run.spec
   const why = run.ended_at ? ENDED[run.end_reason ?? "destroyed"][1] : "It’s still running."
@@ -346,6 +360,7 @@ function Detail({ run }: { run: Run }) {
               ? "It could reach anything."
               : "It had no network."}
         </p>
+        <Connections run={run} />
       </div>
       <div>
         <p className="text-[13px] text-faint">Id</p>

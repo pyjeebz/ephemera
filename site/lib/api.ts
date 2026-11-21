@@ -49,6 +49,11 @@ export type Run = {
   created_at: string
   ended_at?: string
   end_reason?: "destroyed" | "limit" | "gone" | "failed"
+  // From the host when the run ended; missing when it didn't say, as older
+  // hosts don't. exit_code is the last command's, missing if none ran.
+  exit_code?: number
+  connections_allowed?: number
+  connections_blocked?: number
 }
 
 export type Usage = { day: string; minutes_today: number; running: number }
@@ -60,6 +65,8 @@ export type Token = {
   created: string
   max_sandboxes?: number
   max_minutes_per_day?: number
+  // last_used is up to a minute behind; missing if it was never used.
+  last_used?: string
 }
 
 export type JoinCode = { code: string; expires: string }
