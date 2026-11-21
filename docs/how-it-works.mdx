@@ -63,6 +63,6 @@ Every host has a maximum lifetime for any sandbox, 24 hours by default, so a for
 
 ## The central server mostly keeps lists
 
-It knows your account, your tokens (as hashes), your hosts and their keys, and the sandboxes running now and those that ran, with when, where, how they ended and how they were set up. It never sees a file, a command's output or an environment value. It can't open a sandbox either: it has only the hash of each sandbox's token, and the CLI keeps the token.
+It knows your account, your tokens (as hashes), your hosts and their keys, and the sandboxes running now and those that ran, with when, where, how they ended and how they were set up. For each that ended, its host also tells it the last command's exit code and how many connections were allowed and blocked. It never sees a file, a command's output or an environment value. It can't open a sandbox either: it has only the hash of each sandbox's token, and the CLI keeps the token.
 
 [Security and data flow](/security) lists every hop and everything the central server stores.

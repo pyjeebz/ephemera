@@ -4,13 +4,13 @@ description: "Every hop your code takes, what the central server stores, and eve
 sidebarTitle: "Security and data flow"
 ---
 
-Your files go from your laptop to your host, over TLS 1.3 checked against the host's own key. Output comes back the same way. The central server, hosted at `api.ephemera.run` or run by you, places sandboxes and keeps lists: ids, names, times and keys. It never receives a file, a command's output or an environment value, and it can't open a sandbox.
+Your files go from your laptop to your host, over TLS 1.3 checked against the host's own key. Output comes back the same way. The central server, hosted at `api.ephemera.run` or run by you, places sandboxes and keeps lists: ids, names, times and keys. When a sandbox ends, its host also tells it the last command's exit code and how many connections were allowed and blocked. It never receives a file, a command's output or an environment value, and it can't open a sandbox.
 
 ```mermaid
 flowchart LR
   laptop -- "TLS 1.3, pinned host key: files, commands, env, output, ports" --> host
   laptop -- "https: create, list, destroy (API token)" --> cs[central server]
-  host -- "one outbound connection: hello, heartbeats, sandbox ids" --> cs
+  host -- "one outbound connection: hello, heartbeats, sandbox ids, exit codes, connection counts" --> cs
   cs -- "create, destroy" --> host
   host -- "allowed connections only, through the egress proxy" --> internet
 ```
@@ -49,13 +49,13 @@ Each sandbox has its own access token. The CLI makes it, keeps it, and sends the
 | - | - |
 | Your account | Your GitHub user id, login, name and avatar URL. Sign-in asks GitHub only for `read:user`, never your repositories. GitHub's access token is used once and dropped |
 | Sessions | A hash of each session's secret, for 30 days |
-| Tokens | Name, kind, limits, when it was made, and a SHA-256 of the secret |
+| Tokens | Name, kind, limits, when it was made, when it last made a request (written at most once a minute), and a SHA-256 of the secret |
 | Hosts | Name, id, public key, when it joined |
-| Sandboxes | Id, host, token name, the settings it was made with (image, size, network mode and allow list, lifetime), when it started and ended, and why it ended |
+| Sandboxes | Id, host, token name, the settings it was made with (image, size, network mode and allow list, lifetime), when it started and ended, and why it ended. From its host when it ends: the last command's exit code, and how many connections were allowed and how many blocked. Not which hosts they went to |
 | Usage | Sandbox-seconds per token per day |
 | Join codes and sign-in codes | Hashes, until used or expired: 15 minutes for a join code, 10 minutes for a sign-in code |
 
-Never: files, command lines, output, environment values, sandbox tokens, setup snapshots, records, or your GitHub token.
+Never: files, command lines, output, environment values, the hosts a sandbox connected to, sandbox tokens, setup snapshots, records, or your GitHub token.
 
 ## On the host
 
