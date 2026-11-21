@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
-import { HOW_IT_WORKS, INSTALL, INSTALL_DOCS, MCP, SELF_HOST, SNAPSHOTS } from "@/lib/site"
+import { HOSTS_DOCS, HOW_IT_WORKS, INSTALL, INSTALL_DOCS, MCP, SNAPSHOTS } from "@/lib/site"
 import { cn } from "@/lib/utils"
 
 type Line = ["$" | "" | "!" | "#", string]
@@ -14,17 +14,18 @@ const STEPS: { title: string; body: ReactNode; link: [string, string]; script: L
     title: "Install the CLI",
     body: (
       <>
-        One command on macOS, Linux or Windows. Then <code>ephemera login</code> connects it to your server with an API token.
-        No host yet? <a className="inline" href={SELF_HOST}>Set one up</a> on any Linux machine with KVM.
+        One command on macOS, Linux or Windows. Then <code>ephemera login</code> signs it in: approve the code in your
+        browser, with GitHub. No host yet? <a className="inline" href={HOSTS_DOCS}>Add one</a> on any Linux machine with KVM.
       </>
     ),
     link: ["Quickstart", INSTALL_DOCS],
     script: [
       ["$", INSTALL],
-      ["", "ephemera: installed v0.1.1 (linux-amd64) to /usr/local/bin/ephemera"],
-      ["$", "ephemera login --server https://ephemera.acme.dev"],
-      ["", "API token:"],
-      ["", "Logged in to https://ephemera.acme.dev as laptop (saved in ~/.config/ephemera/config.json)"],
+      ["", "ephemera: installed v0.2.1 (linux-amd64) to /usr/local/bin/ephemera"],
+      ["$", "ephemera login"],
+      ["", "To sign in, open this page and check it shows K7QM-2XRT:"],
+      ["", "  https://ephemera.run/device?code=K7QM-2XRT"],
+      ["", "Logged in to https://api.ephemera.run as laptop (saved in ~/.config/ephemera/config.json)"],
     ],
   },
   {

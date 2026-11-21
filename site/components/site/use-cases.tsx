@@ -40,11 +40,8 @@ const CARDS: { scene: string; tag: string; title: string; body: ReactNode }[] = 
     title: "CI that leaves nothing behind",
     body: (
       <>
-        Give CI its own token with a daily limit (
-        <code className="wrap">
-          <span className="nw">ephemera-server</span> token create ci <span className="nw">--max-minutes</span> 600
-        </code>
-        ). Every job starts in a fresh box, and nothing carries over to the next one.
+        Give CI its own token with a daily limit, made in the dashboard under Tokens. Every job starts in a fresh box, and
+        nothing carries over to the next one.
       </>
     ),
   },

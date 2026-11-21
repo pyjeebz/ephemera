@@ -12,7 +12,7 @@ const ROWS: [string, Cell, Cell, Cell][] = [
   ["Network allowed per host, blocked by default", ["No", "all or nothing"], ["No"], ["Yes", "with every attempt logged"]],
   ["Deleted when the command ends", ["Only with", <code key="rm">--rm</code>], ["No", "it stays until you stop it"], ["Always", "disk included"]],
   ["Signed record of what ran", ["No"], ["No"], ["Yes", <>checked with <code>ephemera verify</code></>]],
-  ["Runs on hardware you own", ["Yes"], ["No"], ["Yes", "self-hosted"]],
+  ["Runs on hardware you own", ["Yes"], ["No"], ["Yes", "your own hosts"]],
   // The one ephemera loses. It stays last and untinted, so it reads as plainly as the rest.
   ["Works without a server", ["Yes"], ["No"], ["No", "it needs a Linux host with KVM"]],
 ]

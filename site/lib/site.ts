@@ -13,6 +13,7 @@ export const MCP = `${DOCS_ROOT}/guides/agents`
 export const BENCHMARKS = `${GITHUB}#benchmarks`
 export const SELF_HOST = `${DOCS_ROOT}/self-hosting`
 export const SECURITY = `${DOCS_ROOT}/security`
+export const HOSTS_DOCS = `${DOCS_ROOT}/guides/hosts`
 export const CHANGELOG = `${DOCS_ROOT}/changelog`
 export const LICENSE = `${BLOB}/LICENSE`
 

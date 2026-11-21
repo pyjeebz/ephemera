@@ -9,7 +9,7 @@ const QUESTIONS: [string, ReactNode][] = [
   ],
   [
     "Can anyone see my code?",
-    "Files, output and secrets go straight from your laptop to the host that runs the sandbox. The central server only places sandboxes and tracks their IDs and states, and it never sees your code. You run both, so nothing leaves machines you control.",
+    "Files, output and secrets go straight from your laptop to the host that runs the sandbox. The central server only places sandboxes and tracks their IDs and states, and it never sees your code. Hosts are always your own machines; run the central server yourself too, and nothing leaves machines you control.",
   ],
   [
     "What about .env.local?",
@@ -27,7 +27,7 @@ const QUESTIONS: [string, ReactNode][] = [
   ],
   [
     "What do I need to run it?",
-    "For the CLI, macOS, Linux or Windows. For a host, an x86_64 Linux machine with KVM; we test on Ubuntu 24.04. One machine can run both the central server and the host.",
+    "For the CLI, macOS, Linux or Windows. For a host, an x86_64 Linux machine with KVM; we test on Ubuntu 24.04. If you run your own central server, one machine can run both it and the host.",
   ],
   [
     "How long can a sandbox live?",
