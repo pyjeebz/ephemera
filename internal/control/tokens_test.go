@@ -2,10 +2,14 @@ package control
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestTokenFile(t *testing.T) {
@@ -83,5 +87,91 @@ func TestTokenNamesUniqueAndLimits(t *testing.T) {
 	}
 	if err := tf.SetTokenLimits(context.Background(), "agent", Limits{MaxSandboxes: -1}); err == nil {
 		t.Error("negative limits accepted")
+	}
+}
+
+// touchCounter is a TokenFile that counts writes of tokens' last use.
+type touchCounter struct {
+	*TokenFile
+	mu sync.Mutex
+	n  int
+}
+
+func (c *touchCounter) TouchToken(ctx context.Context, id string, at time.Time) error {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return c.TokenFile.TouchToken(ctx, id, at)
+}
+
+func (c *touchCounter) writes() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// A token's last use is written when it makes a request, at most once a
+// minute.
+func TestTokenLastUsed(t *testing.T) {
+	ctx := context.Background()
+	tc := &touchCounter{TokenFile: &TokenFile{Path: filepath.Join(t.TempDir(), "tokens.json")}}
+	_, secret, err := tc.CreateToken(ctx, "laptop", "", Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	now := time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)
+	later := func(d time.Duration) {
+		mu.Lock()
+		now = now.Add(d)
+		mu.Unlock()
+	}
+	s := &Server{Tokens: tc, Now: func() time.Time { mu.Lock(); defer mu.Unlock(); return now }}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	get := func(token string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/usage", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	lastUsed := func() *time.Time {
+		t.Helper()
+		recs, err := tc.ListTokens(ctx)
+		if err != nil || len(recs) != 1 {
+			t.Fatalf("tokens = %+v, %v", recs, err)
+		}
+		return recs[0].LastUsed
+	}
+
+	if get("eph_wrong") != http.StatusUnauthorized || tc.writes() != 0 || lastUsed() != nil {
+		t.Fatalf("a bad token: %d writes, last used %v", tc.writes(), lastUsed())
+	}
+	first := now
+	for range 3 {
+		if code := get(secret); code != http.StatusOK {
+			t.Fatalf("usage: %d", code)
+		}
+	}
+	later(59 * time.Second)
+	get(secret)
+	if n := tc.writes(); n != 1 {
+		t.Errorf("4 requests within a minute: %d writes, want 1", n)
+	}
+	if got := lastUsed(); got == nil || !got.Equal(first) {
+		t.Errorf("last used %v, want %v", got, first)
+	}
+	later(time.Second)
+	get(secret)
+	if n := tc.writes(); n != 2 {
+		t.Errorf("a minute later: %d writes, want 2", n)
+	}
+	if got := lastUsed(); got == nil || !got.Equal(first.Add(time.Minute)) {
+		t.Errorf("last used %v, want %v", got, first.Add(time.Minute))
 	}
 }

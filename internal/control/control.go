@@ -63,6 +63,8 @@ type Server struct {
 	results map[string]api.RunSummary
 	// misses counts unknown codes tried at the device approval page.
 	misses misses
+	// touched is when each token's last use was last written, by id.
+	touched map[string]time.Time
 }
 
 // owner is a token, in its account. Usage and limits are counted per owner.
@@ -235,7 +237,39 @@ func (s *Server) user(h http.HandlerFunc) http.HandlerFunc {
 		}
 		s.limits[owner{p.Account, p.Name}] = p.Limits
 		s.mu.Unlock()
+		s.touch(r.Context(), p.TokenID)
 		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
+	}
+}
+
+// touchEvery is how often a token's last use is written, at most, so a
+// busy token isn't a write on every request.
+const touchEvery = time.Minute
+
+// touch records that a token was used, if the store keeps that and it
+// wasn't written in the last touchEvery.
+func (s *Server) touch(ctx context.Context, id string) {
+	ts, ok := s.Tokens.(interface {
+		TouchToken(ctx context.Context, id string, at time.Time) error
+	})
+	if !ok || id == "" {
+		return
+	}
+	now := s.now()
+	s.mu.Lock()
+	if last, ok := s.touched[id]; ok && now.Sub(last) < touchEvery {
+		s.mu.Unlock()
+		return
+	}
+	if s.touched == nil {
+		s.touched = map[string]time.Time{}
+	}
+	s.touched[id] = now
+	s.mu.Unlock()
+	// A failure is logged and tried again a minute later; the request
+	// goes ahead either way.
+	if err := ts.TouchToken(context.WithoutCancel(ctx), id, now.UTC()); err != nil {
+		s.log().Error("store: token last used", "token", id, "err", err)
 	}
 }
 

@@ -27,7 +27,10 @@ type Tokens interface {
 
 // Principal is a token's owner and the limits on what it may use.
 type Principal struct {
-	Name string
+	// TokenID is the token's id, empty for a token with none, such as a
+	// StaticToken.
+	TokenID string
+	Name    string
 	// Account is who the token belongs to. A token sees and destroys only
 	// its own account's sandboxes.
 	Account string
@@ -81,11 +84,15 @@ type TokenRecord struct {
 	Kind    string    `json:"kind,omitempty"`    // device or api; empty is api
 	Hash    string    `json:"sha256"`
 	Created time.Time `json:"created"`
+	// LastUsed is when the token last made a request, up to a minute behind;
+	// nil if it never has.
+	LastUsed *time.Time `json:"last_used,omitempty"`
 	Limits
 }
 
-// TokenFile keeps tokens in a JSON file. The running server only reads
-// it, reloading when it changes; "ephemera-server token" commands write it.
+// TokenFile keeps tokens in a JSON file. The running server reads it,
+// reloading when it changes, and writes only when each token was last
+// used; "ephemera-server token" commands write the rest.
 type TokenFile struct {
 	Path string
 
@@ -147,7 +154,7 @@ func (f *TokenFile) Check(_ context.Context, token string) (Principal, bool) {
 	// The lookup is by hash, so the secret itself is never compared
 	// byte by byte.
 	rec, ok := f.byHash[HashToken(token)]
-	return Principal{Name: rec.Name, Account: accountOr(rec.Account), Limits: rec.Limits}, ok
+	return Principal{TokenID: rec.ID, Name: rec.Name, Account: accountOr(rec.Account), Limits: rec.Limits}, ok
 }
 
 func (f *TokenFile) reloadLocked() error {
@@ -261,6 +268,19 @@ func (f *TokenFile) SetTokenLimits(_ context.Context, idOrName string, limits Li
 			}
 		}
 		return nil, fmt.Errorf("no token %q", idOrName)
+	})
+}
+
+// TouchToken implements TokenStore.
+func (f *TokenFile) TouchToken(_ context.Context, id string, at time.Time) error {
+	return f.update(func(recs []TokenRecord) ([]TokenRecord, error) {
+		for i := range recs {
+			if recs[i].ID == id && (recs[i].LastUsed == nil || recs[i].LastUsed.Before(at)) {
+				t := at.UTC()
+				recs[i].LastUsed = &t
+			}
+		}
+		return recs, nil
 	})
 }
 

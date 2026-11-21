@@ -27,6 +27,10 @@ type TokenStore interface {
 	SetTokenLimits(ctx context.Context, idOrName string, limits Limits) error
 	// RevokeToken deletes the token with this id or name.
 	RevokeToken(ctx context.Context, idOrName string) error
+	// TouchToken records that the token with this id was used at a time,
+	// unless it was already used later. An unknown id is not an error:
+	// the token may have been revoked meanwhile.
+	TouchToken(ctx context.Context, id string, at time.Time) error
 }
 
 // StateStore keeps what the central server must not lose on a restart:

@@ -101,6 +101,57 @@ func Tokens(t *testing.T, open func(t *testing.T) control.TokenStore) {
 			t.Errorf("list = %+v, want agent then later", recs)
 		}
 	})
+
+	t.Run("last used", func(t *testing.T) {
+		at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
+		ts := open(t)
+		rec, secret, err := ts.CreateToken(ctx, "laptop", "", control.Limits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := ts.CreateToken(ctx, "unused", "", control.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		if p, _ := ts.Check(ctx, secret); p.TokenID != rec.ID {
+			t.Errorf("Check gives token id %q, want %q", p.TokenID, rec.ID)
+		}
+		lastUsed := func() map[string]*time.Time {
+			t.Helper()
+			recs, err := ts.ListTokens(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := map[string]*time.Time{}
+			for _, r := range recs {
+				out[r.Name] = r.LastUsed
+			}
+			return out
+		}
+		if got := lastUsed(); got["laptop"] != nil || got["unused"] != nil {
+			t.Errorf("new tokens were used at %v", got)
+		}
+		if err := ts.TouchToken(ctx, rec.ID, at); err != nil {
+			t.Fatal(err)
+		}
+		// An earlier time, as from a slow request, doesn't move it back.
+		if err := ts.TouchToken(ctx, rec.ID, at.Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		got := lastUsed()
+		if got["laptop"] == nil || !got["laptop"].Equal(at) {
+			t.Errorf("laptop last used %v, want %v", got["laptop"], at)
+		}
+		if got["unused"] != nil {
+			t.Errorf("touching laptop touched unused too: %v", got["unused"])
+		}
+		if err := ts.TouchToken(ctx, "tok_revoked", at); err != nil {
+			t.Errorf("touching a token that's gone: %v, want nil", err)
+		}
+		// The token still works, with what it had.
+		if p, ok := ts.Check(ctx, secret); !ok || p.Name != "laptop" {
+			t.Errorf("after touching, Check = %+v, %v", p, ok)
+		}
+	})
 }
 
 // State checks a StateStore. open returns a new, empty store.
@@ -324,8 +375,15 @@ func Accounts(t *testing.T, open func(t *testing.T) control.AccountStore) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(recs) != 1 || recs[0].ID != mine.ID {
+		if len(recs) != 1 || recs[0].ID != mine.ID || recs[0].LastUsed != nil {
 			t.Errorf("gh-1's tokens = %+v", recs)
+		}
+		at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
+		if err := as.TouchToken(ctx, mine.ID, at); err != nil {
+			t.Fatal(err)
+		}
+		if recs, _ := as.AccountTokens(ctx, "gh-1"); len(recs) != 1 || recs[0].LastUsed == nil || !recs[0].LastUsed.Equal(at) {
+			t.Errorf("after use, gh-1's tokens = %+v", recs)
 		}
 		if err := as.RevokeAccountToken(ctx, "gh-1", theirs.ID); err != control.ErrNotFound {
 			t.Errorf("revoking another account's token: %v, want ErrNotFound", err)

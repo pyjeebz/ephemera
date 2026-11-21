@@ -53,6 +53,9 @@ func TestDashboardSession(t *testing.T) {
 		t.Fatalf("create with the token: %s", r.Status)
 	}
 	sb := decode[api.Sandbox](t, r)
+	if toks := decode[[]api.Token](t, w.do("GET", "/v1/tokens", session(octo, ""), nil)); len(toks) != 1 || toks[0].LastUsed == nil {
+		t.Errorf("after a request, octo's tokens = %+v", toks)
+	}
 
 	// A session can't make sandboxes, even from the dashboard.
 	if r := w.do("POST", "/v1/sandboxes", session(octo, dashboard), api.CreateSandboxRequest{TokenHash: api.HashSandboxToken("u")}); r.StatusCode != http.StatusUnauthorized {

@@ -117,8 +117,8 @@ func (s *Store) Check(ctx context.Context, token string) (control.Principal, boo
 	}
 	var p control.Principal
 	err := s.pool.QueryRow(ctx,
-		`SELECT name, account_id, max_sandboxes, max_minutes_per_day FROM tokens WHERE sha256 = $1`,
-		control.HashToken(token)).Scan(&p.Name, &p.Account, &p.MaxSandboxes, &p.MaxMinutesPerDay)
+		`SELECT id, name, account_id, max_sandboxes, max_minutes_per_day FROM tokens WHERE sha256 = $1`,
+		control.HashToken(token)).Scan(&p.TokenID, &p.Name, &p.Account, &p.MaxSandboxes, &p.MaxMinutesPerDay)
 	return p, err == nil
 }
 
@@ -168,13 +168,24 @@ func (s *Store) ListTokens(ctx context.Context) ([]control.TokenRecord, error) {
 	return pgx.CollectRows(rows, scanToken)
 }
 
-const tokenColumns = `id, name, account_id, kind, sha256, max_sandboxes, max_minutes_per_day, created_at`
+const tokenColumns = `id, name, account_id, kind, sha256, max_sandboxes, max_minutes_per_day, created_at, last_used_at`
 
 func scanToken(r pgx.CollectableRow) (control.TokenRecord, error) {
 	var t control.TokenRecord
-	err := r.Scan(&t.ID, &t.Name, &t.Account, &t.Kind, &t.Hash, &t.MaxSandboxes, &t.MaxMinutesPerDay, &t.Created)
+	err := r.Scan(&t.ID, &t.Name, &t.Account, &t.Kind, &t.Hash, &t.MaxSandboxes, &t.MaxMinutesPerDay, &t.Created, &t.LastUsed)
 	t.Created = t.Created.UTC()
+	if t.LastUsed != nil {
+		u := t.LastUsed.UTC()
+		t.LastUsed = &u
+	}
 	return t, err
+}
+
+// TouchToken implements control.TokenStore.
+func (s *Store) TouchToken(ctx context.Context, id string, at time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE tokens SET last_used_at = $2
+		WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < $2)`, id, at)
+	return err
 }
 
 // tokenID finds the token with this id, or the one token with this name.

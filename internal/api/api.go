@@ -463,6 +463,9 @@ type Token struct {
 	Created          time.Time `json:"created"`
 	MaxSandboxes     int       `json:"max_sandboxes,omitempty"`
 	MaxMinutesPerDay int       `json:"max_minutes_per_day,omitempty"`
+	// LastUsed is when the token last made a request, up to a minute behind;
+	// nil if it never has.
+	LastUsed *time.Time `json:"last_used,omitempty"`
 }
 
 // CreateTokenRequest asks for a new API token in the caller's account.

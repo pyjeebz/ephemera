@@ -412,7 +412,7 @@ func tokenOut(t TokenRecord) api.Token {
 	if kind == "" {
 		kind = "api"
 	}
-	return api.Token{ID: t.ID, Name: t.Name, Kind: kind, Created: t.Created,
+	return api.Token{ID: t.ID, Name: t.Name, Kind: kind, Created: t.Created, LastUsed: t.LastUsed,
 		MaxSandboxes: t.MaxSandboxes, MaxMinutesPerDay: t.MaxMinutesPerDay}
 }
 
