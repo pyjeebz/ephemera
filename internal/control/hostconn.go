@@ -231,8 +231,38 @@ func (s *Server) hostConnect(w http.ResponseWriter, r *http.Request) {
 			}
 		case "result":
 			c.deliver(m)
+		case "ended":
+			s.ended(id, m)
 		}
 	}
+}
+
+// ended keeps what a host said about one of its sandboxes that ended on
+// its own, such as by reaching its maximum lifetime. The record stays
+// until the CLI destroys the sandbox, collecting its signed record, or the
+// host stops listing it; the summary is stored then.
+func (s *Server) ended(hostID string, m api.HostMessage) {
+	if sane(m.Run) == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// A host speaks only for its own sandboxes.
+	if sb := s.sandboxes[m.Sandbox]; sb == nil || sb.HostID != hostID {
+		return
+	}
+	if s.results == nil {
+		s.results = map[string]api.RunSummary{}
+	}
+	s.results[m.Sandbox] = *m.Run
+}
+
+// sane returns run, or nil if it is missing or makes no sense.
+func sane(run *api.RunSummary) *api.RunSummary {
+	if run == nil || run.ConnectionsAllowed < 0 || run.ConnectionsBlocked < 0 {
+		return nil
+	}
+	return run
 }
 
 // checkHello checks a host's hello: its protocol, its address, and its
@@ -321,8 +351,8 @@ func (s *Server) hostRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	for _, sb := range on {
-		s.hostDo(r.Context(), id, api.HostMessage{Type: "destroy", Sandbox: sb.ID})
-		s.end(r.Context(), sb, EndDestroyed)
+		res, _ := s.hostDo(r.Context(), id, api.HostMessage{Type: "destroy", Sandbox: sb.ID})
+		s.end(r.Context(), sb, EndDestroyed, res.Run)
 	}
 	s.mu.Lock()
 	h := s.hosts[id]
@@ -392,7 +422,7 @@ func (s *Server) reconcile(ctx context.Context, id string, reported []string) []
 	}
 	for _, sb := range gone {
 		s.log().Info("sandbox gone from its host; record dropped", "sandbox", sb.ID, "host", id)
-		s.end(ctx, sb, EndGone)
+		s.end(ctx, sb, EndGone, nil)
 	}
 	return destroy
 }

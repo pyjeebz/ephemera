@@ -20,6 +20,7 @@ import (
 func TestStore(t *testing.T) {
 	storetest.Tokens(t, func(t *testing.T) control.TokenStore { s, _ := pgtest.Open(t); return s })
 	storetest.State(t, func(t *testing.T) control.StateStore { s, _ := pgtest.Open(t); return s })
+	storetest.Runs(t, func(t *testing.T) storetest.RunStateStore { s, _ := pgtest.Open(t); return s })
 	storetest.Accounts(t, func(t *testing.T) control.AccountStore { s, _ := pgtest.Open(t); return s })
 	storetest.Hosts(t, func(t *testing.T) control.HostStore { s, _ := pgtest.Open(t); return s })
 }
@@ -81,7 +82,7 @@ func TestRunNames(t *testing.T) {
 			t.Fatal(err)
 		}
 		if i == 0 {
-			if err := s.EndSandbox(ctx, sb.ID, at.Add(time.Minute), control.EndDestroyed); err != nil {
+			if err := s.EndSandbox(ctx, sb.ID, at.Add(time.Minute), control.EndDestroyed, nil); err != nil {
 				t.Fatal(err)
 			}
 		}

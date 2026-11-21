@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -138,10 +139,12 @@ func State(t *testing.T, open func(t *testing.T) control.StateStore) {
 			t.Errorf("a sandbox with no account came back in %q", running[1].Account)
 		}
 
-		if err := st.EndSandbox(ctx, "sbx_a", at.Add(time.Minute), control.EndDestroyed); err != nil {
+		exit := 0
+		if err := st.EndSandbox(ctx, "sbx_a", at.Add(time.Minute), control.EndDestroyed,
+			&api.RunSummary{ExitCode: &exit, ConnectionsAllowed: 14, ConnectionsBlocked: 1}); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.EndSandbox(ctx, "sbx_a", at.Add(2*time.Minute), control.EndGone); err != nil {
+		if err := st.EndSandbox(ctx, "sbx_a", at.Add(2*time.Minute), control.EndGone, nil); err != nil {
 			t.Errorf("ending a sandbox twice: %v", err)
 		}
 		running, _ = st.RunningSandboxes(ctx)
@@ -176,6 +179,76 @@ func State(t *testing.T, open func(t *testing.T) control.StateStore) {
 		want := map[string]float64{"alice/laptop/2026-11-11": 75, "bob/laptop/2026-11-11": 5}
 		if len(sum) != len(want) || sum["alice/laptop/2026-11-11"] != 75 || sum["bob/laptop/2026-11-11"] != 5 {
 			t.Errorf("usage = %v, want %v", sum, want)
+		}
+	})
+}
+
+// RunStateStore keeps sandboxes and their run history.
+type RunStateStore interface {
+	control.StateStore
+	control.RunStore
+}
+
+// Runs checks a store's run history. open returns a new, empty store.
+func Runs(t *testing.T, open func(t *testing.T) RunStateStore) {
+	ctx := context.Background()
+	at := time.Date(2026, 11, 12, 9, 30, 0, 0, time.UTC)
+	num := func(n int) *int { return &n }
+
+	t.Run("what the host said", func(t *testing.T) {
+		st := open(t)
+		for i, id := range []string{"sbx_said", "sbx_nocommand", "sbx_older", "sbx_running"} {
+			sb := api.Sandbox{ID: id, Host: "h1", HostID: "host_1", Account: "alice", Owner: "laptop",
+				CreatedAt: at.Add(time.Duration(i) * time.Second)}
+			if err := st.StartSandbox(ctx, sb); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ends := map[string]*api.RunSummary{
+			"sbx_said":      {ExitCode: num(3), ConnectionsAllowed: 14, ConnectionsBlocked: 1},
+			"sbx_nocommand": {},  // no command ran and nothing was reached
+			"sbx_older":     nil, // a host that doesn't say
+		}
+		for id, run := range ends {
+			if err := st.EndSandbox(ctx, id, at.Add(time.Minute), control.EndDestroyed, run); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Ending again changes nothing.
+		if err := st.EndSandbox(ctx, "sbx_said", at.Add(2*time.Minute), control.EndGone, &api.RunSummary{ExitCode: num(9)}); err != nil {
+			t.Fatal(err)
+		}
+		runs, err := st.AccountRuns(ctx, "alice", at.Add(time.Hour), 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]api.Run{}
+		for _, r := range runs {
+			got[r.ID] = r
+		}
+		str := func(p *int) string {
+			if p == nil {
+				return "unknown"
+			}
+			return strconv.Itoa(*p)
+		}
+		for id, want := range map[string][3]string{
+			"sbx_said":      {"3", "14", "1"},
+			"sbx_nocommand": {"unknown", "0", "0"},
+			"sbx_older":     {"unknown", "unknown", "unknown"},
+			"sbx_running":   {"unknown", "unknown", "unknown"},
+		} {
+			r, ok := got[id]
+			if !ok {
+				t.Errorf("%s is not in the runs", id)
+				continue
+			}
+			if have := [3]string{str(r.ExitCode), str(r.ConnectionsAllowed), str(r.ConnectionsBlocked)}; have != want {
+				t.Errorf("%s: exit code, allowed, blocked = %v, want %v", id, have, want)
+			}
+		}
+		if r := got["sbx_said"]; r.EndReason != control.EndDestroyed || r.EndedAt == nil || !r.EndedAt.Equal(at.Add(time.Minute)) {
+			t.Errorf("ending twice changed the first end: %+v", r)
 		}
 	})
 }

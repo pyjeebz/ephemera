@@ -247,10 +247,16 @@ func accountOr(a string) string {
 }
 
 // EndSandbox implements control.StateStore. The row stays, with when and
-// why it ended.
-func (s *Store) EndSandbox(ctx context.Context, id string, at time.Time, reason string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE sandboxes SET ended_at = $2, end_reason = $3 WHERE id = $1 AND ended_at IS NULL`,
-		id, at, reason)
+// why it ended, and what its host said about it.
+func (s *Store) EndSandbox(ctx context.Context, id string, at time.Time, reason string, run *api.RunSummary) error {
+	var exit, allowed, blocked *int
+	if run != nil {
+		exit, allowed, blocked = run.ExitCode, &run.ConnectionsAllowed, &run.ConnectionsBlocked
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE sandboxes SET ended_at = $2, end_reason = $3,
+		exit_code = $4, connections_allowed = $5, connections_blocked = $6
+		WHERE id = $1 AND ended_at IS NULL`,
+		id, at, reason, exit, allowed, blocked)
 	return err
 }
 
@@ -303,7 +309,8 @@ var _ control.RunStore = (*Store)(nil)
 // AccountRuns implements control.RunStore.
 func (s *Store) AccountRuns(ctx context.Context, account string, before time.Time, limit int) ([]api.Run, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, owner, host, host_id, spec, created_at, ended_at, coalesce(end_reason, '')
+		SELECT id, name, owner, host, host_id, spec, created_at, ended_at, coalesce(end_reason, ''),
+			exit_code, connections_allowed, connections_blocked
 		FROM sandboxes WHERE account_id = $1 AND created_at < $2
 		ORDER BY created_at DESC, id DESC LIMIT $3`, account, before, limit)
 	if err != nil {
@@ -312,7 +319,8 @@ func (s *Store) AccountRuns(ctx context.Context, account string, before time.Tim
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (api.Run, error) {
 		var run api.Run
 		var spec []byte
-		if err := r.Scan(&run.ID, &run.Name, &run.Owner, &run.Host, &run.HostID, &spec, &run.CreatedAt, &run.EndedAt, &run.EndReason); err != nil {
+		if err := r.Scan(&run.ID, &run.Name, &run.Owner, &run.Host, &run.HostID, &spec, &run.CreatedAt, &run.EndedAt, &run.EndReason,
+			&run.ExitCode, &run.ConnectionsAllowed, &run.ConnectionsBlocked); err != nil {
 			return run, err
 		}
 		run.CreatedAt = run.CreatedAt.UTC()

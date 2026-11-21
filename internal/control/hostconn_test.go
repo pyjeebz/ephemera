@@ -3,10 +3,12 @@ package control_test
 import (
 	"context"
 	"crypto/ed25519"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -283,4 +285,112 @@ func TestServerNeverSeesSandboxToken(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("create without token_hash: %s, want 400", resp.Status)
 	}
+}
+
+// endings is a StateStore that keeps only what each sandbox ended with.
+type endings struct {
+	mu  sync.Mutex
+	run map[string]*api.RunSummary
+}
+
+func (e *endings) StartSandbox(context.Context, api.Sandbox) error { return nil }
+func (e *endings) EndSandbox(_ context.Context, id string, _ time.Time, _ string, run *api.RunSummary) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.run[id] = run
+	return nil
+}
+func (e *endings) RunningSandboxes(context.Context) ([]api.Sandbox, error) { return nil, nil }
+func (e *endings) AddUsage(context.Context, control.Usage) error           { return nil }
+func (e *endings) UsageSince(context.Context, string) ([]control.Usage, error) {
+	return nil, nil
+}
+
+func (e *endings) of(id string) (*api.RunSummary, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	run, ok := e.run[id]
+	return run, ok
+}
+
+// When a sandbox ends, its host tells the central server the last
+// command's exit code and its connection counts, and nothing more.
+func TestHostSaysHowARunEnded(t *testing.T) {
+	ends := &endings{run: map[string]*api.RunSummary{}}
+	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}, State: ends}
+	ts := httptest.NewServer(cs.Handler())
+	defer ts.Close()
+	hs, be := newHost(t, "h1")
+	hts := hosttest.Serve(t, hs)
+	disconnect := hosttest.Connect(t, hs, ts.URL, joinCode(t, cs, ""), api.HostHello{Name: "h1", URL: hts.URL, Capacity: 5})
+	ctx := context.Background()
+	c := &client.Client{Server: ts.URL, Token: "eph_good"}
+	exec := func(sb *api.Sandbox, script string) {
+		t.Helper()
+		if _, err := c.Exec(ctx, sb, api.ExecRequest{Argv: []string{"sh", "-c", script}}, io.Discard, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(id string, wantExit *int) {
+		t.Helper()
+		run, ok := ends.of(id)
+		switch {
+		case !ok:
+			t.Errorf("%s never ended", id)
+		case run == nil:
+			t.Errorf("%s ended with nothing from its host", id)
+		case (run.ExitCode == nil) != (wantExit == nil) || run.ExitCode != nil && *run.ExitCode != *wantExit:
+			t.Errorf("%s: exit code %v, want %v", id, run.ExitCode, wantExit)
+		case run.ConnectionsAllowed != 0 || run.ConnectionsBlocked != 0:
+			t.Errorf("%s: %+v, want no connections", id, run)
+		}
+	}
+	three, zero := 3, 0
+
+	// Destroyed: the last command's exit code comes with the result.
+	sb, err := c.Create(ctx, api.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(sb, "exit 0")
+	exec(sb, "exit 3")
+	if _, err := c.Destroy(ctx, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	check(sb.ID, &three)
+
+	// No command ran: no exit code, but the counts are known.
+	idle, err := c.Create(ctx, api.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Destroy(ctx, idle.ID); err != nil {
+		t.Fatal(err)
+	}
+	check(idle.ID, nil)
+
+	// Expired: the host says so when it happens, so the server knows even
+	// if it can't reach the host by the time the sandbox is destroyed.
+	short, err := c.Create(ctx, api.Spec{MaxLifetimeSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(short, "true")
+	for deadline := time.Now().Add(5 * time.Second); be.Live() != 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the sandbox outlived its lifetime")
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // the host signs the record, then says so
+	if err := hs.Heartbeat(ctx); err != nil {
+		t.Fatal(err) // answered in order, so the server has read it by now
+	}
+	if _, ok := ends.of(short.ID); ok {
+		t.Error("an expired sandbox ended before it was destroyed; its record could not be collected")
+	}
+	disconnect()
+	if _, err := c.Destroy(ctx, short.ID); err != nil {
+		t.Fatal(err)
+	}
+	check(short.ID, &zero)
 }

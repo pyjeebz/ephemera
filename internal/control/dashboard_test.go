@@ -94,6 +94,12 @@ func TestDashboardSession(t *testing.T) {
 		runs[0].EndedAt == nil || runs[0].EndReason != control.EndDestroyed {
 		t.Errorf("octo's runs = %+v", runs)
 	}
+	// No command ran, so there's no exit code; the host counted no
+	// connections.
+	if r := runs[0]; r.ExitCode != nil || r.ConnectionsAllowed == nil || *r.ConnectionsAllowed != 0 ||
+		r.ConnectionsBlocked == nil || *r.ConnectionsBlocked != 0 {
+		t.Errorf("octo's run says exit %v, %v allowed, %v blocked; want none, 0 and 0", r.ExitCode, r.ConnectionsAllowed, r.ConnectionsBlocked)
+	}
 	if got := decode[[]api.Run](t, w.do("GET", "/v1/runs", session(other, ""), nil)); len(got) != 0 {
 		t.Errorf("other sees octo's runs: %+v", got)
 	}

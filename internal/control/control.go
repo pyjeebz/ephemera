@@ -1,6 +1,8 @@
 // Package control is the central server. It knows which hosts exist and
 // which sandboxes run where. It handles ids and states only: files, command
-// output and secrets go straight between the CLI and the host.
+// output and secrets go straight between the CLI and the host. When a
+// sandbox ends, its host tells it the last command's exit code and how many
+// connections were allowed and blocked, for the run history.
 //
 // Running sandboxes and usage are kept in a StateStore, so a restart keeps
 // track of them. Every host heartbeat lists what the host really runs:
@@ -56,6 +58,9 @@ type Server struct {
 	usage map[owner]map[string]float64
 	// limits is each owner's limits as last seen on a request.
 	limits map[owner]Limits
+	// results holds what hosts said about sandboxes that ended on their
+	// own, by sandbox id, until the record ends here too.
+	results map[string]api.RunSummary
 	// misses counts unknown codes tried at the device approval page.
 	misses misses
 }
@@ -110,7 +115,7 @@ func (s *Server) Load() error {
 	keep := running[:0]
 	for _, sb := range running {
 		if sb.HostID == "" {
-			s.store().EndSandbox(ctx, sb.ID, s.now().UTC(), EndGone)
+			s.store().EndSandbox(ctx, sb.ID, s.now().UTC(), EndGone, nil)
 			continue
 		}
 		keep = append(keep, sb)
@@ -141,23 +146,28 @@ func (s *Server) Load() error {
 	return nil
 }
 
-// end forgets a sandbox and records why it ended and the time it used.
-func (s *Server) end(ctx context.Context, sb *api.Sandbox, reason string) {
-	at := s.now()
+// end forgets a sandbox and records why it ended, the time it used, and
+// what its host said about it: run, or else what it said earlier.
+func (s *Server) end(ctx context.Context, sb *api.Sandbox, reason string, run *api.RunSummary) {
+	at, run := s.now(), sane(run)
 	s.mu.Lock()
 	cur, ok := s.sandboxes[sb.ID]
 	var used []Usage
 	if ok {
 		used = s.accrue(cur, at)
 		delete(s.sandboxes, sb.ID)
+		if r, said := s.results[sb.ID]; said && run == nil {
+			run = &r
+		}
 	}
+	delete(s.results, sb.ID)
 	s.mu.Unlock()
 	if !ok {
 		return
 	}
 	// The record is already gone from memory; a failed write is logged,
 	// as there is nothing better to do with it.
-	if err := s.store().EndSandbox(ctx, sb.ID, at.UTC(), reason); err != nil {
+	if err := s.store().EndSandbox(ctx, sb.ID, at.UTC(), reason, run); err != nil {
 		s.log().Error("store: end sandbox", "sandbox", sb.ID, "err", err)
 	}
 	for _, u := range used {
@@ -373,10 +383,11 @@ func (s *Server) enforceOnce(ctx context.Context) {
 	s.mu.Unlock()
 	for _, sb := range over {
 		s.log().Warn("daily minutes used up; stopping sandbox", "sandbox", sb.ID, "owner", sb.Owner)
-		if _, err := s.hostDo(ctx, sb.HostID, api.HostMessage{Type: "destroy", Sandbox: sb.ID}); err != nil {
+		res, err := s.hostDo(ctx, sb.HostID, api.HostMessage{Type: "destroy", Sandbox: sb.ID})
+		if err != nil {
 			s.log().Warn("stopping sandbox", "sandbox", sb.ID, "host", sb.Host, "err", err)
 		}
-		s.end(ctx, sb, EndLimit)
+		s.end(ctx, sb, EndLimit, res.Run)
 	}
 }
 
@@ -506,7 +517,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.sandboxes, sb.ID)
 		s.mu.Unlock()
-		if err := s.store().EndSandbox(r.Context(), sb.ID, s.now().UTC(), EndFailed); err != nil {
+		if err := s.store().EndSandbox(r.Context(), sb.ID, s.now().UTC(), EndFailed, nil); err != nil {
 			s.log().Error("store: end sandbox", "sandbox", sb.ID, "err", err)
 		}
 		s.log().Error("host create failed", "host", h.Name, "sandbox", sb.ID, "err", err)
@@ -596,7 +607,7 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 		// its heartbeat lists the sandbox and it is told to destroy it.
 		s.log().Warn("host offline; dropping sandbox record", "sandbox", id, "host", sb.Host)
 	}
-	s.end(r.Context(), sb, EndDestroyed)
+	s.end(r.Context(), sb, EndDestroyed, res.Run)
 	s.log().Info("sandbox destroyed", "sandbox", id, "host", sb.Host)
 	if res.Record == nil {
 		w.WriteHeader(http.StatusNoContent)

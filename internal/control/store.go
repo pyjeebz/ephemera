@@ -37,8 +37,8 @@ type StateStore interface {
 	// StartSandbox records a new sandbox. Its Token is never stored.
 	StartSandbox(ctx context.Context, sb api.Sandbox) error
 	// EndSandbox records that a sandbox ended, and why: one of the End
-	// reasons.
-	EndSandbox(ctx context.Context, id string, at time.Time, reason string) error
+	// reasons. run is what its host said about it, nil if nothing.
+	EndSandbox(ctx context.Context, id string, at time.Time, reason string, run *api.RunSummary) error
 	// RunningSandboxes returns the sandboxes that have not ended.
 	RunningSandboxes(ctx context.Context) ([]api.Sandbox, error)
 	// AddUsage adds sandbox-seconds to a token's UTC day.
@@ -188,8 +188,9 @@ func (f *FileState) StartSandbox(_ context.Context, sb api.Sandbox) error {
 	})
 }
 
-// EndSandbox implements StateStore. The sandbox is forgotten.
-func (f *FileState) EndSandbox(_ context.Context, id string, _ time.Time, _ string) error {
+// EndSandbox implements StateStore. The sandbox is forgotten, with all
+// that is known about it.
+func (f *FileState) EndSandbox(_ context.Context, id string, _ time.Time, _ string, _ *api.RunSummary) error {
 	return f.change(func() {
 		out := f.st.Sandboxes[:0]
 		for _, sb := range f.st.Sandboxes {
@@ -239,8 +240,10 @@ func (f *FileState) UsageSince(_ context.Context, since string) ([]Usage, error)
 // memState keeps nothing, for a server with no StateStore.
 type memState struct{}
 
-func (memState) StartSandbox(context.Context, api.Sandbox) error             { return nil }
-func (memState) EndSandbox(context.Context, string, time.Time, string) error { return nil }
-func (memState) RunningSandboxes(context.Context) ([]api.Sandbox, error)     { return nil, nil }
-func (memState) AddUsage(context.Context, Usage) error                       { return nil }
-func (memState) UsageSince(context.Context, string) ([]Usage, error)         { return nil, nil }
+func (memState) StartSandbox(context.Context, api.Sandbox) error { return nil }
+func (memState) EndSandbox(context.Context, string, time.Time, string, *api.RunSummary) error {
+	return nil
+}
+func (memState) RunningSandboxes(context.Context) ([]api.Sandbox, error) { return nil, nil }
+func (memState) AddUsage(context.Context, Usage) error                   { return nil }
+func (memState) UsageSince(context.Context, string) ([]Usage, error)     { return nil, nil }

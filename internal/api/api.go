@@ -240,8 +240,9 @@ type Host struct {
 }
 
 // Run is a sandbox in the run history, running or finished. The central
-// server never sees what ran in it, only where, for how long, and how it
-// ended.
+// server keeps where it ran, for how long and how it ended, and from its
+// host the last command's exit code and how many connections were allowed
+// and blocked. Never the commands, host names, files or output.
 type Run struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
@@ -253,6 +254,11 @@ type Run struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"` // nil while it runs
 	// EndReason is why it ended: destroyed, limit, gone or failed.
 	EndReason string `json:"end_reason,omitempty"`
+	// From the host when the run ended; nil when it didn't say, as older
+	// hosts don't. ExitCode is also nil when no command ran.
+	ExitCode           *int `json:"exit_code,omitempty"`
+	ConnectionsAllowed *int `json:"connections_allowed,omitempty"`
+	ConnectionsBlocked *int `json:"connections_blocked,omitempty"`
 }
 
 // DeleteFilesRequest removes files from a sandbox's workspace, for files
