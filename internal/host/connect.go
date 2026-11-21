@@ -238,6 +238,7 @@ func (s *Server) handle(ctx context.Context, c *conn, m api.HostMessage) {
 		}
 	case "destroy":
 		res.Record, err = s.Destroy(ctx, m.Sandbox)
+		res.Run = summarize(res.Record)
 	}
 	if err != nil {
 		res.Error = err.Error()
@@ -246,6 +247,39 @@ func (s *Server) handle(ctx context.Context, c *conn, m api.HostMessage) {
 	}
 	if m.Req != "" {
 		c.send(res)
+	}
+}
+
+// summarize is record.Summarize for a record this host signed, so it is
+// read back without checking the signature. Nil for no record.
+func summarize(sr *api.SignedRecord) *api.RunSummary {
+	if sr == nil {
+		return nil
+	}
+	var rec api.Record
+	if err := json.Unmarshal(sr.Record, &rec); err != nil {
+		return nil
+	}
+	sum := record.Summarize(rec)
+	return &sum
+}
+
+// tellEnded tells every connected central server that a sandbox ended on
+// its own, with its summary. A server that isn't connected just then
+// learns the summary when the sandbox is destroyed, or never.
+func (s *Server) tellEnded(id string, sr *api.SignedRecord) {
+	sum := summarize(sr)
+	if sum == nil {
+		return
+	}
+	s.mu.Lock()
+	conns := make([]*conn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.mu.Unlock()
+	for _, c := range conns {
+		c.send(api.HostMessage{Type: "ended", Sandbox: id, Run: sum})
 	}
 }
 

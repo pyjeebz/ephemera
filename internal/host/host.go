@@ -271,7 +271,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		// The command's own timeout, not the client going away.
 		msg := fmt.Sprintf("ephemera: the command timed out after %ds and was stopped\n", req.TimeoutSeconds)
 		sw.Frame(stream.Stderr, []byte(msg))
-		er.ExitCode, er.Error = api.ExitTimedOut, "timed out"
+		er.ExitCode, er.Error = api.ExitTimedOut, record.TimedOut
 		s.note(id, func(rec *api.Record) { rec.Execs = append(rec.Execs, er) })
 		sw.Exit(api.ExitTimedOut)
 		return
@@ -538,6 +538,7 @@ func (s *Server) expire(id string) {
 	}
 	s.mu.Unlock()
 	s.log().Info("sandbox expired", "sandbox", id)
+	s.tellEnded(id, sr)
 	time.AfterFunc(keepExpired, func() { s.forget(id) })
 }
 

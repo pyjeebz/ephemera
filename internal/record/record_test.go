@@ -82,3 +82,30 @@ func TestKeyIsStableAndPrivate(t *testing.T) {
 		t.Error("a junk key file loaded")
 	}
 }
+
+func TestSummarize(t *testing.T) {
+	code := func(n int) *int { return &n }
+	conns := []api.Connection{{Host: "a", Allowed: true}, {Host: "b"}, {Host: "c", Allowed: true}}
+	for _, tc := range []struct {
+		name  string
+		execs []api.ExecRecord
+		want  *int
+	}{
+		{"no command", nil, nil},
+		{"the last one counts", []api.ExecRecord{{ExitCode: 1}, {ExitCode: 0}}, code(0)},
+		{"a failure", []api.ExecRecord{{ExitCode: 0}, {ExitCode: 2}}, code(2)},
+		{"timed out", []api.ExecRecord{{ExitCode: api.ExitTimedOut, Error: TimedOut}}, code(api.ExitTimedOut)},
+		{"could not run", []api.ExecRecord{{ExitCode: 0}, {ExitCode: -1, Error: "the guest is gone"}}, nil},
+	} {
+		got := Summarize(api.Record{Execs: tc.execs, Connections: conns})
+		if (got.ExitCode == nil) != (tc.want == nil) || got.ExitCode != nil && *got.ExitCode != *tc.want {
+			t.Errorf("%s: exit code %v, want %v", tc.name, got.ExitCode, tc.want)
+		}
+		if got.ConnectionsAllowed != 2 || got.ConnectionsBlocked != 1 {
+			t.Errorf("%s: %d allowed, %d blocked, want 2 and 1", tc.name, got.ConnectionsAllowed, got.ConnectionsBlocked)
+		}
+	}
+	if got := Summarize(api.Record{}); got.ConnectionsAllowed != 0 || got.ConnectionsBlocked != 0 || got.ExitCode != nil {
+		t.Errorf("empty record: %+v", got)
+	}
+}

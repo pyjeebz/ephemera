@@ -154,3 +154,29 @@ func Certificate(key ed25519.PrivateKey) (tls.Certificate, error) {
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }
+
+// TimedOut is the Error of a command stopped by its timeout.
+const TimedOut = "timed out"
+
+// Summarize is what a host tells the central server to keep about a
+// finished record: the last command's exit code and how many connections
+// were allowed and blocked.
+func Summarize(rec api.Record) api.RunSummary {
+	var sum api.RunSummary
+	if n := len(rec.Execs); n > 0 {
+		// A command that could not be run, or was cut short, has no exit
+		// code; one stopped by its timeout has ExitTimedOut.
+		if last := rec.Execs[n-1]; last.Error == "" || last.Error == TimedOut && last.ExitCode == api.ExitTimedOut {
+			code := last.ExitCode
+			sum.ExitCode = &code
+		}
+	}
+	for _, c := range rec.Connections {
+		if c.Allowed {
+			sum.ConnectionsAllowed++
+		} else {
+			sum.ConnectionsBlocked++
+		}
+	}
+	return sum
+}

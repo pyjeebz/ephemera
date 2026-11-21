@@ -288,7 +288,9 @@ const HostProtocol = 1
 //	create     server to host: Req and Create
 //	destroy    server to host: Sandbox, and Req when it wants a result
 //	result     host to server, the reply to create or destroy: Req, OK,
-//	           Error, and Record for a destroy
+//	           Error, and Record and Run for a destroy
+//	ended      host to server, when a sandbox ends on its own, as when it
+//	           reaches its maximum lifetime: Sandbox and Run. No reply
 //
 // Destroy lists sandboxes the host runs that the server has no record of.
 // The host destroys them: nothing may run that no one can see or stop.
@@ -306,6 +308,21 @@ type HostMessage struct {
 	Removed   bool               `json:"removed,omitempty"`
 	Error     string             `json:"error,omitempty"`
 	Record    *SignedRecord      `json:"record,omitempty"`
+	// Run is all the central server learns of what happened in a sandbox
+	// that ended. Older hosts never send it, and older servers ignore it.
+	Run *RunSummary `json:"run,omitempty"`
+}
+
+// RunSummary is what a host tells the central server about a sandbox that
+// ended: the last command's exit code and how many connections were
+// allowed and blocked. No commands, host names or output.
+type RunSummary struct {
+	// ExitCode is the last command's, nil if no command ran or the last
+	// one did not finish with one. A command stopped by its timeout has
+	// ExitTimedOut.
+	ExitCode           *int `json:"exit_code,omitempty"`
+	ConnectionsAllowed int  `json:"connections_allowed"`
+	ConnectionsBlocked int  `json:"connections_blocked"`
 }
 
 // HostHello introduces a host when it connects. Signature is the host
