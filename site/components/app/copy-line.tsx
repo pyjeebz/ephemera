@@ -11,7 +11,7 @@ export function CopyLine({ command, className }: { command: string; className?: 
   return (
     <div
       className={cn(
-        "flex items-start gap-3 border border-border bg-card px-4 py-3.5 font-mono text-[13px] leading-5",
+        "flex items-start gap-3 rounded-lg border border-border/70 bg-card px-4 py-3.5 font-mono text-[13px] leading-5",
         className,
       )}
     >

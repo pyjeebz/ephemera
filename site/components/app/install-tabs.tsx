@@ -13,8 +13,8 @@ const RELEASES = "https://github.com/pyjeebz/ephemera/releases/latest"
 export function InstallTabs() {
   const [tab, setTab] = useState<"unix" | "windows">("unix")
   return (
-    <div className="border border-border">
-      <div role="tablist" className="flex gap-1 border-b border-border px-2 font-mono text-xs">
+    <div className="overflow-hidden rounded-lg border border-border/70 bg-card">
+      <div role="tablist" className="flex gap-1 border-b border-border/70 px-2 text-[13px]">
         {(
           [
             ["unix", "macOS & Linux"],
@@ -29,7 +29,7 @@ export function InstallTabs() {
             className={cn(
               "-mb-px border-b px-3 py-2.5 transition-colors duration-150",
               tab === id
-                ? "border-sand text-foreground"
+                ? "border-foreground text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
@@ -38,7 +38,7 @@ export function InstallTabs() {
         ))}
       </div>
       {tab === "unix" ? (
-        <CopyLine command={INSTALL} className="border-0" />
+        <CopyLine command={INSTALL} className="rounded-none border-0" />
       ) : (
         <p className="px-4 py-3.5 text-[13px] leading-5 text-muted-foreground">
           Download <span className="font-mono text-foreground">ephemera_&lt;version&gt;_windows_amd64.zip</span> (or{" "}

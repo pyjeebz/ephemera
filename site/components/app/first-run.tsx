@@ -18,7 +18,7 @@ export function FirstRun() {
         onChange={(e) => setCmd(e.target.value)}
         spellCheck={false}
         aria-label="Your command"
-        className="w-full border border-border bg-card px-4 py-3 font-mono text-[13px] text-foreground outline-none transition-colors duration-150 focus:border-sand/60"
+        className="w-full rounded-lg border border-border/70 bg-card px-4 py-3 font-mono text-[13px] text-foreground outline-none transition-colors duration-150 focus:border-sand/60"
       />
       <div className="mt-7">
         <Label>Then run, in that repo</Label>

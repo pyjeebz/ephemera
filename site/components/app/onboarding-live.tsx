@@ -45,11 +45,11 @@ export function ConnectWait() {
     )
   }
   return (
-    <div className="flex items-center gap-4 border border-border bg-card px-4 py-3">
-      <span aria-hidden className="size-1.5 bg-sand" />
+    <div className="flex items-center gap-4 rounded-xl border border-border/70 bg-card/60 px-4 py-3">
+      <span aria-hidden className="size-1.5 rounded-full bg-sand" />
       <p className="flex-1 text-sm">
         <span className="font-medium">Connected:</span>{" "}
-        <span className="font-mono text-[13px] text-muted-foreground">{device.name}</span>
+        <span className="text-muted-foreground">{device.name}</span>
       </p>
       <Button asChild>
         <Link href="/onboarding/host">Next: add a host</Link>
@@ -71,7 +71,7 @@ export function HostStep() {
         {join.code && !join.expired ? (
           <CopyLine command={installCommand(join.code)} />
         ) : (
-          <div className="border border-border bg-card px-4 py-3 font-mono text-[13px] text-faint">
+          <div className="rounded-lg border border-border/70 bg-card px-4 py-3 font-mono text-[13px] text-faint">
             {join.error ?? (join.expired ? "That code expired." : "Making a code…")}
           </div>
         )}
@@ -79,9 +79,9 @@ export function HostStep() {
           It installs Firecracker and the host agent, and joins your account with the code at the end. The code works
           once, for 15 minutes.{" "}
           {host ? (
-            <span className="font-mono text-faint">used by {host.name}</span>
+            <span className="text-faint">used by {host.name}</span>
           ) : (
-            join.code && !join.expired && <span className="font-mono text-faint">{join.clock} left</span>
+            join.code && !join.expired && <span className="tabular-nums text-faint">{join.clock} left</span>
           )}{" "}
           ·{" "}
           <button
@@ -121,12 +121,12 @@ export function HostStep() {
             It connects once the host agent starts.
           </Waiting>
         ) : (
-          <div className="border border-border bg-card">
+          <div className="rounded-xl border border-border/70 bg-card/60">
             <div className="flex items-center gap-4 px-4 py-3">
-              <span aria-hidden className="size-1.5 bg-sand" />
+              <span aria-hidden className="size-1.5 rounded-full bg-sand" />
               <p className="flex-1 text-sm">
                 <span className="font-medium">{host.name}</span>{" "}
-                <span className="font-mono text-[13px] text-muted-foreground">
+                <span className="text-muted-foreground">
                   is online{host.version ? ` · ${host.version}` : ""}
                   {host.capacity ? ` · room for ${host.capacity}` : ""}
                 </span>
@@ -135,7 +135,7 @@ export function HostStep() {
                 <Link href="/onboarding/run">Next: first run</Link>
               </Button>
             </div>
-            <p className="border-t border-border px-4 py-2.5 font-mono text-xs text-faint [overflow-wrap:anywhere]">
+            <p className="border-t border-border/60 px-4 py-2.5 font-mono text-xs text-faint [overflow-wrap:anywhere]">
               key {host.fingerprint}, the same one the install printed
             </p>
           </div>
@@ -173,10 +173,10 @@ export function DoneSummary() {
   const runs = useApi<Run[]>("/v1/runs")
   const now = useNow()
   const run = runs.data?.find((r) => r.id === id) ?? runs.data?.[0]
-  if (!runs.data) return <div className="h-[260px] border border-border bg-card" />
+  if (!runs.data) return <div className="h-[260px] rounded-xl border border-border/70 bg-card/60" />
   if (!run) {
     return (
-      <p className="border border-border bg-card px-5 py-6 text-[13px] text-muted-foreground">
+      <p className="rounded-xl border border-border/70 bg-card/60 px-5 py-6 text-[13px] text-muted-foreground">
         No runs yet.{" "}
         <Link href="/onboarding/run" className="text-foreground underline underline-offset-2">
           Go back
@@ -189,14 +189,14 @@ export function DoneSummary() {
   const rows: [string, React.ReactNode][] = [
     [
       "Host",
-      <span key="h" className="font-mono">
+      <span key="h">
         {run.host}
       </span>,
     ],
     ["Ended", run.ended_at ? ENDED[run.end_reason ?? "destroyed"][1] : "It’s still running."],
     [
       "Network",
-      <span key="n" className="font-mono">
+      <span key="n">
         {network(run.spec)}
       </span>,
     ],
@@ -204,19 +204,19 @@ export function DoneSummary() {
   ]
   return (
     <>
-      <div className="border border-border bg-card">
+      <div className="rounded-xl border border-border/70 bg-card/60">
         <div className="flex items-end justify-between gap-6 p-5">
           <div>
-            <p className="font-mono text-xs text-faint">{run.id} lived</p>
-            <p className="mt-1 text-[40px] font-bold leading-none tracking-[-0.03em]">{duration(lived)}</p>
+            <p className="text-[13px] text-faint">{sandboxName(run)} lived</p>
+            <p className="mt-1 text-[40px] font-medium leading-none tracking-[-0.035em] tabular-nums">{duration(lived)}</p>
           </div>
-          <div className="flex h-16 w-24 items-center justify-center border border-border bg-background">
-            <span className="font-mono text-[10px] text-faint">nothing here.</span>
+          <div className="flex h-16 w-24 items-center justify-center rounded-md border border-border/70 bg-box">
+            <span className="text-[11px] text-faint">nothing here.</span>
           </div>
         </div>
         <dl>
           {rows.map(([k, v]) => (
-            <div key={k} className="grid grid-cols-[120px_1fr] gap-4 border-t border-border px-5 py-3 text-[13px]">
+            <div key={k} className="grid grid-cols-[120px_1fr] gap-4 border-t border-border/60 px-5 py-3 text-[13px]">
               <dt className="text-muted-foreground">{k}</dt>
               <dd>{v}</dd>
             </div>

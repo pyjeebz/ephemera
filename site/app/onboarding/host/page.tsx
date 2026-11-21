@@ -20,7 +20,7 @@ export default function AddHost() {
       rest="The machine your sandboxes run on."
       lede="A spare PC, a VPS, or a cloud VM with nested virtualization. It connects out to ephemera, so it needs no open ports for us, and your code goes from your laptop straight to it."
     >
-      <dl className="grid grid-cols-1 gap-x-8 gap-y-3 border-y border-border py-5 sm:grid-cols-3">
+      <dl className="grid grid-cols-1 gap-x-8 gap-y-3 border-y border-border/60 py-5 sm:grid-cols-3">
         {NEEDS.map(([what, how]) => (
           <div key={what}>
             <dt className="text-sm font-medium">{what}</dt>

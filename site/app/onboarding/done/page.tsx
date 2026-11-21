@@ -18,7 +18,7 @@ export default function Done() {
       rest="That’s the whole loop."
       lede="The microVM and its disk are deleted. The signed record of what ran is on your laptop."
     >
-      <Suspense fallback={<div className="h-[260px] border border-border bg-card" />}>
+      <Suspense fallback={<div className="h-[260px] rounded-xl border border-border/70 bg-card/60" />}>
         <DoneSummary />
       </Suspense>
       <div className="mt-10 flex flex-wrap gap-3">
