@@ -537,16 +537,31 @@ func (b *Backend) Destroy(ctx context.Context, id string) error {
 	if vp != nil {
 		vp.ln.Close()
 	}
+	var errs []error
 	if ok {
-		if err := vm.Kill(); err != nil {
-			return err
+		killErr := vm.Kill()
+		if killErr != nil {
+			errs = append(errs, killErr)
 		}
 		vm.Cleanup()
 		if vm.cfg.Jail != nil {
-			b.freeUID(vm.cfg.Jail.UID)
+			uid := vm.cfg.Jail.UID
+			if killErr == nil {
+				b.freeUID(uid)
+			} else {
+				// A VM that did not stop still runs as this user, and
+				// allocUID must not hand the same user to another VM.
+				go func() {
+					<-vm.Exited()
+					b.freeUID(uid)
+				}()
+			}
 		}
 	}
-	return os.RemoveAll(b.dir(id))
+	if err := os.RemoveAll(b.dir(id)); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // Cleanup stops VMs left behind by an earlier run of the host agent, for
