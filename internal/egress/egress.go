@@ -35,7 +35,7 @@ type Policy struct {
 func (p Policy) Allows(host string, port int) (bool, string) {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	for _, pat := range p.Allow {
-		ph, pp := splitPattern(pat)
+		ph, pp := api.SplitAllowPattern(pat)
 		if pp == 0 {
 			if port != 80 && port != 443 {
 				continue
@@ -50,16 +50,6 @@ func (p Policy) Allows(host string, port int) (bool, string) {
 	return false, ""
 }
 
-func splitPattern(pat string) (string, int) {
-	pat = strings.ToLower(strings.TrimSpace(pat))
-	if i := strings.LastIndexByte(pat, ':'); i > 0 {
-		if n, err := strconv.Atoi(pat[i+1:]); err == nil {
-			return pat[:i], n
-		}
-	}
-	return pat, 0
-}
-
 func matchHost(pat, host string) bool {
 	switch {
 	case pat == "*":
@@ -71,27 +61,10 @@ func matchHost(pat, host string) bool {
 	}
 }
 
-// ValidatePattern checks an allow-list entry.
-func ValidatePattern(pat string) error {
-	h, port := splitPattern(pat)
-	if strings.Contains(pat, ":") && port == 0 {
-		return fmt.Errorf("invalid port in %q", pat)
-	}
-	if port < 0 || port > 65535 {
-		return fmt.Errorf("invalid port in %q", pat)
-	}
-	if h == "*" {
-		return nil
-	}
-	h = strings.TrimPrefix(h, "*.")
-	if h == "" || strings.ContainsAny(h, "*/@ ") || strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") {
-		return fmt.Errorf("invalid host pattern %q: use host, *.domain or *", pat)
-	}
-	if _, err := netip.ParseAddr(h); err == nil {
-		return fmt.Errorf("%q is an IP address; allow hosts by name", pat)
-	}
-	return nil
-}
+// ValidatePattern checks an allow-list entry with the rule that
+// api.ValidateAllowPattern holds, so the proxy and api.Spec.Validate cannot
+// disagree.
+func ValidatePattern(pat string) error { return api.ValidateAllowPattern(pat) }
 
 // Proxy serves one sandbox's HTTP proxy connections.
 type Proxy struct {

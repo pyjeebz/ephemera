@@ -170,11 +170,6 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 	var policy egress.Policy
 	switch spec.Network {
 	case api.NetworkAllow:
-		for _, pat := range spec.Allow {
-			if err := egress.ValidatePattern(pat); err != nil {
-				return err
-			}
-		}
 		policy.Allow = spec.Allow
 	case api.NetworkOpen:
 		policy.Allow = []string{"*"}

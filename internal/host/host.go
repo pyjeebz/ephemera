@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/api"
-	"github.com/pyjeebz/ephemera/internal/egress"
 	"github.com/pyjeebz/ephemera/internal/record"
 	"github.com/pyjeebz/ephemera/internal/sandbox"
 	"github.com/pyjeebz/ephemera/internal/stream"
@@ -154,11 +153,6 @@ func (s *Server) Create(ctx context.Context, req api.HostCreateRequest) error {
 	}
 	if err := req.Spec.Validate(); err != nil {
 		return err
-	}
-	for _, pat := range req.Spec.Allow {
-		if err := egress.ValidatePattern(pat); err != nil {
-			return err
-		}
 	}
 	if req.Spec.Image == "" {
 		req.Spec.Image = s.DefaultImage
