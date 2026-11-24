@@ -69,6 +69,19 @@ type entry struct {
 // collected by a DELETE.
 const keepExpired = time.Hour
 
+// errUnsigned reports a sandbox that is destroyed but whose record the host
+// could not sign, so no further attempt can produce one.
+var errUnsigned = errors.New("the sandbox record cannot be signed")
+
+// expireRetryDelay is how long the host waits before it tries again to
+// destroy a sandbox that reached its maximum lifetime, and
+// expireMaxRetryDelay stops that wait from growing further. Variables so a
+// test can shorten the wait.
+var (
+	expireRetryDelay    = 5 * time.Second
+	expireMaxRetryDelay = time.Minute
+)
+
 // note adds to a sandbox's record.
 func (s *Server) note(id string, f func(*api.Record)) {
 	s.mu.Lock()
@@ -185,13 +198,7 @@ func (s *Server) Create(ctx context.Context, req api.HostCreateRequest) error {
 		return fmt.Errorf("create sandbox: %w", err)
 	}
 	if life := s.lifetime(req.Spec); life > 0 {
-		id := req.ID
-		t := time.AfterFunc(life, func() { s.expire(id) })
-		s.mu.Lock()
-		if e, ok := s.sandboxes[id]; ok {
-			e.expiry = t
-		}
-		s.mu.Unlock()
+		s.armExpiry(req.ID, life, 0)
 	}
 	s.log().Info("sandbox created", "sandbox", req.ID, "image", req.Spec.Image, "network", req.Spec.Network)
 	return nil
@@ -514,22 +521,46 @@ func (s *Server) finish(ctx context.Context, id, how string) (*api.SignedRecord,
 		return nil, err
 	}
 	rec.Destroyed, rec.Ended, rec.DiskDeleted = time.Now().UTC(), how, true
+	err := errUnsigned
 	if s.Key == nil {
-		return nil, errors.New("host has no signing key")
+		err = fmt.Errorf("%w: host has no signing key", errUnsigned)
+	} else {
+		var sr api.SignedRecord
+		var signErr error
+		if sr, signErr = record.Sign(s.Key, rec); signErr == nil {
+			return &sr, nil
+		}
+		err = fmt.Errorf("%w: %v", errUnsigned, signErr)
 	}
-	sr, err := record.Sign(s.Key, rec)
-	if err != nil {
-		return nil, err
-	}
-	return &sr, nil
+	// The sandbox is gone but its record is not. Clear the flag so a later
+	// destroy signs the record instead of answering that one is in progress.
+	s.mu.Lock()
+	e.ending = false
+	s.mu.Unlock()
+	return nil, err
 }
 
 // expire destroys a sandbox that reached its maximum lifetime, and keeps
-// its record for a while so the CLI can still collect it.
-func (s *Server) expire(id string) {
+// its record for a while so the CLI can still collect it. A destroy that
+// fails is tried again for as long as the host runs and the sandbox is
+// still there, so one failure does not lift the lifetime limit.
+func (s *Server) expire(id string, attempt int) {
 	sr, err := s.finish(context.Background(), id, "expired")
 	if err != nil {
-		s.log().Error("expire", "sandbox", id, "err", err)
+		if errors.Is(err, errUnsigned) {
+			// The sandbox is gone and only its record is missing. Another
+			// attempt cannot change that, so say it once and let the entry
+			// go, rather than destroy a missing sandbox every minute.
+			s.log().Error("expired sandbox destroyed, but its record could not be signed",
+				"sandbox", id, "err", err)
+			time.AfterFunc(keepExpired, func() { s.forget(id) })
+			return
+		}
+		if !s.live(id) {
+			return // destroyed from elsewhere while this attempt failed
+		}
+		s.log().Error("expire failed; trying again", "sandbox", id, "attempt", attempt+1, "err", err)
+		s.armExpiry(id, expireBackoff(attempt), attempt+1)
 		return
 	}
 	s.mu.Lock()
@@ -540,6 +571,45 @@ func (s *Server) expire(id string) {
 	s.log().Info("sandbox expired", "sandbox", id)
 	s.tellEnded(id, sr)
 	time.AfterFunc(keepExpired, func() { s.forget(id) })
+}
+
+// expireBackoff is how long the host waits after attempt failed expiry
+// destroys before it tries again: expireRetryDelay, doubled up to
+// expireMaxRetryDelay.
+func expireBackoff(attempt int) time.Duration {
+	d := expireRetryDelay
+	for i := 0; i < attempt && d < expireMaxRetryDelay; i++ {
+		d *= 2
+	}
+	if d > expireMaxRetryDelay {
+		d = expireMaxRetryDelay
+	}
+	return d
+}
+
+// armExpiry sets the timer that destroys a sandbox after d. attempt counts
+// the expiry destroys that already failed, for expireBackoff.
+func (s *Server) armExpiry(id string, d time.Duration, attempt int) {
+	t := time.AfterFunc(d, func() { s.expire(id, attempt) })
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.sandboxes[id]
+	if !ok {
+		t.Stop()
+		return
+	}
+	if e.expiry != nil {
+		e.expiry.Stop()
+	}
+	e.expiry = t
+}
+
+// live reports whether the host still has a sandbox in its table.
+func (s *Server) live(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.sandboxes[id]
+	return ok
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
