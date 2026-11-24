@@ -50,12 +50,25 @@ func TestPolicy(t *testing.T) {
 }
 
 func TestValidatePattern(t *testing.T) {
+	// The rule lives in internal/api now, and the proxy must agree with it.
 	for _, ok := range []string{"example.com", "*.example.com", "*", "example.com:8443"} {
+		if err := api.ValidateAllowPattern(ok); err != nil {
+			t.Errorf("api.ValidateAllowPattern(%q) = %v", ok, err)
+		}
 		if err := ValidatePattern(ok); err != nil {
 			t.Errorf("ValidatePattern(%q) = %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "*.", "a*.example.com", "1.2.3.4", "http://x.com", "x.com:abc", ".x.com", "x.com:99999"} {
+	for _, bad := range []string{
+		"", "*.", "a*.example.com", "1.2.3.4", "http://x.com", "x.com:abc", ".x.com", "x.com:99999",
+		"x.com:0",          // a port below the range
+		"1.2.3.4:443",      // an IP address with a port
+		"x.com/pkg",        // a path
+		"*.a*.example.com", // a wildcard inside a label
+	} {
+		if api.ValidateAllowPattern(bad) == nil {
+			t.Errorf("api.ValidateAllowPattern(%q): want error", bad)
+		}
 		if ValidatePattern(bad) == nil {
 			t.Errorf("ValidatePattern(%q): want error", bad)
 		}

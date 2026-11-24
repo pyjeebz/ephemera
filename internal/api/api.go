@@ -9,6 +9,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -34,6 +37,8 @@ type Spec struct {
 }
 
 // Validate checks a spec and fills in defaults that do not depend on the host.
+// It checks the syntax of every allow-list entry, so every producer of a spec
+// rejects a bad entry the same way.
 func (s *Spec) Validate() error {
 	switch s.Network {
 	case "":
@@ -54,6 +59,11 @@ func (s *Spec) Validate() error {
 	if len(s.Allow) > 200 {
 		return fmt.Errorf("at most 200 allowed hosts")
 	}
+	for _, pat := range s.Allow {
+		if err := ValidateAllowPattern(pat); err != nil {
+			return err
+		}
+	}
 	if s.MaxLifetimeSeconds < 0 {
 		return fmt.Errorf("max lifetime cannot be negative")
 	}
@@ -62,6 +72,42 @@ func (s *Spec) Validate() error {
 	}
 	if s.MemoryMB < 0 || s.MemoryMB > 256*1024 {
 		return fmt.Errorf("memory must be between 0 and 262144 MB")
+	}
+	return nil
+}
+
+// SplitAllowPattern splits an allow-list entry into its host pattern and
+// port. A port of 0 means the entry gives none, so it matches ports 80 and
+// 443.
+func SplitAllowPattern(pat string) (string, int) {
+	pat = strings.ToLower(strings.TrimSpace(pat))
+	if i := strings.LastIndexByte(pat, ':'); i > 0 {
+		if n, err := strconv.Atoi(pat[i+1:]); err == nil {
+			return pat[:i], n
+		}
+	}
+	return pat, 0
+}
+
+// ValidateAllowPattern checks one allow-list entry: a host name,
+// "*.domain" or "*", optionally followed by ":port".
+func ValidateAllowPattern(pat string) error {
+	h, port := SplitAllowPattern(pat)
+	if strings.Contains(pat, ":") && port == 0 {
+		return fmt.Errorf("invalid port in %q", pat)
+	}
+	if port < 0 || port > 65535 {
+		return fmt.Errorf("invalid port in %q", pat)
+	}
+	if h == "*" {
+		return nil
+	}
+	h = strings.TrimPrefix(h, "*.")
+	if h == "" || strings.ContainsAny(h, "*/@ ") || strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") {
+		return fmt.Errorf("invalid host pattern %q: use host, *.domain or *", pat)
+	}
+	if _, err := netip.ParseAddr(h); err == nil {
+		return fmt.Errorf("%q is an IP address; allow hosts by name", pat)
 	}
 	return nil
 }
