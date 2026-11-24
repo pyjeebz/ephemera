@@ -539,6 +539,14 @@ func (b *Backend) Destroy(ctx context.Context, id string) error {
 	}
 	if ok {
 		if err := vm.Kill(); err != nil {
+			// Keep the VM so the next Destroy can signal it again: the host
+			// retries a destroy that failed, and a VM that is dropped here
+			// cannot be stopped by that retry.
+			b.mu.Lock()
+			if _, newer := b.vms[id]; !newer {
+				b.vms[id] = vm
+			}
+			b.mu.Unlock()
 			return err
 		}
 		vm.Cleanup()
