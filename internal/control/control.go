@@ -61,6 +61,11 @@ type Server struct {
 	// results holds what hosts said about sandboxes that ended on their
 	// own, by sandbox id, until the record ends here too.
 	results map[string]api.RunSummary
+	// finished marks the sandboxes whose host said they ended on their
+	// own, by sandbox id: they are not running and take no more minutes,
+	// but their record stays in s.sandboxes until someone collects it or
+	// the host stops listing it.
+	finished map[string]bool
 	// misses counts unknown codes tried at the device approval page.
 	misses misses
 	// touched is when each token's last use was last written, by id.
@@ -104,11 +109,15 @@ func (s *Server) store() StateStore {
 // heartbeat before its record is dropped: the host may still be creating it.
 const createGrace = 2 * time.Minute
 
-// Load reads the running sandboxes and the last month of usage from the
-// StateStore.
+// Load reads the running sandboxes, the sandboxes that ended recently enough
+// to still be collected, and the last month of usage from the StateStore.
 func (s *Server) Load() error {
 	ctx := context.Background()
 	running, err := s.store().RunningSandboxes(ctx)
+	if err != nil {
+		return err
+	}
+	ended, err := s.store().EndedSandboxes(ctx, s.now().UTC().Add(-retainEnded))
 	if err != nil {
 		return err
 	}
@@ -137,6 +146,22 @@ func (s *Server) Load() error {
 		sb.Account = accountOr(sb.Account)
 		s.sandboxes[sb.ID] = &sb
 	}
+	// A sandbox its host ended is not running, but its record stays until
+	// the CLI collects its signed record or the host stops listing it.
+	s.finished = make(map[string]bool, len(ended))
+	for i := range ended {
+		sb := ended[i]
+		if sb.HostID == "" {
+			continue
+		}
+		if _, ok := s.sandboxes[sb.ID]; ok {
+			continue
+		}
+		sb.Token = ""
+		sb.Account = accountOr(sb.Account)
+		s.sandboxes[sb.ID] = &sb
+		s.finished[sb.ID] = true
+	}
 	s.usage = map[owner]map[string]float64{}
 	for _, u := range used {
 		o := owner{u.Account, u.Owner}
@@ -149,22 +174,26 @@ func (s *Server) Load() error {
 }
 
 // end forgets a sandbox and records why it ended, the time it used, and
-// what its host said about it: run, or else what it said earlier.
+// what its host said about it: run, or else what it said earlier. A
+// sandbox that already ended on its own is only forgotten: its reason,
+// end time and minutes were recorded when its host said so.
 func (s *Server) end(ctx context.Context, sb *api.Sandbox, reason string, run *api.RunSummary) {
 	at, run := s.now(), sane(run)
 	s.mu.Lock()
 	cur, ok := s.sandboxes[sb.ID]
+	_, finished := s.finished[sb.ID]
+	delete(s.finished, sb.ID)
 	var used []Usage
-	if ok {
+	if ok && !finished {
 		used = s.accrue(cur, at)
-		delete(s.sandboxes, sb.ID)
 		if r, said := s.results[sb.ID]; said && run == nil {
 			run = &r
 		}
 	}
+	delete(s.sandboxes, sb.ID)
 	delete(s.results, sb.ID)
 	s.mu.Unlock()
-	if !ok {
+	if !ok || finished {
 		return
 	}
 	// The record is already gone from memory; a failed write is logged,
@@ -178,6 +207,44 @@ func (s *Server) end(ctx context.Context, sb *api.Sandbox, reason string, run *a
 		}
 	}
 }
+
+// stop records that a sandbox ended on its own at at, with reason, and
+// what its host said about the run. Its minutes stop there and it is no
+// longer running, but its record stays: the CLI still collects its signed
+// record from the host, and the record goes when someone destroys it or
+// the host stops listing it.
+func (s *Server) stop(ctx context.Context, sb *api.Sandbox, at time.Time, reason string, run *api.RunSummary) {
+	if at.IsZero() || at.Before(sb.CreatedAt) || at.After(s.now()) {
+		at = s.now()
+	}
+	s.mu.Lock()
+	cur, ok := s.sandboxes[sb.ID]
+	if !ok || s.finished[sb.ID] {
+		s.mu.Unlock()
+		return
+	}
+	if s.finished == nil {
+		s.finished = map[string]bool{}
+	}
+	s.finished[sb.ID] = true
+	used := s.accrue(cur, at)
+	s.mu.Unlock()
+	// The record is already ended in memory; a failed write is logged,
+	// as there is nothing better to do with it.
+	if err := s.store().EndSandbox(ctx, sb.ID, at.UTC(), reason, sane(run)); err != nil {
+		s.log().Error("store: end sandbox", "sandbox", sb.ID, "err", err)
+	}
+	for _, u := range used {
+		if err := s.store().AddUsage(ctx, u); err != nil {
+			s.log().Error("store: add usage", "sandbox", sb.ID, "err", err)
+		}
+	}
+}
+
+// runningLocked reports whether the server still counts a sandbox as
+// running: one that ended on its own does not, though its record stays.
+// s.mu must be held.
+func (s *Server) runningLocked(id string) bool { return !s.finished[id] }
 
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler {
@@ -327,7 +394,7 @@ func (s *Server) usedToday(match func(owner) bool) (float64, int) {
 	}
 	running := 0
 	for _, sb := range s.sandboxes {
-		if !match(ownerOf(sb)) {
+		if !match(ownerOf(sb)) || !s.runningLocked(sb.ID) {
 			continue
 		}
 		running++
@@ -407,8 +474,8 @@ func (s *Server) enforceOnce(ctx context.Context) {
 			continue
 		}
 		if used, _ := s.usedToday(is(o)); used >= float64(l.MaxMinutesPerDay*60) {
-			for _, sb := range s.sandboxes {
-				if ownerOf(sb) == o {
+			for id, sb := range s.sandboxes {
+				if ownerOf(sb) == o && s.runningLocked(id) {
 					over = append(over, sb)
 				}
 			}
@@ -445,8 +512,10 @@ func (s *Server) pick(account string) (*hostState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	load := map[string]int{}
-	for _, sb := range s.sandboxes {
-		load[sb.HostID]++
+	for id, sb := range s.sandboxes {
+		if s.runningLocked(id) {
+			load[sb.HostID]++
+		}
 	}
 	var live []*hostState
 	for _, h := range s.hosts {
@@ -581,7 +650,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	out := []api.Sandbox{}
 	for _, sb := range s.sandboxes {
-		if sb.Account != account {
+		if sb.Account != account || !s.runningLocked(sb.ID) {
 			continue
 		}
 		c := *sb

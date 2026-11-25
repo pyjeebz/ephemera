@@ -110,7 +110,7 @@ The newest 100, newest first. `?before=<RFC 3339 time>` returns the 100 before t
 ]
 ```
 
-`ended_at` is missing while a sandbox runs. `name` is empty for sandboxes made before names. `end_reason` is `destroyed` (the CLI or someone destroyed it), `limit` (its token ran out of minutes), `gone` (its host stopped reporting it) or `failed` (the host couldn't make it).
+`ended_at` is missing while a sandbox runs. `name` is empty for sandboxes made before names. `end_reason` is `destroyed` (the CLI or someone destroyed it), `expired` (it reached its maximum lifetime), `limit` (its token ran out of minutes), `gone` (its host stopped reporting it) or `failed` (the host couldn't make it).
 
 The host sends the last three when the sandbox ends. `exit_code` is the last command's exit code, 124 if its timeout stopped it. It's missing if no command ran or the last one couldn't finish. `connections_allowed` and `connections_blocked` count the connections its egress proxy let through and refused. All three are missing while a sandbox runs, for one that never started, and for one whose host is older than the server.
 

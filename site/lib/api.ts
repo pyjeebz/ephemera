@@ -48,7 +48,7 @@ export type Run = {
   spec: Spec
   created_at: string
   ended_at?: string
-  end_reason?: "destroyed" | "limit" | "gone" | "failed"
+  end_reason?: "destroyed" | "expired" | "limit" | "gone" | "failed"
   // From the host when the run ended; missing when it didn't say, as older
   // hosts don't. exit_code is the last command's, missing if none ran.
   exit_code?: number

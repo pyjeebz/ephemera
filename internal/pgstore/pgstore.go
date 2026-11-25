@@ -271,11 +271,10 @@ func (s *Store) EndSandbox(ctx context.Context, id string, at time.Time, reason 
 	return err
 }
 
-// RunningSandboxes implements control.StateStore.
-func (s *Store) RunningSandboxes(ctx context.Context) ([]api.Sandbox, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, account_id, owner, host, host_id, host_url, spec, created_at
-		FROM sandboxes WHERE ended_at IS NULL ORDER BY created_at, id`)
+// sandboxes runs a query that selects the sandbox columns in the order
+// RunningSandboxes and EndedSandboxes expect.
+func (s *Store) sandboxes(ctx context.Context, query string, args ...any) ([]api.Sandbox, error) {
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -288,6 +287,20 @@ func (s *Store) RunningSandboxes(ctx context.Context) ([]api.Sandbox, error) {
 		sb.CreatedAt = sb.CreatedAt.UTC()
 		return sb, json.Unmarshal(spec, &sb.Spec)
 	})
+}
+
+// RunningSandboxes implements control.StateStore.
+func (s *Store) RunningSandboxes(ctx context.Context) ([]api.Sandbox, error) {
+	return s.sandboxes(ctx, `
+		SELECT id, name, account_id, owner, host, host_id, host_url, spec, created_at
+		FROM sandboxes WHERE ended_at IS NULL ORDER BY created_at, id`)
+}
+
+// EndedSandboxes implements control.StateStore.
+func (s *Store) EndedSandboxes(ctx context.Context, since time.Time) ([]api.Sandbox, error) {
+	return s.sandboxes(ctx, `
+		SELECT id, name, account_id, owner, host, host_id, host_url, spec, created_at
+		FROM sandboxes WHERE ended_at >= $1 ORDER BY created_at, id`, since)
 }
 
 // AddUsage implements control.StateStore.
