@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- A sandbox whose host failed to destroy it when the token hit `MaxMinutesPerDay` was reported as ended at `limit` and stopped counting minutes while it still ran. The enforcer now keeps the record and tries again on its next tick while the host is connected, and drops the record only when the host is offline, as `DELETE /v1/sandboxes/{id}` already did; the host's next heartbeat destroys a sandbox the server no longer knows.
+
 ### Added
 
 - `GET /v1/runs` gives each finished run `exit_code`, the last command's exit code, and `connections_allowed` and `connections_blocked`, how many connections its egress proxy let through and refused. Hosts send these three numbers when a sandbox ends, and nothing more: no commands, host names or output. Each is missing when unknown: while a sandbox runs, when no command ran (`exit_code` only), and for hosts older than this release. An older server ignores them, so hosts and servers can be upgraded in any order. Postgres keeps them in three new nullable columns; a server on files has no run history, as before.

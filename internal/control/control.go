@@ -419,7 +419,16 @@ func (s *Server) enforceOnce(ctx context.Context) {
 		s.log().Warn("daily minutes used up; stopping sandbox", "sandbox", sb.ID, "owner", sb.Owner)
 		res, err := s.hostDo(ctx, sb.HostID, api.HostMessage{Type: "destroy", Sandbox: sb.ID})
 		if err != nil {
-			s.log().Warn("stopping sandbox", "sandbox", sb.ID, "host", sb.Host, "err", err)
+			if s.hostLive(sb.HostID) {
+				// The host did not destroy it. Keep the record, so the run
+				// stays listed and its minutes count, and try again on the
+				// next tick.
+				s.log().Warn("stopping sandbox", "sandbox", sb.ID, "host", sb.Host, "err", err)
+				continue
+			}
+			// The host is offline. Drop the record; when the host comes back,
+			// its heartbeat lists the sandbox and it is told to destroy it.
+			s.log().Warn("host offline; dropping sandbox record", "sandbox", sb.ID, "host", sb.Host, "err", err)
 		}
 		s.end(ctx, sb, EndLimit, res.Run)
 	}
