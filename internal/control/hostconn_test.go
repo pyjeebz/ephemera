@@ -287,21 +287,36 @@ func TestServerNeverSeesSandboxToken(t *testing.T) {
 	}
 }
 
-// endings is a StateStore that keeps only what each sandbox ended with.
+// endings is a StateStore that remembers what the server recorded about each
+// ended run, and how often it ended one.
 type endings struct {
-	mu  sync.Mutex
-	run map[string]*api.RunSummary
+	mu    sync.Mutex
+	run   map[string]*api.RunSummary
+	why   map[string]string
+	when  map[string]time.Time
+	wrote map[string]int
+}
+
+func newEndings() *endings {
+	return &endings{run: map[string]*api.RunSummary{}, why: map[string]string{},
+		when: map[string]time.Time{}, wrote: map[string]int{}}
 }
 
 func (e *endings) StartSandbox(context.Context, api.Sandbox) error { return nil }
-func (e *endings) EndSandbox(_ context.Context, id string, _ time.Time, _ string, run *api.RunSummary) error {
+func (e *endings) EndSandbox(_ context.Context, id string, at time.Time, why string, run *api.RunSummary) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.run[id] = run
+	e.why[id] = why
+	e.when[id] = at
+	e.wrote[id]++
 	return nil
 }
 func (e *endings) RunningSandboxes(context.Context) ([]api.Sandbox, error) { return nil, nil }
-func (e *endings) AddUsage(context.Context, control.Usage) error           { return nil }
+func (e *endings) EndedSandboxes(context.Context, time.Time) ([]api.Sandbox, error) {
+	return nil, nil
+}
+func (e *endings) AddUsage(context.Context, control.Usage) error { return nil }
 func (e *endings) UsageSince(context.Context, string) ([]control.Usage, error) {
 	return nil, nil
 }
@@ -313,10 +328,23 @@ func (e *endings) of(id string) (*api.RunSummary, bool) {
 	return run, ok
 }
 
+func (e *endings) ended(id string) (why string, at time.Time, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	why, ok = e.why[id]
+	return why, e.when[id], ok
+}
+
+func (e *endings) ends(id string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.wrote[id]
+}
+
 // When a sandbox ends, its host tells the central server the last
 // command's exit code and its connection counts, and nothing more.
 func TestHostSaysHowARunEnded(t *testing.T) {
-	ends := &endings{run: map[string]*api.RunSummary{}}
+	ends := newEndings()
 	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}, State: ends}
 	ts := httptest.NewServer(cs.Handler())
 	defer ts.Close()
@@ -385,12 +413,20 @@ func TestHostSaysHowARunEnded(t *testing.T) {
 	if err := hs.Heartbeat(ctx); err != nil {
 		t.Fatal(err) // answered in order, so the server has read it by now
 	}
-	if _, ok := ends.of(short.ID); ok {
-		t.Error("an expired sandbox ended before it was destroyed; its record could not be collected")
+	// The run ends when the host says so, at the time its record gives,
+	// so the minutes stop then and the record keeps the host's reason.
+	if why, at, ok := ends.ended(short.ID); !ok || why != control.EndExpired {
+		t.Errorf("expired sandbox ended as %q (ended: %v), want %q", why, ok, control.EndExpired)
+	} else if at.Before(short.CreatedAt) || time.Since(at) > time.Minute {
+		t.Errorf("run ended at %v, want about %v", at, short.CreatedAt)
 	}
+	check(short.ID, &zero)
 	disconnect()
 	if _, err := c.Destroy(ctx, short.ID); err != nil {
-		t.Fatal(err)
+		t.Fatal(err) // the record is still there for the CLI to collect
+	}
+	if got := ends.ends(short.ID); got != 1 {
+		t.Errorf("the run ended %d times, want once", got)
 	}
 	check(short.ID, &zero)
 }

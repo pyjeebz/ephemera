@@ -261,6 +261,7 @@ export function Quiet({ children }: { children: ReactNode }) {
 // is the usual end.
 export const ENDED = {
   destroyed: ["Ended", "The CLI destroyed it when the command ended, or someone stopped it."],
+  expired: ["Reached its lifetime", "It reached the maximum lifetime it was given, so its host destroyed it."],
   limit: ["Out of minutes", "Its token used up the day’s sandbox-minutes."],
   gone: ["Host lost it", "Its host stopped reporting it, so it’s gone."],
   failed: ["Didn’t start", "The host couldn’t make it."],

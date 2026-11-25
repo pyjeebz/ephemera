@@ -237,24 +237,36 @@ func (s *Server) hostConnect(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ended keeps what a host said about one of its sandboxes that ended on
-// its own, such as by reaching its maximum lifetime. The record stays
-// until the CLI destroys the sandbox, collecting its signed record, or the
-// host stops listing it; the summary is stored then.
+// ended ends one of a host's sandboxes that ended on its own, such as by
+// reaching its maximum lifetime: it stops running and taking minutes now,
+// with the reason and time the host's record gives. The record stays until
+// the CLI destroys the sandbox, collecting its signed record, or the host
+// stops listing it.
 func (s *Server) ended(hostID string, m api.HostMessage) {
-	if sane(m.Run) == nil {
+	run := sane(m.Run)
+	if run == nil {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	sb := s.sandboxes[m.Sandbox]
 	// A host speaks only for its own sandboxes.
-	if sb := s.sandboxes[m.Sandbox]; sb == nil || sb.HostID != hostID {
+	if sb == nil || sb.HostID != hostID {
+		s.mu.Unlock()
 		return
 	}
 	if s.results == nil {
 		s.results = map[string]api.RunSummary{}
 	}
-	s.results[m.Sandbox] = *m.Run
+	s.results[m.Sandbox] = *run
+	s.mu.Unlock()
+	// A sandbox that ends on its own ends at its lifetime, unless the host
+	// names one of the reasons the server records.
+	reason := EndExpired
+	switch m.Ended {
+	case EndDestroyed, EndLimit, EndGone, EndFailed:
+		reason = m.Ended
+	}
+	s.stop(context.Background(), sb, m.EndedAt, reason, run)
 }
 
 // sane returns run, or nil if it is missing or makes no sense.
@@ -384,8 +396,8 @@ func (s *Server) hostList(w http.ResponseWriter, r *http.Request) {
 			h.LastSeen, h.URL, h.Online = st.lastSeen.UTC(), st.URL, st.conn != nil
 			h.Capacity, h.Version = st.Capacity, st.Version
 		}
-		for _, sb := range s.sandboxes {
-			if sb.HostID == rec.ID {
+		for id, sb := range s.sandboxes {
+			if sb.HostID == rec.ID && s.runningLocked(id) {
 				h.Running++
 			}
 		}

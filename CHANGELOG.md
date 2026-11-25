@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- A sandbox that reached its maximum lifetime stopped counting minutes and holding one of its token's `MaxSandboxes` slots when its host destroyed it, not an hour later when the host forgot its record. Its run now ends at that time, with `end_reason` `expired` instead of `gone`, and `DELETE /v1/sandboxes/{id}` still answers with the host's signed record. Hosts send the end time and reason with the message they already send when a sandbox ends; an older host sends neither, and the server uses its own clock and `expired`.
+
 ### Added
 
 - `GET /v1/runs` gives each finished run `exit_code`, the last command's exit code, and `connections_allowed` and `connections_blocked`, how many connections its egress proxy let through and refused. Hosts send these three numbers when a sandbox ends, and nothing more: no commands, host names or output. Each is missing when unknown: while a sandbox runs, when no command ran (`exit_code` only), and for hosts older than this release. An older server ignores them, so hosts and servers can be upgraded in any order. Postgres keeps them in three new nullable columns; a server on files has no run history, as before.

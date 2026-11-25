@@ -202,6 +202,28 @@ func State(t *testing.T, open func(t *testing.T) control.StateStore) {
 		if len(running) != 1 || running[0].ID != "sbx_b" {
 			t.Errorf("after ending sbx_a, running = %+v", running)
 		}
+
+		// An ended sandbox is no longer running, but its record stays a
+		// while so the CLI can still collect it.
+		now := time.Now().UTC()
+		c := api.Sandbox{ID: "sbx_c", Host: "h1", HostURL: "http://h1:7701",
+			CreatedAt: now.Add(-time.Minute), Owner: "laptop", Account: "alice"}
+		if err := st.StartSandbox(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.EndSandbox(ctx, c.ID, now, control.EndExpired, nil); err != nil {
+			t.Fatal(err)
+		}
+		ended, err := st.EndedSandboxes(ctx, now.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ended) != 1 || ended[0].ID != c.ID || ended[0].HostURL != c.HostURL || ended[0].Token != "" {
+			t.Errorf("ended since a minute before it ended = %+v, want %+v", ended, c)
+		}
+		if gone, err := st.EndedSandboxes(ctx, now.Add(time.Minute)); err != nil || len(gone) != 0 {
+			t.Errorf("ended since a minute after it ended = %+v, %v, want none", gone, err)
+		}
 	})
 
 	t.Run("usage", func(t *testing.T) {

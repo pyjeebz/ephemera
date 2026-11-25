@@ -252,7 +252,7 @@ type Run struct {
 	Spec      Spec       `json:"spec"`
 	CreatedAt time.Time  `json:"created_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"` // nil while it runs
-	// EndReason is why it ended: destroyed, limit, gone or failed.
+	// EndReason is why it ended: destroyed, expired, limit, gone or failed.
 	EndReason string `json:"end_reason,omitempty"`
 	// From the host when the run ended; nil when it didn't say, as older
 	// hosts don't. ExitCode is also nil when no command ran.
@@ -317,6 +317,10 @@ type HostMessage struct {
 	// Run is all the central server learns of what happened in a sandbox
 	// that ended. Older hosts never send it, and older servers ignore it.
 	Run *RunSummary `json:"run,omitempty"`
+	// EndedAt and Ended are when a sandbox ended on its own and why, as
+	// its host's record says. Older hosts send neither.
+	EndedAt time.Time `json:"ended_at,omitempty"`
+	Ended   string    `json:"ended,omitempty"`
 }
 
 // RunSummary is what a host tells the central server about a sandbox that

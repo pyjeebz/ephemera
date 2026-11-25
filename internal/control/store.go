@@ -45,6 +45,10 @@ type StateStore interface {
 	EndSandbox(ctx context.Context, id string, at time.Time, reason string, run *api.RunSummary) error
 	// RunningSandboxes returns the sandboxes that have not ended.
 	RunningSandboxes(ctx context.Context) ([]api.Sandbox, error)
+	// EndedSandboxes returns the sandboxes that ended at or after since,
+	// so a server that restarts still answers the CLI that collects their
+	// signed records.
+	EndedSandboxes(ctx context.Context, since time.Time) ([]api.Sandbox, error)
 	// AddUsage adds sandbox-seconds to a token's UTC day.
 	AddUsage(ctx context.Context, u Usage) error
 	// UsageSince returns usage from this UTC day (YYYY-MM-DD) on.
@@ -59,9 +63,16 @@ type RunStore interface {
 	AccountRuns(ctx context.Context, account string, before time.Time, limit int) ([]api.Run, error)
 }
 
+// retainEnded is how long a server keeps an ended sandbox's record, so the
+// CLI still collects its signed record from the host: the host keeps one for
+// an hour after it ends (host.keepExpired), and the server must not forget
+// it sooner.
+const retainEnded = time.Hour
+
 // Why a sandbox ended.
 const (
 	EndDestroyed = "destroyed" // someone destroyed it
+	EndExpired   = "expired"   // it reached its maximum lifetime
 	EndLimit     = "limit"     // its token used up the day's minutes
 	EndGone      = "gone"      // its host stopped reporting it
 	EndFailed    = "failed"    // the host could not create it
@@ -86,8 +97,18 @@ type FileState struct {
 	st     fileState
 }
 
+// endedSandbox is a sandbox that ended at At, kept while the CLI may still
+// collect its signed record from the host.
+type endedSandbox struct {
+	Sandbox api.Sandbox `json:"sandbox"`
+	At      time.Time   `json:"at"`
+}
+
 type fileState struct {
 	Sandboxes []api.Sandbox `json:"sandboxes"`
+	// Ended keeps the sandboxes that ended in the last retainEnded, with
+	// when they ended.
+	Ended []endedSandbox `json:"ended,omitempty"`
 	// Usage is from before accounts: token name to day to seconds, all in
 	// DefaultAccount. It is read, then written as UsageByAccount.
 	Usage map[string]map[string]float64 `json:"usage,omitempty"`
@@ -138,13 +159,17 @@ func addUsage(m map[string]map[string]map[string]float64, u Usage) {
 	m[u.Account][u.Owner][u.Day] += u.Seconds
 }
 
-// saveLocked writes the file, dropping usage older than usageKeep.
-func (f *FileState) saveLocked() error {
-	now := time.Now
+func (f *FileState) now() time.Time {
 	if f.Now != nil {
-		now = f.Now
+		return f.Now()
 	}
-	cutoff := now().UTC().Add(-usageKeep).Format(dayFormat)
+	return time.Now()
+}
+
+// saveLocked writes the file, dropping usage older than usageKeep and ended
+// sandboxes older than retainEnded.
+func (f *FileState) saveLocked() error {
+	cutoff := f.now().UTC().Add(-usageKeep).Format(dayFormat)
 	for acct, owners := range f.st.UsageByAccount {
 		for owner, days := range owners {
 			for day := range days {
@@ -160,6 +185,13 @@ func (f *FileState) saveLocked() error {
 			delete(f.st.UsageByAccount, acct)
 		}
 	}
+	kept := f.st.Ended[:0]
+	for _, e := range f.st.Ended {
+		if e.At.After(f.now().UTC().Add(-retainEnded)) {
+			kept = append(kept, e)
+		}
+	}
+	f.st.Ended = kept
 	sort.Slice(f.st.Sandboxes, func(i, j int) bool { return f.st.Sandboxes[i].ID < f.st.Sandboxes[j].ID })
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o700); err != nil {
 		return err
@@ -192,15 +224,22 @@ func (f *FileState) StartSandbox(_ context.Context, sb api.Sandbox) error {
 	})
 }
 
-// EndSandbox implements StateStore. The sandbox is forgotten, with all
-// that is known about it.
-func (f *FileState) EndSandbox(_ context.Context, id string, _ time.Time, _ string, _ *api.RunSummary) error {
+// EndSandbox implements StateStore. The sandbox stops being listed as
+// running, and its record is kept for retainEnded, so a restart still answers
+// the CLI that collects it.
+func (f *FileState) EndSandbox(_ context.Context, id string, at time.Time, _ string, _ *api.RunSummary) error {
+	if at.IsZero() {
+		at = f.now()
+	}
 	return f.change(func() {
 		out := f.st.Sandboxes[:0]
 		for _, sb := range f.st.Sandboxes {
 			if sb.ID != id {
 				out = append(out, sb)
+				continue
 			}
+			sb.Token = ""
+			f.st.Ended = append(f.st.Ended, endedSandbox{Sandbox: sb, At: at.UTC()})
 		}
 		f.st.Sandboxes = out
 	})
@@ -214,6 +253,22 @@ func (f *FileState) RunningSandboxes(context.Context) ([]api.Sandbox, error) {
 		return nil, err
 	}
 	return append([]api.Sandbox(nil), f.st.Sandboxes...), nil
+}
+
+// EndedSandboxes implements StateStore.
+func (f *FileState) EndedSandboxes(_ context.Context, since time.Time) ([]api.Sandbox, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.loadLocked(); err != nil {
+		return nil, err
+	}
+	var out []api.Sandbox
+	for _, e := range f.st.Ended {
+		if !e.At.Before(since) {
+			out = append(out, e.Sandbox)
+		}
+	}
+	return out, nil
 }
 
 // AddUsage implements StateStore.
@@ -249,5 +304,8 @@ func (memState) EndSandbox(context.Context, string, time.Time, string, *api.RunS
 	return nil
 }
 func (memState) RunningSandboxes(context.Context) ([]api.Sandbox, error) { return nil, nil }
-func (memState) AddUsage(context.Context, Usage) error                   { return nil }
-func (memState) UsageSince(context.Context, string) ([]Usage, error)     { return nil, nil }
+func (memState) EndedSandboxes(context.Context, time.Time) ([]api.Sandbox, error) {
+	return nil, nil
+}
+func (memState) AddUsage(context.Context, Usage) error               { return nil }
+func (memState) UsageSince(context.Context, string) ([]Usage, error) { return nil, nil }

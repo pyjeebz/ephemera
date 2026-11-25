@@ -265,13 +265,20 @@ func summarize(sr *api.SignedRecord) *api.RunSummary {
 }
 
 // tellEnded tells every connected central server that a sandbox ended on
-// its own, with its summary. A server that isn't connected just then
+// its own, with its summary, when it ended and why, so the server stops
+// counting its minutes there. A server that isn't connected just then
 // learns the summary when the sandbox is destroyed, or never.
 func (s *Server) tellEnded(id string, sr *api.SignedRecord) {
-	sum := summarize(sr)
-	if sum == nil {
+	if sr == nil {
 		return
 	}
+	// The record says when the sandbox ended on its own and why, which the
+	// central server records too, so it stops counting minutes then.
+	var rec api.Record
+	if err := json.Unmarshal(sr.Record, &rec); err != nil {
+		return
+	}
+	sum := record.Summarize(rec)
 	s.mu.Lock()
 	conns := make([]*conn, 0, len(s.conns))
 	for c := range s.conns {
@@ -279,7 +286,8 @@ func (s *Server) tellEnded(id string, sr *api.SignedRecord) {
 	}
 	s.mu.Unlock()
 	for _, c := range conns {
-		c.send(api.HostMessage{Type: "ended", Sandbox: id, Run: sum})
+		c.send(api.HostMessage{Type: "ended", Sandbox: id, Run: &sum,
+			EndedAt: rec.Destroyed, Ended: rec.Ended})
 	}
 }
 
