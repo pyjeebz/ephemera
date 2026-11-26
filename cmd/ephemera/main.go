@@ -281,6 +281,7 @@ func cmdRun(ctx context.Context, c *client.Client, args []string, stdout, stderr
 
 	res, err := c.Run(ctx, opts)
 	if err != nil {
+		err = explainNoHost(ctx, c, err)
 		if errors.Is(err, context.Canceled) {
 			err = errors.New("interrupted; the sandbox was destroyed")
 		}
@@ -432,6 +433,7 @@ func cmdDev(ctx context.Context, c *client.Client, args []string, stdout, stderr
 		return exitInterrupted
 	}
 	if err != nil {
+		err = explainNoHost(ctx, c, err)
 		if f.jsonOut {
 			events.emit("error", map[string]any{"error": err.Error()})
 		} else {

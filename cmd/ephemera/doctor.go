@@ -236,13 +236,8 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 	var out []check
 	reachable := false
 	for _, h := range hosts {
-		if h.URL == "" {
-			// A server older than this CLI sends neither url nor online, so
-			// judge by the last heartbeat on this machine's clock.
-			h.Online = time.Since(h.LastSeen) <= hostTimeout
-		}
-		if !h.Online {
-			detail := fmt.Sprintf("%s is offline, last seen %s ago", h.Name, time.Since(h.LastSeen).Round(time.Second))
+		if !hostOnline(h) {
+			detail := fmt.Sprintf("%s is offline, last seen %s", h.Name, lastSeen(h))
 			if h.LastSeen.IsZero() {
 				detail = h.Name + " joined but hasn't connected since the central server started"
 			}

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -78,6 +79,16 @@ func cmdLogin(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	}
 	p, _ := config.Path()
 	fmt.Fprintf(stdout, "Logged in to %s as %s (saved in %s)\n", c.Server, who.Name, p)
+	// A login can succeed with no host to run on; say so now rather than
+	// at the first run. Best effort: a slow or old server just skips it.
+	hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	hosts, err := c.Hosts(hctx)
+	cancel()
+	if err == nil {
+		if note := noHostNote(hosts); note != "" {
+			fmt.Fprintln(stderr, "ephemera: note:", note)
+		}
+	}
 	return 0
 }
 

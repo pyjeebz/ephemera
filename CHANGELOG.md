@@ -7,6 +7,8 @@
 - `GET /v1/runs` gives each finished run `exit_code`, the last command's exit code, and `connections_allowed` and `connections_blocked`, how many connections its egress proxy let through and refused. Hosts send these three numbers when a sandbox ends, and nothing more: no commands, host names or output. Each is missing when unknown: while a sandbox runs, when no command ran (`exit_code` only), and for hosts older than this release. An older server ignores them, so hosts and servers can be upgraded in any order. Postgres keeps them in three new nullable columns; a server on files has no run history, as before.
 - `GET /v1/tokens` gives each token `last_used`, when it last made a request. The server writes it at most once a minute per token, so it can be up to a minute behind, and leaves it out for a token never used. The token file and Postgres both keep it.
 - The dashboard shows each ended run's exit code ("Ended · exit 0", in red when it isn't 0) on the Sandboxes page and the overview, the connection counts in a run's details, and a "Last used" column on the Tokens page.
+- `ephemera hosts` has a LAST SEEN column: `now` for an online host, and for an offline one when it last checked in, such as `4 days ago`.
+- When every host in the account is offline, `ephemera run` and `ephemera dev` say which and since when, instead of the central server's generic error: "no host can take a sandbox: your only host, lab-1, is offline: it was last seen 4 days ago; on that machine: systemctl status ephemera-host". `ephemera login` prints the same note after signing in, so a dead host shows up before the first run, not at it.
 
 ## v0.2.1 (2026-11-20)
 

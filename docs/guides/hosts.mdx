@@ -54,9 +54,11 @@ A host is a machine you own that runs your sandboxes as Firecracker microVMs. Ad
     ```
 
     ```text
-    NAME   ID             ONLINE  KEY                                                 PINNED
-    lab-1  host_0b275ef1  yes     SHA256:qL3HdSf8UZXKjpVRma/Eo9jyxni9zZ8p6aDu+FxTJhA  no
+    NAME   ID             ONLINE  LAST SEEN  KEY                                                 PINNED
+    lab-1  host_0b275ef1  yes     now        SHA256:qL3HdSf8UZXKjpVRma/Eo9jyxni9zZ8p6aDu+FxTJhA  not yet; on first use
     ```
+
+    For a host that's offline, LAST SEEN says when it last checked in, such as `4 days ago`.
   </Step>
 </Steps>
 
