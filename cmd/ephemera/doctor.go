@@ -200,7 +200,7 @@ func explainNetErr(u *url.URL, what string, err error) (string, string) {
 	switch {
 	case errors.As(err, &dnsErr):
 		return fmt.Sprintf("can't find %s: the name does not resolve", u.Hostname()),
-			"Check the address. On Tailscale, check this machine is on the same tailnet: tailscale status"
+			"Check the address, and that this machine is on the network or VPN that knows that name"
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return fmt.Sprintf("nothing is listening at %s", addr),
 			"Check that " + what + " is running there, and on that port"
@@ -209,7 +209,7 @@ func explainNetErr(u *url.URL, what string, err error) (string, string) {
 			"Check the address, that the machine is on, and that this machine can reach it (same network or tailnet, firewall)"
 	case errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH):
 		return fmt.Sprintf("no route to %s", addr),
-			"This machine has no network path to it. On Tailscale, check: tailscale status"
+			"This machine has no network path to it: check it's on the same network or VPN, and that the VPN is up"
 	case strings.Contains(err.Error(), "server gave HTTP response to HTTPS client"):
 		return fmt.Sprintf("%s speaks plain HTTP, not HTTPS", addr),
 			"Use http:// in the address: ephemera login --server http://" + addr
@@ -327,8 +327,8 @@ func probeHost(ctx context.Context, hc *http.Client, base string) check {
 		if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 			return check{Name: "hosts", Status: "fail",
 				Detail: fmt.Sprintf("a TCP connection to %s got no answer within %s", addr, doctorTimeout),
-				Fix: reach + "Something drops it: check firewalls, and on Tailscale, that the tailnet's access rules " +
-					"let this machine reach the host on tcp:" + port}
+				Fix: reach + "Something on the way drops it: check the host's firewall, your cloud provider's firewall " +
+					"or security group, and any VPN access rules, for tcp:" + port + " from this machine"}
 		}
 		return failReach(u, reach, err)
 	}
@@ -373,9 +373,9 @@ func failReach(u *url.URL, reach string, err error) check {
 	return check{Name: "hosts", Status: "fail", Detail: detail, Fix: reach + fix}
 }
 
-const mtuFix = "Large packets aren't getting through, which usually means an MTU too big for the path. " +
-	"It happens with Tailscale on WSL2, whose eth0 can have an MTU of 1280. Lower the tunnel's MTU, " +
-	"on Tailscale with: sudo ip link set tailscale0 mtu 1200"
+const mtuFix = "Large packets aren't getting through, which usually means an MTU too big for the path, " +
+	"most often on a VPN or tunnel (WSL2's eth0, for one, can be 1280). Lower the MTU of the interface " +
+	"you reach the host through, such as: sudo ip link set <interface> mtu 1200"
 
 // healthz asks a host for /healthz, with pad bytes of padding in a header,
 // and reports how long it took and whether the TLS handshake finished.

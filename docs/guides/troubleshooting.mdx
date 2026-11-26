@@ -56,12 +56,14 @@ It checks, in order, the saved login, the central server, the token, and each ho
 
     | Doctor says | What's wrong | Fix |
     | - | - | - |
-    | `a TCP connection to 10.0.0.12:7701 got no answer` | Something drops the connection: a firewall, or a tailnet's access rules | Allow tcp:7701 from your laptop to the host. On Tailscale, see [Let your laptop reach port 7701](/self-hosting#let-your-laptop-reach-port-7701) |
+    | `a TCP connection to 10.0.0.12:7701 got no answer` | Something on the way drops the connection | Allow tcp:7701 from this machine to the host: in the host's firewall, your cloud provider's firewall or security group, or your VPN's access rules. For a tailnet, see [the access rule](/self-hosting#let-your-laptop-reach-port-7701) |
     | `nothing is listening at 10.0.0.12:7701` | The machine answers, but the host agent isn't running on that port | On the host: `systemctl status ephemera-host` |
-    | `TCP to 10.0.0.12:7701 connects, but the TLS handshake got no answer` | Large packets don't get through, usually an MTU too big for the path | Lower the tunnel's MTU; on Tailscale: `sudo ip link set tailscale0 mtu 1200` |
+    | `TCP to 10.0.0.12:7701 connects, but the TLS handshake got no answer` | Large packets don't get through, usually an MTU too big for the path | Lower the MTU of the interface you reach the host through: `sudo ip link set <interface> mtu 1200` |
     | `small requests to 10.0.0.12:7701 work, but an 8 KB one got no answer` | The same: small packets pass, full-size ones are dropped | The same |
 
-    The MTU problem shows up with Tailscale on WSL2, whose `eth0` can have an MTU of 1280. It also makes SSH hang at key exchange, which is a quick way to recognise it.
+    The MTU problem is most common on a VPN or tunnel; WSL2's `eth0`, for one, can have an MTU of 1280. It also makes SSH hang at key exchange, which is a quick way to recognise it.
+
+    If you can SSH into the host, you can also skip the network: run `ephemera` on the host itself. See [Use it over SSH](/guides/hosts#use-it-over-ssh).
   </Accordion>
 
   <Accordion title="host lab-1's key changed">
