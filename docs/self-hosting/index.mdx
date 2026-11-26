@@ -58,6 +58,24 @@ ephemera run -- echo hello from a microVM
 
 If that fails, `ephemera doctor` says which step is broken, and how to fix it.
 
+### Let your laptop reach port 7701
+
+The host can be online in the dashboard while every run fails to connect: the host's connection goes out to the central server, but your laptop connects in to the host, on tcp:7701. `bootstrap.sh` joins the machine to Tailscale as `tag:lab`. If your tailnet has access rules that allow only SSH to that tag, a common setup, add a rule for 7701 to your tailnet policy:
+
+```json
+{ "action": "accept", "src": ["autogroup:member"], "dst": ["tag:lab:7701"] }
+```
+
+With the newer grants syntax, that's `{ "src": ["autogroup:member"], "dst": ["tag:lab"], "ip": ["tcp:7701"] }`. The central server's port, 7700, needs the same if your laptop logs in to it over the tailnet.
+
+On a laptop with a small MTU, large packets can stall even when the access rules are right. WSL2, for one, can give `eth0` an MTU of 1280, which leaves no room for Tailscale's own headers. Small requests get through and anything big hangs, which looks like the same "no answer". `ephemera doctor` tells the two apart. For the MTU, lower the tunnel's:
+
+```bash
+sudo ip link set tailscale0 mtu 1200
+```
+
+The setting lasts until Tailscale or the machine restarts.
+
 ## Tokens and limits
 
 Make one token per person, laptop, agent or CI system, so each can be limited and revoked on its own:

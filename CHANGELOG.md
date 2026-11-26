@@ -9,6 +9,7 @@
 - The dashboard shows each ended run's exit code ("Ended · exit 0", in red when it isn't 0) on the Sandboxes page and the overview, the connection counts in a run's details, and a "Last used" column on the Tokens page.
 - `ephemera hosts` has a LAST SEEN column: `now` for an online host, and for an offline one when it last checked in, such as `4 days ago`.
 - When every host in the account is offline, `ephemera run` and `ephemera dev` say which and since when, instead of the central server's generic error: "no host can take a sandbox: your only host, lab-1, is offline: it was last seen 4 days ago; on that machine: systemctl status ephemera-host". `ephemera login` prints the same note after signing in, so a dead host shows up before the first run, not at it.
+- Docs: the self-hosting guide gives the tailnet access rule a laptop needs to reach a host on tcp:7701, and the MTU fix for WSL2.
 
 ### Changed
 

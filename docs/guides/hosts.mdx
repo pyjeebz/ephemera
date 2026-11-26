@@ -11,7 +11,7 @@ A host is a machine you own that runs your sandboxes as Firecracker microVMs. Ad
 - **x86_64 Linux with KVM.** Ubuntu 24.04 is what ephemera is tested on. Check with `ls /dev/kvm`. A bare-metal server, a spare PC, or a cloud VM with nested virtualization all work.
 - **About 2 GB of disk** for the guest image, plus what sandboxes write. Each sandbox's disk is sparse: it takes only what's written.
 - **Memory** sets how many sandboxes fit. An idle sandbox costs about 60 MB, so a 16 GB machine holds well over a hundred idle ones. A busy one uses what its workload uses, up to its limit, 1 GB by default.
-- **A way for your laptop to reach it.** The host connects out to the central server by itself and needs no open port for it. But your laptop sends files and reads output straight from the host, on port 7701, so the two must share a network: the same LAN, or a VPN of your choice.
+- **A way for your laptop to reach it.** The host connects out to the central server by itself and needs no open port for it. But your laptop sends files and reads output straight from the host, on port 7701, so the two must share a network: the same LAN, or a VPN of your choice. On a VPN with access rules, such as a Tailscale tailnet, allow your devices tcp:7701 to the host; see [Let your laptop reach port 7701](/self-hosting#let-your-laptop-reach-port-7701).
 
 ## Join it to your account
 
