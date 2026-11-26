@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,9 +10,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,8 +23,8 @@ import (
 )
 
 // doctorTimeout bounds each network check, so a dropped packet shows up as
-// a clear failure instead of a hang.
-const doctorTimeout = 5 * time.Second
+// a clear failure instead of a hang. Tests shorten it.
+var doctorTimeout = 5 * time.Second
 
 // hostTimeout matches control.HostTimeout: a host with no heartbeat for
 // this long gets no new sandboxes.
@@ -261,7 +264,7 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 			out = append(out, fail)
 			continue
 		}
-		r := checkReach(ctx, hc, "hosts", h.URL, "the host agent")
+		r := probeHost(ctx, hc, h.URL)
 		if r.Status == "ok" {
 			reachable = true
 			pinned := "its key isn't pinned yet; the first run pins it"
@@ -273,7 +276,6 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 			r.Detail = fmt.Sprintf("%s is online, %s, and %s", h.Name, pinned, r.Detail)
 		} else {
 			r.Detail = fmt.Sprintf("%s is online, but this machine can't reach it: %s", h.Name, r.Detail)
-			r.Fix = "Files and commands go straight to the host, so this machine must reach " + h.URL + ". " + r.Fix
 		}
 		out = append(out, r)
 	}
@@ -288,3 +290,121 @@ func checkHosts(ctx context.Context, c *client.Client) []check {
 	}
 	return out
 }
+
+// padBytes is the size of the padded request: several full-size packets,
+// so a path that drops large packets stalls on it.
+const padBytes = 8 << 10
+
+// dialHost opens the TCP connection probeHost starts with. Tests replace it.
+var dialHost = func(ctx context.Context, addr string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", addr)
+}
+
+// probeHost checks a host in stages, so two causes that both look like
+// "no answer" get different fixes: a TCP connection (firewalls and tailnet
+// access rules), then a small TLS request, then a padded one (both stall
+// when large packets are dropped, usually an MTU too big for the path).
+func probeHost(ctx context.Context, hc *http.Client, base string) check {
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return check{Name: "hosts", Status: "fail", Detail: fmt.Sprintf("%q is not an https URL", base),
+			Fix: "The host gave this address when it joined; join it again with --address"}
+	}
+	addr := u.Host
+	port := u.Port()
+	if port == "" {
+		port = "443"
+		addr = net.JoinHostPort(u.Hostname(), port)
+	}
+	reach := "Files and commands go straight to the host, so this machine must reach " + base + ". "
+
+	// 1. TCP.
+	dctx, cancel := context.WithTimeout(ctx, doctorTimeout)
+	conn, err := dialHost(dctx, addr)
+	cancel()
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
+			return check{Name: "hosts", Status: "fail",
+				Detail: fmt.Sprintf("a TCP connection to %s got no answer within %s", addr, doctorTimeout),
+				Fix: reach + "Something drops it: check firewalls, and on Tailscale, that the tailnet's access rules " +
+					"let this machine reach the host on tcp:" + port}
+		}
+		return failReach(u, reach, err)
+	}
+	conn.Close()
+
+	// 2. A small request: the TLS handshake and /healthz.
+	took, handshake, err := healthz(ctx, hc, base, 0)
+	if err != nil {
+		if !errors.Is(err, context.DeadlineExceeded) && !isTimeout(err) {
+			return failReach(u, reach, err)
+		}
+		stalled := "the TLS handshake"
+		if handshake {
+			stalled = "a small request"
+		}
+		return check{Name: "hosts", Status: "fail",
+			Detail: fmt.Sprintf("TCP to %s connects, but %s got no answer within %s", addr, stalled, doctorTimeout),
+			Fix:    mtuFix}
+	}
+
+	// 3. A padded request.
+	if _, _, err := healthz(ctx, hc, base, padBytes); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
+			return check{Name: "hosts", Status: "fail",
+				Detail: fmt.Sprintf("small requests to %s work, but an %d KB one got no answer within %s", addr, padBytes>>10, doctorTimeout),
+				Fix:    mtuFix}
+		}
+		return failReach(u, reach, err)
+	}
+	return check{Name: "hosts", Status: "ok", Detail: fmt.Sprintf("%s answers in %s", base, took)}
+}
+
+// failReach explains a host check that failed for a reason other than
+// a timeout.
+func failReach(u *url.URL, reach string, err error) check {
+	var bad *badStatus
+	if errors.As(err, &bad) {
+		return check{Name: "hosts", Status: "fail", Detail: fmt.Sprintf("%s answered %s, not ok", u.Host, bad.status),
+			Fix: "Check that this is the address of the host agent, not another service"}
+	}
+	detail, fix := explainNetErr(u, "the host agent", err)
+	return check{Name: "hosts", Status: "fail", Detail: detail, Fix: reach + fix}
+}
+
+const mtuFix = "Large packets aren't getting through, which usually means an MTU too big for the path. " +
+	"It happens with Tailscale on WSL2, whose eth0 can have an MTU of 1280. Lower the tunnel's MTU, " +
+	"on Tailscale with: sudo ip link set tailscale0 mtu 1200"
+
+// healthz asks a host for /healthz, with pad bytes of padding in a header,
+// and reports how long it took and whether the TLS handshake finished.
+func healthz(ctx context.Context, hc *http.Client, base string, pad int) (time.Duration, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, doctorTimeout)
+	defer cancel()
+	// The transport dials on its own goroutine, which may still be going
+	// when Do gives up.
+	var handshake atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) { handshake.Store(err == nil) },
+	})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/healthz", nil)
+	if pad > 0 {
+		req.Header.Set("X-Ephemera-Padding", strings.Repeat("p", pad))
+	}
+	start := time.Now()
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, handshake.Load(), err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, true, &badStatus{resp.Status}
+	}
+	return time.Since(start).Round(time.Millisecond), true, nil
+}
+
+// badStatus is an answer other than 200 OK.
+type badStatus struct{ status string }
+
+func (e *badStatus) Error() string { return "answered " + e.status }

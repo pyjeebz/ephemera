@@ -6,6 +6,8 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -47,6 +49,13 @@ func doctorEnv(t *testing.T) (*httptest.Server, *control.Server) {
 // lists it offline.
 func startHost(t *testing.T, cs *control.Server, server, name string) (*httptest.Server, func()) {
 	t.Helper()
+	return startHostAt(t, cs, server, name, func(u string) string { return u })
+}
+
+// startHostAt is startHost for a host that gives the central server
+// address(its own URL) as where to reach it.
+func startHostAt(t *testing.T, cs *control.Server, server, name string, address func(string) string) (*httptest.Server, func()) {
+	t.Helper()
 	_, key, _ := ed25519.GenerateKey(nil)
 	hs := &host.Server{Backend: &sandboxtest.Local{Root: t.TempDir()}, Name: name, Key: key}
 	hts := hosttest.Serve(t, hs)
@@ -54,7 +63,7 @@ func startHost(t *testing.T, cs *control.Server, server, name string) (*httptest
 	if err != nil {
 		t.Fatal(err)
 	}
-	disconnect := hosttest.Connect(t, hs, server, code, api.HostHello{Name: name, URL: hts.URL, Capacity: 1})
+	disconnect := hosttest.Connect(t, hs, server, code, api.HostHello{Name: name, URL: address(hts.URL), Capacity: 1})
 	return hts, func() {
 		disconnect()
 		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
@@ -275,4 +284,92 @@ func TestDoctorOldServer(t *testing.T) {
 			t.Errorf("last seen %s ago: checks %s, want %s", tc.age, got, tc.want)
 		}
 	}
+}
+
+// shortTimeout makes the doctor give up on a stalled check quickly.
+func shortTimeout(t *testing.T) {
+	old := doctorTimeout
+	doctorTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { doctorTimeout = old })
+}
+
+// stallAfter forwards connections to target until n bytes have come from
+// the client, then stops forwarding: a path that drops large packets. n < 0
+// forwards nothing at all.
+func stallAfter(t *testing.T, target string, n int) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+			if n < 0 {
+				continue
+			}
+			up, err := net.Dial("tcp", target)
+			if err != nil {
+				c.Close()
+				continue
+			}
+			t.Cleanup(func() { up.Close() })
+			go io.Copy(c, up)
+			go func() {
+				io.CopyN(up, c, int64(n))
+				io.Copy(io.Discard, c) // the rest is lost
+			}()
+		}
+	}()
+	return "https://" + ln.Addr().String()
+}
+
+// The doctor says which stage of reaching a host failed, since each has
+// its own fix.
+func TestDoctorHostStages(t *testing.T) {
+	hostAddr := func(u string) string { return strings.TrimPrefix(u, "https://") }
+
+	t.Run("TCP dropped", func(t *testing.T) {
+		shortTimeout(t)
+		ts, cs := doctorEnv(t)
+		startHost(t, cs, ts.URL, "h1")
+		old := dialHost
+		dialHost = func(ctx context.Context, addr string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		t.Cleanup(func() { dialHost = old })
+		_, rep := runDoctorJSON(t)
+		c := rep.Checks[3]
+		if c.Status != "fail" || !strings.Contains(c.Detail, "a TCP connection to") || !strings.Contains(c.Fix, "tcp:") {
+			t.Errorf("hosts check %+v", c)
+		}
+	})
+
+	t.Run("handshake stalls", func(t *testing.T) {
+		shortTimeout(t)
+		ts, cs := doctorEnv(t)
+		startHostAt(t, cs, ts.URL, "h1", func(u string) string { return stallAfter(t, hostAddr(u), -1) })
+		_, rep := runDoctorJSON(t)
+		c := rep.Checks[3]
+		if c.Status != "fail" || !strings.Contains(c.Detail, "the TLS handshake got no answer") || !strings.Contains(c.Fix, "MTU") {
+			t.Errorf("hosts check %+v", c)
+		}
+	})
+
+	t.Run("large packets stall", func(t *testing.T) {
+		shortTimeout(t)
+		ts, cs := doctorEnv(t)
+		startHostAt(t, cs, ts.URL, "h1", func(u string) string { return stallAfter(t, hostAddr(u), 4<<10) })
+		_, rep := runDoctorJSON(t)
+		c := rep.Checks[3]
+		if c.Status != "fail" || !strings.Contains(c.Detail, "small requests to") || !strings.Contains(c.Fix, "MTU") {
+			t.Errorf("hosts check %+v", c)
+		}
+	})
 }

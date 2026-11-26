@@ -10,6 +10,10 @@
 - `ephemera hosts` has a LAST SEEN column: `now` for an online host, and for an offline one when it last checked in, such as `4 days ago`.
 - When every host in the account is offline, `ephemera run` and `ephemera dev` say which and since when, instead of the central server's generic error: "no host can take a sandbox: your only host, lab-1, is offline: it was last seen 4 days ago; on that machine: systemctl status ephemera-host". `ephemera login` prints the same note after signing in, so a dead host shows up before the first run, not at it.
 
+### Changed
+
+- `ephemera doctor` tries each host in three steps, a TCP connection, a small TLS request and an 8 KB one, and says which failed. A dropped connection points at firewalls and tailnet access rules (allow tcp:7701 to the host); a stalled handshake or large request points at the MTU (`sudo ip link set tailscale0 mtu 1200`). Both used to read "no answer from <address> within 5s".
+
 ## v0.2.1 (2026-11-20)
 
 ### Fixed

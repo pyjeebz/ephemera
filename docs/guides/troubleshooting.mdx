@@ -17,7 +17,7 @@ ok    token   accepted, name my-laptop
 ok    hosts   lab-1 is online, its key is pinned, and https://10.0.0.12:7701 answers in 4ms
 ```
 
-It checks, in order, the saved login, the central server, the token, and each host: online, key pinned, and reachable from this machine. For the first check that fails, it prints what's wrong and how to fix it, and exits 1. `--json` prints the same checks for scripts.
+It checks, in order, the saved login, the central server, the token, and each host: online, key pinned, and reachable from this machine, with a TCP connection, a small request and a larger one, so a firewall and an MTU problem get different fixes. For the first check that fails, it prints what's wrong and how to fix it, and exits 1. `--json` prints the same checks for scripts.
 
 ## Errors
 
@@ -52,7 +52,16 @@ It checks, in order, the saved login, the central server, the token, and each ho
   </Accordion>
 
   <Accordion title="The CLI can't reach a host">
-    Your laptop sends files and reads output straight from the host, at the address the host gave when it joined (`ephemera hosts` lists it). The host's connection to the central server can be fine while your laptop can't reach it. Check the two are on the same network or VPN, and that nothing blocks the host's port, 7701 by default.
+    Your laptop sends files and reads output straight from the host, at the address the host gave when it joined (`ephemera hosts` lists it). The host's connection to the central server can be fine while your laptop can't reach it. `ephemera doctor` tries the host in three steps, and says which one failed:
+
+    | Doctor says | What's wrong | Fix |
+    | - | - | - |
+    | `a TCP connection to 10.0.0.12:7701 got no answer` | Something drops the connection: a firewall, or a tailnet's access rules | Allow tcp:7701 from your laptop to the host. On Tailscale, see [Let your laptop reach port 7701](/self-hosting#let-your-laptop-reach-port-7701) |
+    | `nothing is listening at 10.0.0.12:7701` | The machine answers, but the host agent isn't running on that port | On the host: `systemctl status ephemera-host` |
+    | `TCP to 10.0.0.12:7701 connects, but the TLS handshake got no answer` | Large packets don't get through, usually an MTU too big for the path | Lower the tunnel's MTU; on Tailscale: `sudo ip link set tailscale0 mtu 1200` |
+    | `small requests to 10.0.0.12:7701 work, but an 8 KB one got no answer` | The same: small packets pass, full-size ones are dropped | The same |
+
+    The MTU problem shows up with Tailscale on WSL2, whose `eth0` can have an MTU of 1280. It also makes SSH hang at key exchange, which is a quick way to recognise it.
   </Accordion>
 
   <Accordion title="host lab-1's key changed">
