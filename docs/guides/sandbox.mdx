@@ -1,0 +1,69 @@
+---
+title: "Inside the sandbox"
+description: "What a command finds when it runs: the user, the processes, the files, the network and the tools in the default image."
+sidebarTitle: "Inside the sandbox"
+---
+
+A sandbox is a small Linux machine of its own, but it isn't a CI runner or a laptop. It has no init system, no network device and no services. Most commands never notice. System-level tests, such as ones that install a service or edit `/etc/hosts`, will, and that can be useful: they run against a clean machine that's thrown away afterwards.
+
+## Who and where
+
+| | |
+| - | - |
+| User | `root`. There's no `sudo`, and nothing needs it |
+| Working directory | `/workspace`, holding your worktree's files |
+| Hostname | `ephemera` |
+| Environment | `PATH`, `HOME=/root`, `LANG=C.UTF-8`, the proxy variables below, and whatever you pass with `--env` |
+| Size | 2 vCPUs and 1 GB of memory by default; `--cpus` and `--memory` change it |
+
+## Processes
+
+PID 1 is `ephemera-guest`, ephemera's guest agent. It starts your command and reaps orphaned processes, and that's all. So:
+
+- **There's no systemd.** `systemctl` is in the image, but with no systemd running it fails, and so does `systemctl --user`. Start background programs yourself, with `&` or `nohup`.
+- **There's no Docker,** and no other service runs: no cron, no SSH server, no syslog.
+
+A program a command starts in the background keeps running after the command exits, until the sandbox is destroyed. Ctrl-C or `--timeout` stops the command's whole process group, background programs included.
+
+## Files
+
+The root filesystem is writable. The guest image is shared and read-only, and everything written lands on the sandbox's own disk on top of it, so you can change any file, `/etc/hosts` included, or `apt install` a package. The disk is sparse, 20 GB by default, and it's deleted with the sandbox.
+
+`/tmp`, `/run` and `/dev/shm` are in memory, and count against the sandbox's memory.
+
+## Network
+
+The sandbox has no network device, only loopback. Programs reach the internet through an HTTP proxy at `127.0.0.1:3128`, set in `HTTP_PROXY`, `HTTPS_PROXY` and their lowercase forms, and only to the hosts you allow. See [Network access](/guides/network).
+
+Name resolution is the part most likely to surprise:
+
+- **There's no DNS server.** The proxy looks up names on the host, so programs that use the proxy don't need DNS. A program that resolves a name itself, before connecting, gets an error.
+- **`localhost` resolves, from `/etc/hosts`, but other names under `.localhost` don't.** On many desktops, `app.localhost` reaches 127.0.0.1 through systemd's resolver; here, Node.js, Python and Go programs can't find it. Add the names you need to `/etc/hosts`:
+
+  ```bash
+  echo "127.0.0.1 app.localhost api.localhost" >> /etc/hosts
+  ```
+
+## Tools in the default image
+
+The default guest image is Ubuntu 24.04 with:
+
+| Tool | Version |
+| - | - |
+| Node.js and npm | Node.js 24.22.2 |
+| Python, pip and venv | 3.12, from Ubuntu |
+| git | from Ubuntu |
+| gcc, g++, make (`build-essential`) | from Ubuntu |
+| curl, tar, gzip, unzip, xz | |
+| ps, top, strace, ip, ping, ssh (the client) | |
+
+It doesn't have `jq`, `wget`, `sudo`, `docker`, an editor such as `vim` or `nano`, `less`, `nc` or `dig`.
+
+The sandbox can't download anything by default, so to add a tool, allow Ubuntu's archive and install it in a [setup step](/guides/setup). The snapshot keeps it, so later runs skip the install:
+
+```bash
+ephemera run --allow archive.ubuntu.com --allow security.ubuntu.com \
+  --setup "apt-get update && apt-get install -y jq" -- ./check.sh
+```
+
+A host can carry other images too; `--image` picks one.

@@ -64,6 +64,7 @@
           "guides/run",
           "guides/dev",
           "guides/network",
+          "guides/sandbox",
           "guides/setup",
           "guides/records",
           "guides/hosts",
