@@ -83,6 +83,15 @@ private() {
 	return 1
 }
 
+# reach says who can reach an IPv4 address: loopback (only this machine),
+# private or public.
+reach() {
+	case "$1" in
+	127.*) echo loopback ;;
+	*) if private "$1"; then echo private; else echo public; fi ;;
+	esac
+}
+
 # addresses lists this machine's IPv4 addresses, skipping loopback and the
 # bridges and taps that containers and VMs make.
 addresses() {
@@ -117,7 +126,8 @@ Usage: curl -fsSL https://ephemera.run/host | sudo sh -s -- [CODE] [options]
                    not needed to upgrade a host that already joined
   --server URL     central server to join (default https://api.ephemera.run)
   --address IP     the address your laptop reaches this machine on
-                   (default: its one private IPv4 address)
+                   (default: its one private IPv4 address), or 127.0.0.1
+                   to use ephemera only on this machine, over SSH
   --name NAME      this host's name in the account (default: the hostname)
   --host-args "…"  extra ephemera-host flags, e.g. "--capacity 40 --max-lifetime 8h"
   --uninstall      stop and remove the host agent; with --purge, also its data and key
@@ -207,7 +217,7 @@ main() {
 		set -- $found
 		case $# in
 		1) address="$1" ;;
-		0) die "found no private address. Pass --address with the IPv4 address your laptop reaches this machine on" ;;
+		0) die "found no private address. Pass --address with the IPv4 address your laptop reaches this machine on (a public one works too), or --address 127.0.0.1 to use ephemera only on this machine, over SSH" ;;
 		*) die "found several private addresses:$found. Pass --address with the one your laptop reaches this machine on" ;;
 		esac
 	fi
@@ -215,8 +225,10 @@ main() {
 	*[!0-9.]* | "" | 0.0.0.0) die "--address must be one IPv4 address, not '$address'" ;;
 	esac
 	ip -4 -o addr show 2>/dev/null | grep -q " $address/" || die "$address is not an address of this machine"
-	private "$address" ||
-		say "warning: $address is public, so port 7701 will be open to the internet. The host serves TLS with its own key and checks each sandbox's token, but a private network is safer"
+	case "$(reach "$address")" in
+	public) say "warning: $address is public, so port 7701 will be open to the internet. The host serves TLS with its own key and checks each sandbox's token, but it's safer to let only your own address through the firewall" ;;
+	loopback) say "only this machine can reach $address: run ephemera on it, for example over SSH" ;;
+	esac
 	[ -n "$name" ] || name="$(hostname -s)"
 	case "$name" in
 	*[!A-Za-z0-9._-]* | "" | [!A-Za-z0-9]*) die "--name must be letters, digits, dots, dashes and underscores" ;;
@@ -343,11 +355,14 @@ EOF
 	journalctl -u ephemera-host --since "$since" -q --no-pager 2>/dev/null | grep -q 'connected to central server' ||
 		die "the host agent did not connect; see: journalctl -u ephemera-host -n 50"
 
+	reaches="Your laptop must reach that address to send files and read output."
+	[ "$(reach "$address")" = loopback ] &&
+		reaches="Run ephemera on this machine, for example over SSH: nothing else can reach that address."
 	cat <<EOF
 
 ephemera: done. $name is online at https://$address:7701 ($version)
 
-  Your laptop must reach that address to send files and read output.
+  $reaches
   See the host in the dashboard, under Hosts, or with: ephemera hosts
   Logs: journalctl -u ephemera-host -f
   Upgrade: run this again without a code. Remove: add --uninstall

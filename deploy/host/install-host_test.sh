@@ -75,4 +75,14 @@ check "joined host, upgrade" "https://api.ephemera.run" "box-1" "10.0.0.12"
 server="" name="" address="10.0.0.99"
 check "joined host, --address" "https://api.ephemera.run" "box-1" "10.0.0.99"
 
+# reach sorts addresses by who can reach them.
+for want in 127.0.0.1=loopback 10.0.0.12=private 192.168.1.5=private 172.20.0.3=private \
+	100.111.12.48=private 172.32.0.1=public 100.128.0.1=public 203.0.113.7=public; do
+	got="$(reach "${want%%=*}")"
+	if [ "$got" != "${want#*=}" ]; then
+		echo "FAIL reach ${want%%=*}: got $got, want ${want#*=}"
+		failed=1
+	fi
+done
+
 exit "$failed"

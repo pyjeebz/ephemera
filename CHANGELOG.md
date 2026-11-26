@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A host you use only over SSH: `--address 127.0.0.1` on the host installer makes the host listen on the machine itself, with nothing open to anyone else, and you run `ephemera` there. The installer no longer warns that such a host is open to the internet, and its last message says to run ephemera on the machine. With no private address, as on many rented servers, it now names both ways out: `--address` with the public address, or `--address 127.0.0.1`. The hosts guide has a [Use it over SSH](https://ephemera.run/docs/guides/hosts#use-it-over-ssh) section.
+
 ## v0.3.0 (2026-11-26)
 
 Upgrade in any order: v0.2 CLIs, central servers and hosts work with v0.3 ones. Run results (exit codes and connection counts) appear for a host's runs once that host is on v0.3.0; `api.ephemera.run` already runs this release's server. Upgrading a host rebuilds its guest image.

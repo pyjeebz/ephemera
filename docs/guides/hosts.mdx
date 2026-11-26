@@ -11,7 +11,11 @@ A host is a machine you own that runs your sandboxes as Firecracker microVMs. Ad
 - **x86_64 Linux with KVM.** Ubuntu 24.04 is what ephemera is tested on. Check with `ls /dev/kvm`. A bare-metal server, a spare PC, or a cloud VM with nested virtualization all work.
 - **About 2 GB of disk** for the guest image, plus what sandboxes write. Each sandbox's disk is sparse: it takes only what's written.
 - **Memory** sets how many sandboxes fit. An idle sandbox costs about 60 MB, so a 16 GB machine holds well over a hundred idle ones. A busy one uses what its workload uses, up to its limit, 1 GB by default.
-- **A way for your laptop to reach it.** The host connects out to the central server by itself and needs no open port for it. But your laptop sends files and reads output straight from the host, on port 7701, so the two must share a network: the same LAN, or a VPN of your choice. On a VPN with access rules, such as a Tailscale tailnet, allow your devices tcp:7701 to the host; see [Let your laptop reach port 7701](/self-hosting#let-your-laptop-reach-port-7701).
+- **A way to reach it.** The host connects out to the central server by itself and needs no open port for that. But the machine you run `ephemera` on sends files and reads output straight from the host, on port 7701. Any of these works:
+  - the same LAN as your laptop,
+  - a VPN you already use, with tcp:7701 allowed to the host,
+  - the machine's public address, with a firewall that lets in only your own address,
+  - no network at all: SSH into the machine and run `ephemera` there. See [Use it over SSH](#use-it-over-ssh).
 
 ## Join it to your account
 
@@ -37,7 +41,7 @@ A host is a machine you own that runs your sandboxes as Firecracker microVMs. Ad
     curl -fsSL https://ephemera.run/host | sudo sh -s -- ej_... --address 10.0.0.12
     ```
 
-    A public address works too, but then the host's port, 7701, is open to the internet. The host serves TLS with its own key and checks each sandbox's token, but a private network is safer.
+    A public address works too, such as a rented server's, but then the host's port, 7701, is open to the internet. The host serves TLS with its own key and checks each sandbox's token, but it's safer to let only your own address through the firewall. Or pass `--address 127.0.0.1` and use ephemera on the machine itself, over SSH.
   </Step>
 
   <Step title="Check it">
@@ -63,6 +67,26 @@ A host is a machine you own that runs your sandboxes as Firecracker microVMs. Ad
 </Steps>
 
 Delete the code file afterwards. It can't be used again anyway.
+
+## Use it over SSH
+
+If you work on the machine over SSH anyway, run ephemera there too, and skip the network: with `--address 127.0.0.1`, the host listens only on the machine itself, and nothing is open to anyone else.
+
+```bash
+curl -fsSL https://ephemera.run/host | sudo sh -s -- ej_... --address 127.0.0.1
+curl -fsSL https://ephemera.run/install | sh
+ephemera login
+```
+
+`ephemera login` prints a code and a page to open. Open it on any device, such as your laptop, and approve. Then run `ephemera` from a checkout on the machine. Changes you make on your laptop need to reach that checkout first, with git or rsync.
+
+`ephemera dev` forwards the sandbox's ports to the machine's own localhost. To open one in your laptop's browser, forward it over SSH as well:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 you@the-machine
+```
+
+A host on another address works over SSH the same way; `127.0.0.1` just keeps everything else out.
 
 ## Already have ephemera-host
 
