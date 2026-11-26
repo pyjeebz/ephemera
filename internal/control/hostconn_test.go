@@ -3,6 +3,7 @@ package control_test
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -393,4 +394,125 @@ func TestHostSaysHowARunEnded(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(short.ID, &zero)
+}
+
+// stuckBackend is a host that cannot destroy a sandbox: something else holds
+// its disk. The sandbox keeps running there and the host says so.
+type stuckBackend struct{ *sandboxtest.Local }
+
+func (b *stuckBackend) Destroy(context.Context, string) error {
+	return errors.New("the sandbox disk is busy")
+}
+
+// Removing a host that did not destroy a sandbox must keep the sandbox's
+// record: it still runs there, its minutes are still counted, and the run
+// history does not report it destroyed.
+func TestHostRemoveKeepsASandboxItsHostCouldNotDestroy(t *testing.T) {
+	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}}
+	ts := httptest.NewServer(cs.Handler())
+	defer ts.Close()
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	be := &stuckBackend{Local: &sandboxtest.Local{Root: t.TempDir()}}
+	hs := &host.Server{Backend: be, Name: "h1", Key: key}
+	hosttest.Connect(t, hs, ts.URL, joinCode(t, cs, ""), api.HostHello{Name: "h1", URL: "http://192.0.2.1:7701", Capacity: 2})
+
+	ctx := context.Background()
+	c := &client.Client{Server: ts.URL, Token: "eph_good"}
+	sb, err := c.Create(ctx, api.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := removeHost(t, ts.URL, sb.HostID); code != http.StatusBadGateway {
+		t.Fatalf("removing a host that could not destroy its sandbox: %d, want 502", code)
+	}
+	if be.Live() != 1 {
+		t.Fatalf("the host runs %d sandboxes; this test needs the destroy to fail", be.Live())
+	}
+
+	running, err := c.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(running) != 1 || running[0].ID != sb.ID {
+		t.Errorf("running sandboxes after a failed host removal = %+v, want %s", running, sb.ID)
+	}
+	hosts, err := c.Hosts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 1 || hosts[0].ID != sb.HostID {
+		t.Errorf("hosts after a failed host removal = %+v, want %s", hosts, sb.HostID)
+	}
+	usage, err := c.Usage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Running != 1 {
+		t.Errorf("usage counts %d running sandboxes after a failed host removal, want 1", usage.Running)
+	}
+}
+
+// A host that is offline can destroy nothing, and its sandboxes can no longer
+// be reached: removing it drops their records, and the host destroys what it
+// still runs when it next connects and is refused.
+func TestHostRemoveDropsRecordsOfAnOfflineHost(t *testing.T) {
+	cs := &control.Server{Tokens: control.StaticToken{Name: "laptop", Token: "eph_good"}}
+	ts := httptest.NewServer(cs.Handler())
+	defer ts.Close()
+	hs, _ := newHost(t, "h1")
+	disconnect := hosttest.Connect(t, hs, ts.URL, joinCode(t, cs, ""), api.HostHello{Name: "h1", URL: "http://192.0.2.1:7701", Capacity: 2})
+
+	ctx := context.Background()
+	c := &client.Client{Server: ts.URL, Token: "eph_good"}
+	sb, err := c.Create(ctx, api.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disconnect()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		hosts, err := c.Hosts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hosts) == 1 && !hosts[0].Online {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the server still takes the host for connected")
+		}
+	}
+
+	if code := removeHost(t, ts.URL, sb.HostID); code != http.StatusNoContent {
+		t.Fatalf("removing an offline host: %d, want 204", code)
+	}
+	running, err := c.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(running) != 0 {
+		t.Errorf("running sandboxes of a removed offline host = %+v, want none", running)
+	}
+	if hosts, err := c.Hosts(ctx); err != nil || len(hosts) != 0 {
+		t.Errorf("hosts after removing an offline host = %+v, %v", hosts, err)
+	}
+}
+
+// removeHost sends DELETE /v1/hosts/{id} with the test's token and returns the
+// status code.
+func removeHost(t *testing.T, serverURL, hostID string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, serverURL+"/v1/hosts/"+hostID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer eph_good")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
 }
