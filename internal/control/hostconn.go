@@ -331,14 +331,20 @@ func (s *Server) hostJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 // hostRemove removes one of the caller's hosts. Its sandboxes are destroyed
-// first, then it is disconnected, and it can't connect again.
+// first, then it is disconnected, and it can't connect again. A sandbox the
+// host does not confirm destroyed keeps its record while the host is still
+// live: it runs there, and its minutes are still counted.
 func (s *Server) hostRemove(w http.ResponseWriter, r *http.Request) {
 	id, account := r.PathValue("id"), principal(r).Account
-	if err := s.hostRecords().RemoveHost(r.Context(), account, id); errors.Is(err, ErrNotFound) {
+	// The host record stays until its sandboxes are destroyed, so a caller
+	// can try again after a failed destroy. A host of another account is
+	// "not found" too, so ids can't be probed.
+	rec, err := s.hostRecords().Host(r.Context(), id)
+	if errors.Is(err, ErrNotFound) || (err == nil && rec.Account != account) {
 		host.WriteError(w, http.StatusNotFound, "no host %s", id)
 		return
 	} else if err != nil {
-		s.log().Error("store: remove host", "err", err)
+		s.log().Error("store: host", "err", err)
 		host.WriteError(w, http.StatusServiceUnavailable, "could not remove the host; try again")
 		return
 	}
@@ -351,8 +357,23 @@ func (s *Server) hostRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	for _, sb := range on {
-		res, _ := s.hostDo(r.Context(), id, api.HostMessage{Type: "destroy", Sandbox: sb.ID})
+		res, err := s.hostDo(r.Context(), id, api.HostMessage{Type: "destroy", Sandbox: sb.ID})
+		if err != nil {
+			if s.hostLive(id) {
+				host.WriteError(w, http.StatusBadGateway, "host %s: %v", sb.Host, err)
+				return
+			}
+			// The host is offline, and a removed host is refused when it
+			// next connects and destroys what it still runs. Drop the
+			// record; it can no longer be reached.
+			s.log().Warn("host offline; dropping sandbox record", "sandbox", sb.ID, "host", sb.Host)
+		}
 		s.end(r.Context(), sb, EndDestroyed, res.Run)
+	}
+	if err := s.hostRecords().RemoveHost(r.Context(), account, id); err != nil {
+		s.log().Error("store: remove host", "err", err)
+		host.WriteError(w, http.StatusServiceUnavailable, "could not remove the host; try again")
+		return
 	}
 	s.mu.Lock()
 	h := s.hosts[id]
