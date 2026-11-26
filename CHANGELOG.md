@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 (2026-11-26)
+
+Upgrade in any order: v0.2 CLIs, central servers and hosts work with v0.3 ones. Run results (exit codes and connection counts) appear for a host's runs once that host is on v0.3.0; `api.ephemera.run` already runs this release's server. Upgrading a host rebuilds its guest image.
 
 ### Added
 
@@ -14,11 +16,11 @@
 
 ### Changed
 
-- `ephemera doctor` tries each host in three steps, a TCP connection, a small TLS request and an 8 KB one, and says which failed. A dropped connection points at firewalls and tailnet access rules (allow tcp:7701 to the host); a stalled handshake or large request points at the MTU (`sudo ip link set tailscale0 mtu 1200`). Both used to read "no answer from <address> within 5s".
+- `ephemera doctor` tries each host in three steps, a TCP connection, a small TLS request and an 8 KB one, and says which failed. A dropped connection points at firewalls and tailnet access rules (allow tcp:7701 to the host); a stalled handshake or large request points at the MTU (`sudo ip link set tailscale0 mtu 1200`). Both used to read `no answer from <address> within 5s`.
 
 ### Fixed
 
-- The guest image's `/etc/hosts` names the sandbox's hostname, `ephemera`, and no longer carries a line for the container the Ubuntu base was built in. Hosts pick it up the next time the installer rebuilds the image.
+- The guest image's `/etc/hosts` names the sandbox's hostname, `ephemera`, and no longer carries a line for the container the Ubuntu base was built in. Upgrade a host to pick it up.
 
 ## v0.2.1 (2026-11-20)
 
