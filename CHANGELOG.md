@@ -16,6 +16,10 @@
 
 - `ephemera doctor` tries each host in three steps, a TCP connection, a small TLS request and an 8 KB one, and says which failed. A dropped connection points at firewalls and tailnet access rules (allow tcp:7701 to the host); a stalled handshake or large request points at the MTU (`sudo ip link set tailscale0 mtu 1200`). Both used to read "no answer from <address> within 5s".
 
+### Fixed
+
+- The guest image's `/etc/hosts` names the sandbox's hostname, `ephemera`, and no longer carries a line for the container the Ubuntu base was built in. Hosts pick it up the next time the installer rebuilds the image.
+
 ## v0.2.1 (2026-11-20)
 
 ### Fixed

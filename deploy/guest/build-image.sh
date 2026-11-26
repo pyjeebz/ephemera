@@ -128,6 +128,13 @@ mkdir -p "$work/root/workspace" "$work/root/mnt"
 # Nothing should log in to a sandbox; drop any SSH host keys and keys.
 rm -f "$work/root"/etc/ssh/ssh_host_* "$work/root"/root/.ssh/authorized_keys
 echo "ephemera" >"$work/root/etc/hostname"
+# The base's /etc/hosts names the container it was built in, not this
+# machine. Sandboxes have no DNS server, so the hostname must be here.
+cat >"$work/root/etc/hosts" <<'EOF'
+127.0.0.1	localhost
+127.0.1.1	ephemera
+::1	localhost ip6-localhost ip6-loopback
+EOF
 
 log "writing rootfs.ext4"
 rm -f "$out/rootfs.ext4.part"
