@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A central-server restart or redeploy lost the records of sandboxes that had reached their maximum lifetime and that the CLI had not collected yet. `DELETE /v1/sandboxes/{id}` answered 404, and the next heartbeat told the host to destroy the sandbox, which deleted its signed record. The server now writes each such record to its state store, the file or Postgres, and loads them again at startup. It keeps them as long as the host keeps the signed record, an hour after the sandbox ended.
+
 ## v0.4.0 (2026-11-27)
 
 Upgrade in any order: v0.3 CLIs, central servers and hosts work with v0.4 ones. A sandbox with no network names what it tried once both its host and the CLI are on v0.4.0. Expired sandboxes end at once on a v0.4.0 central server, with hosts on v0.3.0 or later. `GET /v1/runs` has a new `end_reason`, `expired`: code that reads end reasons should expect it.

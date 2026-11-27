@@ -273,9 +273,22 @@ func (s *Store) EndSandbox(ctx context.Context, id string, at time.Time, reason 
 
 // RunningSandboxes implements control.StateStore.
 func (s *Store) RunningSandboxes(ctx context.Context) ([]api.Sandbox, error) {
-	rows, err := s.pool.Query(ctx, `
+	return s.sandboxes(ctx, `
 		SELECT id, name, account_id, owner, host, host_id, host_url, spec, created_at
 		FROM sandboxes WHERE ended_at IS NULL ORDER BY created_at, id`)
+}
+
+// ExpiredSandboxes implements control.StateStore.
+func (s *Store) ExpiredSandboxes(ctx context.Context, since time.Time) ([]api.Sandbox, error) {
+	return s.sandboxes(ctx, `
+		SELECT id, name, account_id, owner, host, host_id, host_url, spec, created_at
+		FROM sandboxes WHERE ended_at >= $1 AND end_reason = $2 ORDER BY created_at, id`,
+		since, control.EndExpired)
+}
+
+// sandboxes runs a query returning sandbox rows and scans them.
+func (s *Store) sandboxes(ctx context.Context, query string, args ...any) ([]api.Sandbox, error) {
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

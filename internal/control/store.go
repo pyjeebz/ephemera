@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pyjeebz/ephemera/internal/api"
+	"github.com/pyjeebz/ephemera/internal/host"
 )
 
 // TokenStore keeps API tokens. TokenFile keeps them in a JSON file;
@@ -45,6 +46,11 @@ type StateStore interface {
 	EndSandbox(ctx context.Context, id string, at time.Time, reason string, run *api.RunSummary) error
 	// RunningSandboxes returns the sandboxes that have not ended.
 	RunningSandboxes(ctx context.Context) ([]api.Sandbox, error)
+	// ExpiredSandboxes returns the sandboxes that reached their maximum
+	// lifetime at or after since, which their hosts may still keep the
+	// signed records of: a server that restarts still answers the CLI that
+	// collects one.
+	ExpiredSandboxes(ctx context.Context, since time.Time) ([]api.Sandbox, error)
 	// AddUsage adds sandbox-seconds to a token's UTC day.
 	AddUsage(ctx context.Context, u Usage) error
 	// UsageSince returns usage from this UTC day (YYYY-MM-DD) on.
@@ -76,8 +82,9 @@ type Usage struct {
 	Seconds float64 `json:"seconds"`
 }
 
-// FileState keeps the running sandboxes and a month of usage in a JSON
-// file. It forgets finished sandboxes.
+// FileState keeps the running sandboxes, the sandboxes that reached their
+// maximum lifetime while the hosts keep their signed records, and a month of
+// usage in a JSON file. It forgets the other finished sandboxes.
 type FileState struct {
 	Path string
 	Now  func() time.Time // for tests; nil is time.Now
@@ -89,6 +96,9 @@ type FileState struct {
 
 type fileState struct {
 	Sandboxes []api.Sandbox `json:"sandboxes"`
+	// Expired holds the sandboxes that reached their maximum lifetime in
+	// the last retainExpired, with when they ended.
+	Expired []expiredSandbox `json:"expired,omitempty"`
 	// Usage is from before accounts: token name to day to seconds, all in
 	// DefaultAccount. It is read, then written as UsageByAccount.
 	Usage map[string]map[string]float64 `json:"usage,omitempty"`
@@ -98,6 +108,19 @@ type fileState struct {
 
 // usageKeep is how much usage FileState keeps.
 const usageKeep = 31 * 24 * time.Hour
+
+// retainExpired is how long a store keeps the record of a sandbox that
+// reached its maximum lifetime: its host keeps the signed record for
+// host.KeepExpired, so the server must not forget it sooner.
+const retainExpired = host.KeepExpired
+
+// expiredSandbox is a sandbox that reached its maximum lifetime at At. Its
+// host keeps its signed record, so the server keeps what it needs to collect
+// it.
+type expiredSandbox struct {
+	Sandbox api.Sandbox `json:"sandbox"`
+	At      time.Time   `json:"at"`
+}
 
 func (f *FileState) loadLocked() error {
 	if f.loaded {
@@ -139,13 +162,19 @@ func addUsage(m map[string]map[string]map[string]float64, u Usage) {
 	m[u.Account][u.Owner][u.Day] += u.Seconds
 }
 
-// saveLocked writes the file, dropping usage older than usageKeep.
-func (f *FileState) saveLocked() error {
-	now := time.Now
+// now is the file's clock, for tests; nil is time.Now.
+func (f *FileState) now() time.Time {
 	if f.Now != nil {
-		now = f.Now
+		return f.Now()
 	}
-	cutoff := now().UTC().Add(-usageKeep).Format(dayFormat)
+	return time.Now()
+}
+
+// saveLocked writes the file, dropping usage older than usageKeep and
+// expired sandboxes older than retainExpired.
+func (f *FileState) saveLocked() error {
+	now := f.now()
+	cutoff := now.UTC().Add(-usageKeep).Format(dayFormat)
 	for acct, owners := range f.st.UsageByAccount {
 		for owner, days := range owners {
 			for day := range days {
@@ -161,6 +190,14 @@ func (f *FileState) saveLocked() error {
 			delete(f.st.UsageByAccount, acct)
 		}
 	}
+	expiredCutoff := now.UTC().Add(-retainExpired)
+	kept := f.st.Expired[:0]
+	for _, e := range f.st.Expired {
+		if e.At.After(expiredCutoff) {
+			kept = append(kept, e)
+		}
+	}
+	f.st.Expired = kept
 	sort.Slice(f.st.Sandboxes, func(i, j int) bool { return f.st.Sandboxes[i].ID < f.st.Sandboxes[j].ID })
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o700); err != nil {
 		return err
@@ -193,14 +230,24 @@ func (f *FileState) StartSandbox(_ context.Context, sb api.Sandbox) error {
 	})
 }
 
-// EndSandbox implements StateStore. The sandbox is forgotten, with all
-// that is known about it.
-func (f *FileState) EndSandbox(_ context.Context, id string, _ time.Time, _ string, _ *api.RunSummary) error {
+// EndSandbox implements StateStore. The sandbox stops being listed as
+// running, and is forgotten, except one that reached its maximum lifetime:
+// that one is kept for retainExpired, so a restart still answers the CLI
+// that collects its signed record.
+func (f *FileState) EndSandbox(_ context.Context, id string, at time.Time, reason string, _ *api.RunSummary) error {
 	return f.change(func() {
+		if at.IsZero() {
+			at = f.now()
+		}
 		out := f.st.Sandboxes[:0]
 		for _, sb := range f.st.Sandboxes {
 			if sb.ID != id {
 				out = append(out, sb)
+				continue
+			}
+			if reason == EndExpired {
+				sb.Token = ""
+				f.st.Expired = append(f.st.Expired, expiredSandbox{Sandbox: sb, At: at.UTC()})
 			}
 		}
 		f.st.Sandboxes = out
@@ -215,6 +262,22 @@ func (f *FileState) RunningSandboxes(context.Context) ([]api.Sandbox, error) {
 		return nil, err
 	}
 	return append([]api.Sandbox(nil), f.st.Sandboxes...), nil
+}
+
+// ExpiredSandboxes implements StateStore.
+func (f *FileState) ExpiredSandboxes(_ context.Context, since time.Time) ([]api.Sandbox, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.loadLocked(); err != nil {
+		return nil, err
+	}
+	var out []api.Sandbox
+	for _, e := range f.st.Expired {
+		if !e.At.Before(since) {
+			out = append(out, e.Sandbox)
+		}
+	}
+	return out, nil
 }
 
 // AddUsage implements StateStore.
@@ -250,5 +313,8 @@ func (memState) EndSandbox(context.Context, string, time.Time, string, *api.RunS
 	return nil
 }
 func (memState) RunningSandboxes(context.Context) ([]api.Sandbox, error) { return nil, nil }
-func (memState) AddUsage(context.Context, Usage) error                   { return nil }
-func (memState) UsageSince(context.Context, string) ([]Usage, error)     { return nil, nil }
+func (memState) ExpiredSandboxes(context.Context, time.Time) ([]api.Sandbox, error) {
+	return nil, nil
+}
+func (memState) AddUsage(context.Context, Usage) error               { return nil }
+func (memState) UsageSince(context.Context, string) ([]Usage, error) { return nil, nil }

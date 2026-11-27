@@ -15,6 +15,7 @@ import (
 	"github.com/pyjeebz/ephemera/internal/host"
 	"github.com/pyjeebz/ephemera/internal/host/hosttest"
 	"github.com/pyjeebz/ephemera/internal/pgstore/pgtest"
+	"github.com/pyjeebz/ephemera/internal/record"
 	"github.com/pyjeebz/ephemera/internal/sandbox/sandboxtest"
 )
 
@@ -293,3 +294,55 @@ func newClock() *fakeClock {
 
 func (c *fakeClock) now() time.Time          { return time.Unix(0, c.ns.Load()) }
 func (c *fakeClock) advance(d time.Duration) { c.ns.Add(int64(d)) }
+
+// A sandbox its host ended at its lifetime stays collectable after the
+// central server restarts: the new server knows the kept record, so it does
+// not ask the host to destroy the sandbox, and the CLI still gets the signed
+// record.
+func TestExpiredSandboxRecordSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	state := filepath.Join(t.TempDir(), "sandboxes.json")
+	be := &sandboxtest.Local{Root: t.TempDir()}
+	hs := &host.Server{Backend: be, DefaultImage: "unused", Log: discardLog(), Name: "test-host", Key: testKey()}
+	hts := hosttest.Serve(t, hs)
+
+	_, url1 := centralServer(t, state, nil)
+	heartbeat(t, hs, url1, hts.URL)
+	sb, err := (&client.Client{Server: url1, Token: userToken}).Create(ctx, api.Spec{MaxLifetimeSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); be.Live() != 0; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the sandbox outlived its lifetime")
+		}
+	}
+	time.Sleep(200 * time.Millisecond) // the host signs the record, then says so
+	heartbeat(t, hs, url1, hts.URL)
+
+	// "Restart": a new central server loads the saved state, where the
+	// sandbox has ended but its record is still kept.
+	_, url2 := centralServer(t, state, nil)
+	heartbeat(t, hs, url2, hts.URL)
+	if hs.Live() != 1 {
+		t.Fatalf("the host keeps %d sandboxes, want the expired one whose record it holds", hs.Live())
+	}
+
+	sr, err := (&client.Client{Server: url2, Token: userToken}).Destroy(ctx, sb.ID)
+	if err != nil {
+		t.Fatalf("the record did not survive the restart: %v", err)
+	}
+	if sr == nil {
+		t.Fatal("destroy returned no record, so the host no longer had it")
+	}
+	rec, err := record.Verify(*sr)
+	if err != nil {
+		t.Fatalf("the record that came back does not verify: %v", err)
+	}
+	if rec.Sandbox != sb.ID || rec.Ended != control.EndExpired {
+		t.Errorf("record is for %s ending as %q, want %s ending as %q", rec.Sandbox, rec.Ended, sb.ID, control.EndExpired)
+	}
+	if hs.Live() != 0 {
+		t.Error("the host still keeps the record it handed over")
+	}
+}
