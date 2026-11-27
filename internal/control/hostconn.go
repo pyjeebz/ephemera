@@ -232,29 +232,50 @@ func (s *Server) hostConnect(w http.ResponseWriter, r *http.Request) {
 		case "result":
 			c.deliver(m)
 		case "ended":
-			s.ended(id, m)
+			s.ended(r.Context(), id, m)
 		}
 	}
 }
 
-// ended keeps what a host said about one of its sandboxes that ended on
-// its own, such as by reaching its maximum lifetime. The record stays
-// until the CLI destroys the sandbox, collecting its signed record, or the
-// host stops listing it; the summary is stored then.
-func (s *Server) ended(hostID string, m api.HostMessage) {
-	if sane(m.Run) == nil {
+// ended ends a sandbox that ended on its own on its host, by reaching its
+// maximum lifetime, with what the host said about it. From then on it
+// counts against nothing. The host keeps its signed record for a while,
+// so the sandbox is kept aside until the CLI collects the record or the
+// host stops listing it.
+func (s *Server) ended(ctx context.Context, hostID string, m api.HostMessage) {
+	s.mu.Lock()
+	sb := s.sandboxes[m.Sandbox]
+	// A host speaks only for its own sandboxes.
+	if sb == nil || sb.HostID != hostID {
+		s.mu.Unlock()
+		return
+	}
+	if s.expired == nil {
+		s.expired = map[string]*api.Sandbox{}
+	}
+	s.expired[sb.ID] = sb
+	s.mu.Unlock()
+	s.end(ctx, sb, EndExpired, m.Run)
+	s.log().Info("sandbox expired", "sandbox", sb.ID, "host", sb.Host)
+}
+
+// collect hands the CLI the signed record of a sandbox that expired on
+// its host. The run already ended here, when the host said so.
+func (s *Server) collect(w http.ResponseWriter, r *http.Request, sb *api.Sandbox) {
+	res, err := s.hostDo(r.Context(), sb.HostID, api.HostMessage{Type: "destroy", Sandbox: sb.ID})
+	if err != nil && s.hostLive(sb.HostID) {
+		host.WriteError(w, http.StatusBadGateway, "host %s: %v", sb.Host, err)
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	// A host speaks only for its own sandboxes.
-	if sb := s.sandboxes[m.Sandbox]; sb == nil || sb.HostID != hostID {
+	delete(s.expired, sb.ID)
+	s.mu.Unlock()
+	if res.Record == nil {
+		// The host is offline, or forgot the record.
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if s.results == nil {
-		s.results = map[string]api.RunSummary{}
-	}
-	s.results[m.Sandbox] = *m.Run
+	writeJSON(w, http.StatusOK, res.Record)
 }
 
 // sane returns run, or nil if it is missing or makes no sense.
@@ -407,8 +428,16 @@ func (s *Server) reconcile(ctx context.Context, id string, reported []string) []
 	var gone []*api.Sandbox
 	s.mu.Lock()
 	for _, sid := range reported {
+		if sb, ok := s.expired[sid]; ok && sb.HostID == id {
+			continue // its record waits on the host to be collected
+		}
 		if sb, ok := s.sandboxes[sid]; !ok || sb.HostID != id {
 			destroy = append(destroy, sid)
+		}
+	}
+	for sid, sb := range s.expired {
+		if sb.HostID == id && !have[sid] {
+			delete(s.expired, sid) // the host let the record go
 		}
 	}
 	for sid, sb := range s.sandboxes {

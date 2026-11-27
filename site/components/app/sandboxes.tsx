@@ -14,7 +14,7 @@ import { DASHBOARD_PROMPT, DOCS } from "@/lib/site"
 import { cn } from "@/lib/utils"
 import {
   EmptyState,
-  ENDED,
+  endedAs,
   LiveBox,
   Network,
   Panel,
@@ -333,7 +333,7 @@ function Connections({ run }: { run: Run }) {
 
 function Detail({ run }: { run: Run }) {
   const s = run.spec
-  const why = run.ended_at ? ENDED[run.end_reason ?? "destroyed"][1] : "It’s still running."
+  const why = run.ended_at ? endedAs(run)[1] : "It’s still running."
   return (
     <div className="grid grid-cols-1 gap-8 whitespace-normal md:grid-cols-3">
       <div>

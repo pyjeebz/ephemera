@@ -58,9 +58,10 @@ type Server struct {
 	usage map[owner]map[string]float64
 	// limits is each owner's limits as last seen on a request.
 	limits map[owner]Limits
-	// results holds what hosts said about sandboxes that ended on their
-	// own, by sandbox id, until the record ends here too.
-	results map[string]api.RunSummary
+	// expired holds sandboxes that ended on their own on their host, by
+	// id, while the host keeps their signed records for the CLI to collect.
+	// They no longer count as running.
+	expired map[string]*api.Sandbox
 	// misses counts unknown codes tried at the device approval page.
 	misses misses
 	// touched is when each token's last use was last written, by id.
@@ -149,7 +150,7 @@ func (s *Server) Load() error {
 }
 
 // end forgets a sandbox and records why it ended, the time it used, and
-// what its host said about it: run, or else what it said earlier.
+// what its host said about it.
 func (s *Server) end(ctx context.Context, sb *api.Sandbox, reason string, run *api.RunSummary) {
 	at, run := s.now(), sane(run)
 	s.mu.Lock()
@@ -158,11 +159,7 @@ func (s *Server) end(ctx context.Context, sb *api.Sandbox, reason string, run *a
 	if ok {
 		used = s.accrue(cur, at)
 		delete(s.sandboxes, sb.ID)
-		if r, said := s.results[sb.ID]; said && run == nil {
-			run = &r
-		}
 	}
-	delete(s.results, sb.ID)
 	s.mu.Unlock()
 	if !ok {
 		return
@@ -600,15 +597,28 @@ func (s *Server) nameTakenLocked(account, name string) bool {
 }
 
 func (s *Server) byNameLocked(account, name string) *api.Sandbox {
+	return byName(s.sandboxes, account, name)
+}
+
+func byName(sandboxes map[string]*api.Sandbox, account, name string) *api.Sandbox {
 	if name == "" {
 		return nil
 	}
-	for _, sb := range s.sandboxes {
+	for _, sb := range sandboxes {
 		if sb.Account == account && sb.Name == name {
 			return sb
 		}
 	}
 	return nil
+}
+
+// expiredLocked finds a sandbox that expired on its host, by id or name,
+// so its record can still be collected. s.mu must be held.
+func (s *Server) expiredLocked(account, ref string) *api.Sandbox {
+	if sb, ok := s.expired[ref]; ok && sb.Account == account {
+		return sb
+	}
+	return byName(s.expired, account, ref)
 }
 
 // destroy destroys a sandbox, named by its id or its name.
@@ -622,7 +632,15 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 		sb = s.byNameLocked(account, ref)
 		ok = sb != nil
 	}
+	var expired *api.Sandbox
+	if !ok {
+		expired = s.expiredLocked(account, ref)
+	}
 	s.mu.Unlock()
+	if expired != nil {
+		s.collect(w, r, expired)
+		return
+	}
 	// Another account's sandbox is "not found" too, so ids can't be probed.
 	if !ok {
 		host.WriteError(w, http.StatusNotFound, "sandbox %s not found", ref)

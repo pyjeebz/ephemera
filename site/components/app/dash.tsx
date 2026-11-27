@@ -264,7 +264,14 @@ export const ENDED = {
   limit: ["Out of minutes", "Its token used up the day’s sandbox-minutes."],
   gone: ["Host lost it", "Its host stopped reporting it, so it’s gone."],
   failed: ["Didn’t start", "The host couldn’t make it."],
+  expired: ["Timed out", "It reached its maximum lifetime, so its host destroyed it."],
 } as const
+
+// endedAs is how a run ended, in a word and a sentence. A reason this
+// dashboard doesn't know yet, from a newer server, reads as a plain end.
+export function endedAs(run: Pick<Run, "end_reason">) {
+  return ENDED[run.end_reason ?? "destroyed"] ?? ENDED.destroyed
+}
 
 export function Result({ run }: { run: Run }) {
   if (!run.ended_at) {
@@ -279,7 +286,7 @@ export function Result({ run }: { run: Run }) {
   const code = run.exit_code
   return (
     <span className={reason === "destroyed" ? "text-muted-foreground" : "text-destructive"}>
-      {ENDED[reason][0]}
+      {endedAs(run)[0]}
       {code !== undefined && (
         <span className={code === 0 ? "text-muted-foreground" : "text-destructive"}> · exit {code}</span>
       )}

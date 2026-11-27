@@ -11,7 +11,7 @@ import { duration, firstName, network, sandboxName, since } from "@/lib/format"
 import { useNow } from "@/lib/use-now"
 import { useAccount } from "./account"
 import { CopyLine } from "./copy-line"
-import { ENDED } from "./dash"
+import { endedAs } from "./dash"
 import { installCommand, joinCommand, useJoinCode } from "./join-code"
 import { Label, Waiting } from "./onboarding"
 import { SandBox } from "./sand-box"
@@ -193,7 +193,7 @@ export function DoneSummary() {
         {run.host}
       </span>,
     ],
-    ["Ended", run.ended_at ? ENDED[run.end_reason ?? "destroyed"][1] : "It’s still running."],
+    ["Ended", run.ended_at ? endedAs(run)[1] : "It’s still running."],
     [
       "Network",
       <span key="n">

@@ -10,6 +10,10 @@
 
 - `ephemera doctor`'s fixes no longer assume Tailscale. A dropped connection points at the host's firewall, a cloud firewall or security group, and VPN access rules; the MTU fix names whatever interface reaches the host. The docs list every way to reach a host: a LAN, a VPN, a public address behind a firewall, or SSH.
 
+### Fixed
+
+- A sandbox that reached its maximum lifetime counted as running for another hour: in the dashboard, against its host's capacity, and against its token's sandboxes-at-once and daily minutes. Its host keeps its signed record for an hour so the CLI can still collect it, and kept listing it all that time. Now the run ends as soon as the host says the sandbox expired, with the new `end_reason` `expired` ("Timed out" in the dashboard), and `DELETE /v1/sandboxes/{id}` still returns its record for that hour. Hosts older than v0.3.0 don't say, so their sandboxes end as before.
+
 ## v0.3.0 (2026-11-26)
 
 Upgrade in any order: v0.2 CLIs, central servers and hosts work with v0.3 ones. Run results (exit codes and connection counts) appear for a host's runs once that host is on v0.3.0; `api.ephemera.run` already runs this release's server. Upgrading a host rebuilds its guest image.

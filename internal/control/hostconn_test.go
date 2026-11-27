@@ -287,18 +287,29 @@ func TestServerNeverSeesSandboxToken(t *testing.T) {
 	}
 }
 
-// endings is a StateStore that keeps only what each sandbox ended with.
+// endings is a StateStore that keeps only how each sandbox ended.
 type endings struct {
-	mu  sync.Mutex
-	run map[string]*api.RunSummary
+	mu     sync.Mutex
+	run    map[string]*api.RunSummary
+	reason map[string]string
 }
 
 func (e *endings) StartSandbox(context.Context, api.Sandbox) error { return nil }
-func (e *endings) EndSandbox(_ context.Context, id string, _ time.Time, _ string, run *api.RunSummary) error {
+func (e *endings) EndSandbox(_ context.Context, id string, _ time.Time, reason string, run *api.RunSummary) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.run[id] = run
+	if e.reason == nil {
+		e.reason = map[string]string{}
+	}
+	e.reason[id] = reason
 	return nil
+}
+
+func (e *endings) why(id string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.reason[id]
 }
 func (e *endings) RunningSandboxes(context.Context) ([]api.Sandbox, error) { return nil, nil }
 func (e *endings) AddUsage(context.Context, control.Usage) error           { return nil }
@@ -369,8 +380,9 @@ func TestHostSaysHowARunEnded(t *testing.T) {
 	}
 	check(idle.ID, nil)
 
-	// Expired: the host says so when it happens, so the server knows even
-	// if it can't reach the host by the time the sandbox is destroyed.
+	// Expired: the host says so when it happens, and the run ends then,
+	// so it stops counting as running. Its signed record still waits on the
+	// host, through heartbeats, for the CLI to collect.
 	short, err := c.Create(ctx, api.Spec{MaxLifetimeSeconds: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -385,12 +397,47 @@ func TestHostSaysHowARunEnded(t *testing.T) {
 	if err := hs.Heartbeat(ctx); err != nil {
 		t.Fatal(err) // answered in order, so the server has read it by now
 	}
-	if _, ok := ends.of(short.ID); ok {
-		t.Error("an expired sandbox ended before it was destroyed; its record could not be collected")
+	check(short.ID, &zero)
+	if got := ends.why(short.ID); got != control.EndExpired {
+		t.Errorf("ended as %q, want %q", got, control.EndExpired)
 	}
-	disconnect()
-	if _, err := c.Destroy(ctx, short.ID); err != nil {
+	if running, err := c.List(ctx); err != nil || len(running) != 0 {
+		t.Errorf("running after expiry: %v, %v; want none", running, err)
+	}
+	if err := hs.Heartbeat(ctx); err != nil {
 		t.Fatal(err)
 	}
-	check(short.ID, &zero)
+	sr, err := c.Destroy(ctx, short.ID)
+	if err != nil || sr == nil {
+		t.Fatalf("collecting the expired sandbox's record: %v, %v", sr, err)
+	}
+	if rec, err := record.Verify(*sr); err != nil || rec.Ended != "expired" {
+		t.Errorf("record: %+v, %v", rec, err)
+	}
+	if _, err := c.Destroy(ctx, short.ID); err == nil {
+		t.Error("the record was handed over twice")
+	}
+
+	// Expired, and its host gone by the time the CLI comes for the record:
+	// the run ended anyway, and destroying it is not an error.
+	gone, err := c.Create(ctx, api.Spec{MaxLifetimeSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); be.Live() != 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the sandbox outlived its lifetime")
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := hs.Heartbeat(ctx); err != nil {
+		t.Fatal(err)
+	}
+	disconnect()
+	if _, err := c.Destroy(ctx, gone.ID); err != nil {
+		t.Errorf("destroying an expired sandbox of an offline host: %v", err)
+	}
+	if got := ends.why(gone.ID); got != control.EndExpired {
+		t.Errorf("ended as %q, want %q", got, control.EndExpired)
+	}
 }

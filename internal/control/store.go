@@ -65,6 +65,7 @@ const (
 	EndLimit     = "limit"     // its token used up the day's minutes
 	EndGone      = "gone"      // its host stopped reporting it
 	EndFailed    = "failed"    // the host could not create it
+	EndExpired   = "expired"   // it reached its maximum lifetime
 )
 
 // Usage is the sandbox-seconds one token used on one UTC day.
