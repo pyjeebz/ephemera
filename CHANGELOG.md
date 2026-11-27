@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 (2026-11-27)
+
+Upgrade in any order: v0.3 CLIs, central servers and hosts work with v0.4 ones. A sandbox with no network names what it tried once both its host and the CLI are on v0.4.0. Expired sandboxes end at once on a v0.4.0 central server, with hosts on v0.3.0 or later. `GET /v1/runs` has a new `end_reason`, `expired`: code that reads end reasons should expect it.
 
 ### Added
 

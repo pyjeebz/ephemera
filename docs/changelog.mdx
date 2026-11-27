@@ -4,6 +4,25 @@ description: "What changed in each release. The same notes as CHANGELOG.md in th
 sidebarTitle: "Changelog"
 ---
 
+<Update label="v0.4.0" description="2026-11-27">
+Upgrade in any order: v0.3 CLIs, central servers and hosts work with v0.4 ones. A sandbox with no network names what it tried once both its host and the CLI are on v0.4.0. Expired sandboxes end at once on a v0.4.0 central server, with hosts on v0.3.0 or later. `GET /v1/runs` has a new `end_reason`, `expired`: code that reads end reasons should expect it.
+
+## Added
+
+- A host you use only over SSH: `--address 127.0.0.1` on the host installer makes the host listen on the machine itself, with nothing open to anyone else, and you run `ephemera` there. The installer no longer warns that such a host is open to the internet, and its last message says to run ephemera on the machine. With no private address, as on many rented servers, it now names both ways out: `--address` with the public address, or `--address 127.0.0.1`. The hosts guide has a [Use it over SSH](/guides/hosts#use-it-over-ssh) section.
+- Docs: [Run it on one machine](/guides/one-machine), for a Linux laptop, or Windows through WSL2, that is its own host.
+
+## Changed
+
+- A sandbox with no network now refuses each connection with a reason and logs it, like one with an allow list, instead of having no proxy at all. Nothing more gets out, but a first `npm install` without `--allow` used to fail as a bare `ENOTFOUND registry.npmjs.org`; now the run ends with "blocked registry.npmjs.org:443 (the sandbox has no network; add --allow registry.npmjs.org)", and the record lists the attempts. This needs the host and the CLI on this release.
+- `ephemera doctor`'s fixes no longer assume Tailscale. A dropped connection points at the host's firewall, a cloud firewall or security group, and VPN access rules; the MTU fix names whatever interface reaches the host. The docs list every way to reach a host: a LAN, a VPN, a public address behind a firewall, or SSH.
+
+## Fixed
+
+- The site sends `X-Frame-Options: DENY` and `frame-ancestors 'none'`, so no other site can frame the dashboard and trick a click on Approve or Revoke. The session cookie's `SameSite=Lax` already kept a framed dashboard signed out; this no longer relies on it.
+- A sandbox that reached its maximum lifetime counted as running for another hour: in the dashboard, against its host's capacity, and against its token's sandboxes-at-once and daily minutes. Its host keeps its signed record for an hour so the CLI can still collect it, and kept listing it all that time. Now the run ends as soon as the host says the sandbox expired, with the new `end_reason` `expired` ("Timed out" in the dashboard), and `DELETE /v1/sandboxes/{id}` still returns its record for that hour. Hosts older than v0.3.0 don't say, so their sandboxes end as before.
+</Update>
+
 <Update label="v0.3.0" description="2026-11-26">
 Upgrade in any order: v0.2 CLIs, central servers and hosts work with v0.3 ones. Run results (exit codes and connection counts) appear for a host's runs once that host is on v0.3.0; `api.ephemera.run` already runs this release's server. Upgrading a host rebuilds its guest image.
 
