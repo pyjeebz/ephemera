@@ -5,6 +5,7 @@
 ### Added
 
 - A host you use only over SSH: `--address 127.0.0.1` on the host installer makes the host listen on the machine itself, with nothing open to anyone else, and you run `ephemera` there. The installer no longer warns that such a host is open to the internet, and its last message says to run ephemera on the machine. With no private address, as on many rented servers, it now names both ways out: `--address` with the public address, or `--address 127.0.0.1`. The hosts guide has a [Use it over SSH](https://ephemera.run/docs/guides/hosts#use-it-over-ssh) section.
+- Docs: [Run it on one machine](https://ephemera.run/docs/guides/one-machine), for a Linux laptop, or Windows through WSL2, that is its own host.
 
 ### Changed
 

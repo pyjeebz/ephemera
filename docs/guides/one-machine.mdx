@@ -1,0 +1,83 @@
+---
+title: "Run it on one machine"
+description: "Use your Linux laptop, or Windows through WSL2, as its own host: no second machine and no network to set up."
+sidebarTitle: "One machine"
+---
+
+ephemera normally runs sandboxes on a host, a separate Linux machine, while you work on your laptop. But the laptop can be the host. Install the host agent and the CLI on the same machine, and the CLI reaches the host at `127.0.0.1`. There's no second machine, no VPN and no open port. It's the quickest way to try ephemera.
+
+Every sandbox is still its own microVM, with its own kernel, no network unless you allow it, and a signed record of what it did. What you give up is the other half: the work no longer runs off your laptop.
+
+## What the machine needs
+
+- **x86_64 Linux with KVM.** Check with `ls /dev/kvm`. ephemera is tested on Ubuntu 24.04.
+- **systemd**, which runs the host agent as a service.
+- **Memory to spare.** An idle sandbox costs about 60 MB, and a busy one uses what its workload uses, up to 1 GB by default. A 16 GB laptop runs a handful of busy sandboxes next to everything else.
+
+| Laptop | Works? |
+| - | - |
+| Linux on x86_64 | Yes |
+| Windows | Yes, through WSL2, with the setup below |
+| Mac | No: Firecracker needs Linux with KVM, and Apple silicon isn't x86. Use a separate Linux machine as the host |
+
+## Set it up
+
+<Steps>
+  <Step title="Make a join code">
+    In the [dashboard](https://ephemera.run/dashboard/hosts), under Hosts, choose **Make a join code**. It works once, for 15 minutes.
+  </Step>
+
+  <Step title="Install the host agent">
+    ```bash
+    curl -fsSL https://ephemera.run/host | sudo sh -s -- ej_... --address 127.0.0.1
+    ```
+
+    `--address 127.0.0.1` makes the host listen on this machine only. The installer takes a few minutes: it installs Firecracker and builds the guest image.
+  </Step>
+
+  <Step title="Install the CLI and sign in">
+    ```bash
+    curl -fsSL https://ephemera.run/install | sh
+    ephemera login
+    ```
+  </Step>
+
+  <Step title="Run something">
+    From a git repository:
+
+    ```bash
+    ephemera run -- echo hello from a microVM
+    ```
+
+    The first run pins the host's key and takes a few seconds; later ones take about half a second. If anything fails, `ephemera doctor` says what.
+  </Step>
+</Steps>
+
+## On Windows, with WSL2
+
+WSL2 runs a real Linux kernel, and on Windows 11 it can give that kernel KVM. Do the steps above inside an Ubuntu WSL distribution, after two checks:
+
+1. **KVM.** In WSL, `ls /dev/kvm` should list it. If it doesn't, turn on nested virtualization in `%UserProfile%\.wslconfig` (Windows 11 only), then run `wsl --shutdown` from Windows and open WSL again:
+
+   ```ini
+   [wsl2]
+   nestedVirtualization=true
+   ```
+
+2. **systemd.** `ps -p 1 -o comm=` should print `systemd`. If it doesn't, add this to `/etc/wsl.conf` in WSL, then `wsl --shutdown` and reopen:
+
+   ```ini
+   [boot]
+   systemd=true
+   ```
+
+WSL gives Linux half of the PC's memory by default. To give it more, add `memory=12GB`, or whatever suits you, under `[wsl2]` in `.wslconfig`.
+
+## What's different
+
+- **Sandboxes share the laptop.** They use its CPU and memory alongside your editor and browser. A host takes 20 sandboxes at once by default; on a laptop you may want fewer. Change it with `--host-args "--capacity 4"` when you run the host installer again.
+- **The host is only up while the laptop is.** When it sleeps, the dashboard shows the host offline, and a run says so: `your only host, my-laptop, is offline`. The host agent starts again with the machine, or with WSL.
+- **Ports are already local.** `ephemera dev -p 3000` forwards the sandbox's port to this machine's localhost, so open `http://localhost:3000` as usual.
+- **On WSL2, sandboxes run inside Windows' own VM,** so they can start a little slower than on a Linux machine of its own. Fine for trying things out; benchmark on real hardware.
+
+When you want the work off your laptop, add a separate host to the same account; see [Add a host](/guides/hosts). Each sandbox goes to the connected host running the fewest.

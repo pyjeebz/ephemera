@@ -68,6 +68,7 @@
           "guides/setup",
           "guides/records",
           "guides/hosts",
+          "guides/one-machine",
           "guides/tokens",
           "self-hosting/index",
           "guides/troubleshooting"
