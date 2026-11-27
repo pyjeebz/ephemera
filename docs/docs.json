@@ -124,7 +124,10 @@
   },
   "seo": {
     "metatags": {
-      "canonical": "https://ephemera.run/docs"
+      "canonical": "https://ephemera.run/docs",
+      "og:image": "https://ephemera.run/opengraph-image.png",
+      "twitter:image": "https://ephemera.run/opengraph-image.png",
+      "twitter:card": "summary_large_image"
     }
   }
 }

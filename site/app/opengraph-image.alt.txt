@@ -1,0 +1,1 @@
+ephemera: sandboxes that empty themselves. Agents and test suites in throwaway microVMs, on your own machines.

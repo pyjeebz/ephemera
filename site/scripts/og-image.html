@@ -1,0 +1,158 @@
+<!doctype html>
+<!--
+  The site's Open Graph image, app/opengraph-image.png (1200x630). Open this
+  file in a browser, or a headless one, and save the canvas once the title
+  reads "done". The sand is seeded, so the image comes out the same every
+  time. Add #debug to the URL to see which cells are solid.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: Satoshi; src: url(../app/fonts/Satoshi-Variable.woff2) format("woff2"); font-weight: 300 900; }
+  html, body { margin: 0; background: #121212; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1200" height="630"></canvas>
+<script>
+const W = 1200, H = 630, CELL = 5, GW = W / CELL, GH = H / CELL
+const GROUND = "#121212", BONE = "#EFEDE6", DIM = "#A29F94", RULE = "#2C2C2C", SAND = "#E6C287"
+const TONES = ["#F3DCAE", "#E9C88F", "#DEB577", "#D0A262", "#BF8D4E", "#A67840"]
+const POUR = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="14 4 72 96" width="72" height="96">
+  <polygon points="18.82,26 18.82,60 36,60 36,66 43,66 43,72 50,72 50,44" fill="#B98A4D"/>
+  <polygon points="81.18,26 81.18,60 64,60 64,66 57,66 57,72 50,72 50,44" fill="#8C6A3D"/>
+  <polygon points="50,8 81.18,26 50,44 18.82,26" fill="#E6C287"/>
+  <rect x="45" y="77" width="10" height="7" fill="#B98A4D"/>
+  <rect x="46.5" y="88" width="7" height="5" fill="#8C6A3D"/>
+  <rect x="48" y="96" width="4" height="3" fill="#8C6A3D" fill-opacity="0.6"/></svg>`
+
+// A seeded random number generator, so the image is the same every time.
+let seed = 20261127
+const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296)
+
+const HEAD = { size: 104, lines: ["Sandboxes that", "empty themselves"], y0: 238, gap: 108 }
+
+function drawText(ctx, solidOnly) {
+  ctx.textAlign = "center"
+  ctx.textBaseline = "alphabetic"
+  ctx.fillStyle = BONE
+  ctx.font = `700 ${HEAD.size}px Satoshi`
+  if ("letterSpacing" in ctx) ctx.letterSpacing = "-3px"
+  HEAD.lines.forEach((l, i) => ctx.fillText(l, W / 2, HEAD.y0 + i * HEAD.gap))
+  if (solidOnly) return
+  if ("letterSpacing" in ctx) ctx.letterSpacing = "0px"
+  ctx.font = `400 28px Satoshi`
+  ctx.fillStyle = DIM
+  ctx.fillText("Agents and test suites in throwaway microVMs, on your own machines.", W / 2, 432)
+}
+
+async function main() {
+  await document.fonts.load("700 104px Satoshi")
+  await document.fonts.load("400 28px Satoshi")
+  const ctx = document.getElementById("c").getContext("2d")
+
+  // The headline is solid: sand lands on its letters, as in the hero.
+  const mask = document.createElement("canvas")
+  mask.width = W; mask.height = H
+  const mctx = mask.getContext("2d")
+  drawText(mctx, false)
+  const md = mctx.getImageData(0, 0, W, H).data
+  const solid = new Uint8Array(GW * GH)
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+    const half = Math.floor(CELL / 2)
+    const px = (y * CELL + half) * W + x * CELL + half
+    if (md[px * 4 + 3] > 140) solid[y * GW + x] = 1
+  }
+  const grain = new Uint8Array(GW * GH) // 0 empty, else tone + 1
+  const at = (x, y) => y * GW + x
+  const free = (x, y) => x >= 0 && x < GW && y < GH && !solid[at(x, y)] && !grain[at(x, y)]
+
+  // Rain: denser toward the sides, a light dusting over the middle.
+  const spawnX = () => {
+    for (;;) {
+      const x = Math.floor(rand() * GW)
+      const d = Math.abs(x - GW / 2) / (GW / 2)
+      if (rand() < 0.02 + 0.98 * d ** 3.2) return x
+    }
+  }
+  const step = () => {
+    for (let y = GH - 2; y >= 0; y--) {
+      const ltr = rand() < 0.5
+      for (let i = 0; i < GW; i++) {
+        const x = ltr ? i : GW - 1 - i
+        const g = grain[at(x, y)]
+        if (!g) continue
+        if (free(x, y + 1)) { grain[at(x, y + 1)] = g; grain[at(x, y)] = 0; continue }
+        const dl = free(x - 1, y + 1), dr = free(x + 1, y + 1)
+        const dx = dl && dr ? (rand() < 0.5 ? -1 : 1) : dl ? -1 : dr ? 1 : 0
+        if (dx) { grain[at(x + dx, y + 1)] = g; grain[at(x, y)] = 0 }
+      }
+    }
+  }
+  const tone = () => 1 + Math.min(5, Math.floor(rand() * rand() * 7))
+  for (let t = 0; t < 1100; t++) {
+    for (let k = 0; k < 5; k++) {
+      const x = spawnX()
+      if (!grain[at(x, 0)]) grain[at(x, 0)] = tone()
+    }
+    step()
+  }
+  // A last light shower, still in the air, so the picture isn't still.
+  for (let t = 0; t < 70; t++) {
+    for (let k = 0; k < 3; k++) {
+      const x = spawnX()
+      if (!grain[at(x, 0)]) grain[at(x, 0)] = tone()
+    }
+    step()
+  }
+
+  ctx.fillStyle = GROUND
+  ctx.fillRect(0, 0, W, H)
+  drawText(ctx, false)
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+    const g = grain[at(x, y)]
+    if (!g) continue
+    ctx.fillStyle = TONES[g - 1]
+    ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+  }
+
+  // The mark and name, top left, on a ground-coloured plate so sand doesn't
+  // cover them.
+  const img = new Image()
+  img.src = "data:image/svg+xml," + encodeURIComponent(POUR)
+  await img.decode()
+  ctx.fillStyle = GROUND
+  ctx.fillRect(40, 36, 210, 60)
+  ctx.drawImage(img, 52, 44, 33, 44)
+  ctx.textAlign = "left"
+  ctx.fillStyle = BONE
+  ctx.font = "700 34px Satoshi"
+  if ("letterSpacing" in ctx) ctx.letterSpacing = "-0.5px"
+  ctx.fillText("ephemera", 96, 78)
+  // The address, bottom centre, on its own plate.
+  ctx.font = "500 24px Satoshi"
+  if ("letterSpacing" in ctx) ctx.letterSpacing = "0px"
+  const url = "ephemera.run"
+  const w = ctx.measureText(url).width + 40
+  ctx.fillStyle = GROUND
+  ctx.fillRect(W / 2 - w / 2, H - 92, w, 44)
+  ctx.strokeStyle = RULE
+  ctx.lineWidth = 1
+  ctx.strokeRect(W / 2 - w / 2 + 0.5, H - 92 + 0.5, w - 1, 43)
+  ctx.fillStyle = SAND
+  ctx.fillRect(W / 2 - w / 2 + 14, H - 73, 6, 6)
+  ctx.fillStyle = BONE
+  ctx.textAlign = "center"
+  ctx.fillText(url, W / 2 + 6, H - 62)
+  if (location.hash === "#debug") {
+    ctx.fillStyle = "rgba(255,0,0,0.6)"
+    for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) if (solid[at(x, y)]) ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+  }
+  document.title = "done"
+}
+main()
+</script>
+</body>
+</html>
