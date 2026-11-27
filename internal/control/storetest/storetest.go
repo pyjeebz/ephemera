@@ -204,6 +204,40 @@ func State(t *testing.T, open func(t *testing.T) control.StateStore) {
 		}
 	})
 
+	t.Run("expired sandboxes are kept", func(t *testing.T) {
+		// Recent times: a store keeps an expired sandbox only for as long
+		// as its host keeps the signed record.
+		now := time.Now().UTC().Add(-time.Minute)
+		st := open(t)
+		for _, sb := range []api.Sandbox{
+			{ID: "sbx_x", Host: "h1", HostID: "host_1", HostURL: "http://h1:7701", Token: "secret", CreatedAt: now, Account: "alice"},
+			{ID: "sbx_d", Host: "h1", HostID: "host_1", HostURL: "http://h1:7701", CreatedAt: now, Account: "alice"},
+		} {
+			if err := st.StartSandbox(ctx, sb); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := st.EndSandbox(ctx, "sbx_d", now, control.EndDestroyed, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.EndSandbox(ctx, "sbx_x", now, control.EndExpired, nil); err != nil {
+			t.Fatal(err)
+		}
+		if running, err := st.RunningSandboxes(ctx); err != nil || len(running) != 0 {
+			t.Errorf("running after ending both = %+v, %v", running, err)
+		}
+		got, err := st.ExpiredSandboxes(ctx, now.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].ID != "sbx_x" || got[0].HostID != "host_1" || got[0].Token != "" {
+			t.Errorf("expired = %+v, want sbx_x on host_1 with no token", got)
+		}
+		if none, err := st.ExpiredSandboxes(ctx, now.Add(time.Second)); err != nil || len(none) != 0 {
+			t.Errorf("expired after they ended = %+v, %v; want none", none, err)
+		}
+	})
+
 	t.Run("usage", func(t *testing.T) {
 		st := open(t)
 		for _, u := range []control.Usage{

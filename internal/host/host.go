@@ -65,9 +65,10 @@ type entry struct {
 	final  *api.SignedRecord
 }
 
-// keepExpired is how long the record of an expired sandbox waits to be
-// collected by a DELETE.
-const keepExpired = time.Hour
+// KeepExpired is how long the record of an expired sandbox waits to be
+// collected by a DELETE. The central server keeps its own copy at least as
+// long, so a restart does not lose a record the host still has.
+const KeepExpired = time.Hour
 
 // note adds to a sandbox's record.
 func (s *Server) note(id string, f func(*api.Record)) {
@@ -539,7 +540,7 @@ func (s *Server) expire(id string) {
 	s.mu.Unlock()
 	s.log().Info("sandbox expired", "sandbox", id)
 	s.tellEnded(id, sr)
-	time.AfterFunc(keepExpired, func() { s.forget(id) })
+	time.AfterFunc(KeepExpired, func() { s.forget(id) })
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

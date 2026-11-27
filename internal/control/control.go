@@ -105,7 +105,8 @@ func (s *Server) store() StateStore {
 // heartbeat before its record is dropped: the host may still be creating it.
 const createGrace = 2 * time.Minute
 
-// Load reads the running sandboxes and the last month of usage from the
+// Load reads the running sandboxes, the sandboxes whose hosts still keep a
+// signed record for the CLI to collect, and the last month of usage from the
 // StateStore.
 func (s *Server) Load() error {
 	ctx := context.Background()
@@ -129,6 +130,10 @@ func (s *Server) Load() error {
 	if err != nil {
 		return err
 	}
+	expired, err := s.store().ExpiredSandboxes(ctx, s.now().UTC().Add(-retainExpired))
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sandboxes = make(map[string]*api.Sandbox, len(running))
@@ -137,6 +142,19 @@ func (s *Server) Load() error {
 		sb.Token = ""
 		sb.Account = accountOr(sb.Account)
 		s.sandboxes[sb.ID] = &sb
+	}
+	// A sandbox its host ended at its lifetime is not running, but its host
+	// still keeps its signed record: keep it aside again, so the CLI can
+	// collect it and the host is not told to destroy it.
+	s.expired = make(map[string]*api.Sandbox, len(expired))
+	for i := range expired {
+		sb := expired[i]
+		if sb.HostID == "" {
+			continue
+		}
+		sb.Token = ""
+		sb.Account = accountOr(sb.Account)
+		s.expired[sb.ID] = &sb
 	}
 	s.usage = map[owner]map[string]float64{}
 	for _, u := range used {

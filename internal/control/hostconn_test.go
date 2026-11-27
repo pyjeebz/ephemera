@@ -312,7 +312,10 @@ func (e *endings) why(id string) string {
 	return e.reason[id]
 }
 func (e *endings) RunningSandboxes(context.Context) ([]api.Sandbox, error) { return nil, nil }
-func (e *endings) AddUsage(context.Context, control.Usage) error           { return nil }
+func (e *endings) ExpiredSandboxes(context.Context, time.Time) ([]api.Sandbox, error) {
+	return nil, nil
+}
+func (e *endings) AddUsage(context.Context, control.Usage) error { return nil }
 func (e *endings) UsageSince(context.Context, string) ([]control.Usage, error) {
 	return nil, nil
 }
