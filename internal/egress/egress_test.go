@@ -80,7 +80,14 @@ func TestPublic(t *testing.T) {
 // the private-address block off, so tests can reach local servers by name.
 func testProxy(t *testing.T, allow ...string) (*Proxy, string) {
 	t.Helper()
-	p := &Proxy{Policy: Policy{Allow: allow}, AllowPrivate: true, Resolver: localResolver()}
+	return testProxyIdle(t, 0, allow...)
+}
+
+// testProxyIdle is testProxy with the deadline a silent peer gets, so a test
+// need not wait for the default.
+func testProxyIdle(t *testing.T, idle time.Duration, allow ...string) (*Proxy, string) {
+	t.Helper()
+	p := &Proxy{Policy: Policy{Allow: allow}, AllowPrivate: true, Resolver: localResolver(), idle: idle}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -291,4 +298,123 @@ func TestOpenConnectionIsLogged(t *testing.T) {
 		t.Errorf("open tunnel not logged: %+v", recs)
 	}
 	(<-held).Close()
+}
+
+// stallListener accepts one connection and never answers on it.
+func stallListener(t *testing.T) (net.Listener, chan net.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	held := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			held <- c
+		}
+	}()
+	return ln, held
+}
+
+// An origin that accepts the connection and never answers must not hold the
+// handler: the exchange ends, and both sockets are released, instead of the
+// goroutine and two descriptors staying open until the host agent stops.
+func TestPlainHTTPStalledOriginEnds(t *testing.T) {
+	ln, held := stallListener(t)
+	port := ln.Addr().(*net.TCPAddr).Port
+	p, addr := testProxyIdle(t, 200*time.Millisecond, fmt.Sprintf("stall.test:%d", port))
+
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "GET http://stall.test:%d/x HTTP/1.1\r\nHost: stall.test\r\n\r\n", port)
+	up := <-held
+	defer up.Close()
+
+	// The proxy gives up and closes the client connection; it sends no
+	// response, so a read runs to end of file.
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if b, err := io.ReadAll(c); err != nil {
+		t.Fatalf("the client connection stayed open for ten seconds, so the handler is still blocked: %v", err)
+	} else if len(b) != 0 {
+		t.Errorf("unexpected response %q", b)
+	}
+	// The upstream socket is closed too.
+	up.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.Copy(io.Discard, up); err != nil {
+		t.Errorf("the upstream connection stayed open: %v", err)
+	}
+	recs := p.Connections(0)
+	if len(recs) != 1 || !recs[0].Allowed {
+		t.Fatalf("records: %+v", recs)
+	}
+	if !strings.Contains(recs[0].Error, "timeout") {
+		t.Errorf("record error = %q, want the read timeout that ended the exchange", recs[0].Error)
+	}
+}
+
+// A client that stops sending a request body must not hold the handler open
+// while it waits on the origin for the rest.
+func TestPlainHTTPStalledClientBodyEnds(t *testing.T) {
+	ln, held := stallListener(t)
+	defer func() {
+		select {
+		case c := <-held:
+			c.Close()
+		default:
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+	p, addr := testProxyIdle(t, 200*time.Millisecond, fmt.Sprintf("stall.test:%d", port))
+
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "POST http://stall.test:%d/x HTTP/1.1\r\nHost: stall.test\r\nContent-Length: 100\r\n\r\nabc", port)
+
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.ReadAll(c); err != nil {
+		t.Fatalf("the client connection stayed open for ten seconds: %v", err)
+	}
+	recs := p.Connections(0)
+	if len(recs) != 1 || recs[0].Error == "" {
+		t.Errorf("records: %+v, want one with the read timeout", recs)
+	}
+}
+
+// A response that keeps sending bytes is not cut off by the deadline: only a
+// silent peer ends an exchange, so a large or slow download still completes.
+func TestPlainHTTPMovingResponseKeepsGoing(t *testing.T) {
+	const chunks = 12
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < chunks; i++ {
+			fmt.Fprintf(w, "chunk %d\n", i)
+			w.(http.Flusher).Flush()
+			time.Sleep(150 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	// The whole response takes longer than the deadline; each gap between
+	// its bytes is well under it.
+	_, addr := testProxyIdle(t, time.Second, fmt.Sprintf("slow.test:%d", port))
+	proxyURL, _ := url.Parse("http://" + addr)
+	hc := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	resp, err := hc.Get(fmt.Sprintf("http://slow.test:%d/slow", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("the response was cut off after %d bytes: %v", len(b), err)
+	}
+	if want := fmt.Sprintf("chunk %d\n", chunks-1); !strings.HasSuffix(string(b), want) {
+		t.Errorf("body ends with %q, want %q", b, want)
+	}
 }

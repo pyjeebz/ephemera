@@ -101,6 +101,9 @@ type Proxy struct {
 	// AllowPrivate turns off the block on private addresses, for tests.
 	AllowPrivate bool
 
+	// idle overrides defaultIdle, for tests.
+	idle time.Duration
+
 	mu   sync.Mutex
 	recs []api.Connection
 }
@@ -140,6 +143,42 @@ func (p *Proxy) update(i int, c api.Connection) {
 	}
 }
 
+// defaultIdle bounds how long an exchange may wait on a connection whose
+// peer sends or accepts nothing. Without it a forward whose origin never
+// answers holds its goroutine and two sockets until the host agent stops,
+// and that agent serves every sandbox on the machine.
+const defaultIdle = 2 * time.Minute
+
+// idleConn gives every read and every write their own deadline, so a peer
+// that goes silent for longer than the timeout ends the exchange. A transfer
+// that keeps moving is not bounded, however long it takes in total.
+type idleConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *idleConn) Read(b []byte) (int, error) {
+	if err := c.Conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *idleConn) Write(b []byte) (int, error) {
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(b)
+}
+
+// idleLimit is the timeout for one read or write of an exchange.
+func (p *Proxy) idleLimit() time.Duration {
+	if p.idle > 0 {
+		return p.idle
+	}
+	return defaultIdle
+}
+
 // Serve accepts proxy connections until ln is closed.
 func (p *Proxy) Serve(ln net.Listener) error {
 	for {
@@ -156,19 +195,21 @@ func (p *Proxy) Serve(ln net.Listener) error {
 
 func (p *Proxy) handle(c net.Conn) {
 	defer c.Close()
-	br := bufio.NewReader(c)
+	// A client that stops sending a request body or reading a response
+	// must not hold the exchange open, so its side of a forwarded
+	// exchange carries a deadline like the upstream's.
+	ic := &idleConn{Conn: c, timeout: p.idleLimit()}
+	br := bufio.NewReader(ic)
 	for {
-		c.SetReadDeadline(time.Now().Add(2 * time.Minute))
 		req, err := http.ReadRequest(br)
 		if err != nil {
 			return
 		}
-		c.SetReadDeadline(time.Time{})
 		if req.Method == http.MethodConnect {
 			p.connect(c, br, req)
 			return // the connection is now a tunnel, or was refused
 		}
-		if !p.forward(c, req) {
+		if !p.forward(ic, req) {
 			return
 		}
 	}
@@ -274,6 +315,9 @@ var nonPublic = []netip.Prefix{
 }
 
 func (p *Proxy) connect(c net.Conn, br *bufio.Reader, req *http.Request) {
+	// A tunnel lasts as long as its client wants it: drop the deadline the
+	// request read left on the connection.
+	c.SetDeadline(time.Time{})
 	start := time.Now()
 	rec := api.Connection{Time: start.UTC(), Kind: "https"}
 	h, port, err := hostPort(req.Host, 443)
@@ -356,18 +400,23 @@ func (p *Proxy) forward(c net.Conn, req *http.Request) bool {
 		return fail(http.StatusForbidden, err.Error())
 	}
 	defer upstream.Close()
+	// The dial timeout above covers name resolution and the connect only.
+	// Bound the exchange itself, or an origin that never answers, never
+	// reads the request, or stalls mid-response holds this goroutine and
+	// both sockets for the life of the host agent.
+	up := &idleConn{Conn: upstream, timeout: p.idleLimit()}
 	rec.Allowed = true
 	idx := p.record(rec)
 	req.RequestURI = ""
 	req.Header.Del("Proxy-Connection")
 	req.Header.Del("Proxy-Authorization")
 	req.Header.Set("Connection", "close")
-	if err := req.Write(upstream); err != nil {
+	if err := req.Write(up); err != nil {
 		rec.Error = err.Error()
 		p.update(idx, rec)
 		return false
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(upstream), req)
+	resp, err := http.ReadResponse(bufio.NewReader(up), req)
 	if err != nil {
 		rec.Error = err.Error()
 		p.update(idx, rec)
@@ -376,7 +425,9 @@ func (p *Proxy) forward(c net.Conn, req *http.Request) bool {
 	defer resp.Body.Close()
 	resp.Close = true
 	cw := &countingWriter{w: c}
-	resp.Write(cw)
+	if err := resp.Write(cw); err != nil {
+		rec.Error = err.Error()
+	}
 	rec.BytesIn = cw.n
 	rec.DurationMS = time.Since(start).Milliseconds()
 	p.update(idx, rec)
