@@ -23,6 +23,23 @@ const nextConfig: NextConfig = {
       },
     ]
   },
+  // No page may be framed by another site, so none of the dashboard's
+  // buttons (approving a device, revoking a token) can be clicked through
+  // an invisible frame. The session cookie is SameSite=Lax, which stops
+  // that already; this doesn't rely on it.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        ],
+      },
+    ]
+  },
   // ephemera.run/docs is the Mintlify site, served through this one. Its
   // scripts, styles and assets load from the root, so those paths go to
   // Mintlify too.

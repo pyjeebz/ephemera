@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- The site sends `X-Frame-Options: DENY` and `frame-ancestors 'none'`, so no other site can frame the dashboard and trick a click on Approve or Revoke. The session cookie's `SameSite=Lax` already kept a framed dashboard signed out; this no longer relies on it.
 - A sandbox that reached its maximum lifetime counted as running for another hour: in the dashboard, against its host's capacity, and against its token's sandboxes-at-once and daily minutes. Its host keeps its signed record for an hour so the CLI can still collect it, and kept listing it all that time. Now the run ends as soon as the host says the sandbox expired, with the new `end_reason` `expired` ("Timed out" in the dashboard), and `DELETE /v1/sandboxes/{id}` still returns its record for that hour. Hosts older than v0.3.0 don't say, so their sandboxes end as before.
 
 ## v0.3.0 (2026-11-26)
