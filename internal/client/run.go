@@ -111,17 +111,16 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (res RunResult, err erro
 
 	res.ExitCode, err = c.Exec(ctx, sb, o.Exec, o.Stdout, o.Stderr)
 	res.Duration = time.Since(start)
-	if hasNetwork(o.Spec) {
-		// Read the log before the sandbox, and its log, are destroyed.
-		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		if conns, lerr := c.Connections(lctx, sb, 0); lerr == nil {
-			res.Connections = conns
-			for _, cn := range conns {
-				emit("connection", connectionFields(cn))
-			}
+	// Read the log before the sandbox, and its log, are destroyed. A
+	// sandbox with no network has one too: what it tried and was refused.
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	if conns, lerr := c.Connections(lctx, sb, 0); lerr == nil {
+		res.Connections = conns
+		for _, cn := range conns {
+			emit("connection", connectionFields(cn))
 		}
-		cancel()
 	}
+	cancel()
 	return res, err
 }
 
@@ -137,8 +136,4 @@ func connectionFields(c api.Connection) map[string]any {
 		f["bytes_in"], f["bytes_out"] = c.BytesIn, c.BytesOut
 	}
 	return f
-}
-
-func hasNetwork(s api.Spec) bool {
-	return s.Network == api.NetworkAllow || s.Network == api.NetworkOpen || len(s.Allow) > 0
 }

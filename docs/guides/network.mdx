@@ -12,7 +12,7 @@ ephemera run --allow github.com --allow '*.githubusercontent.com' \
   -- ./fetch-deps.sh
 ```
 
-Everything else stays blocked, and every attempt, allowed or blocked, is logged.
+Everything else stays blocked, and every attempt, allowed or blocked, is logged. That's true with no `--allow` too: nothing gets out, but each attempt is refused with a reason, so the end of the run says what to allow.
 
 ## Three modes
 

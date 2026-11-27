@@ -81,10 +81,10 @@ It checks, in order, the saved login, the central server, the token, and each ho
 
     ```text
     ephemera: network: 0 allowed, 1 blocked
-    ephemera:   blocked registry.npmjs.org:443 (registry.npmjs.org:443 is not on the sandbox's allow list)
+    ephemera:   blocked registry.npmjs.org:443 (the sandbox has no network; add --allow registry.npmjs.org)
     ```
 
-    Add the host with `--allow registry.npmjs.org`. If the summary shows nothing at all, the program ignores proxy settings; Node.js's built-in `fetch` needs `--env NODE_USE_ENV_PROXY=1`. See [Network access](/guides/network).
+    Add the host with `--allow registry.npmjs.org`. With an allow list that doesn't have it yet, the reason reads `registry.npmjs.org:443 is not on the sandbox's allow list`. If the summary shows nothing at all, the program ignores proxy settings; Node.js's built-in `fetch` needs `--env NODE_USE_ENV_PROXY=1`. See [Network access](/guides/network).
   </Accordion>
 
   <Accordion title="allow lists need the firecracker backend">

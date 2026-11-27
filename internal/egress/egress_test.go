@@ -175,6 +175,37 @@ func TestConnectAllowedAndBlocked(t *testing.T) {
 	}
 }
 
+// With no network at all, an attempt is still refused with a reason, and
+// logged.
+func TestNoNetworkSaysSo(t *testing.T) {
+	p := &Proxy{}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go p.Serve(ln)
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, "CONNECT registry.npmjs.org:443 HTTP/1.1\r\nHost: registry.npmjs.org:443\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	const want = "the sandbox has no network; add --allow registry.npmjs.org"
+	if resp.StatusCode != 403 || !strings.Contains(string(body), want) {
+		t.Errorf("%s %q, want 403 with %q", resp.Status, body, want)
+	}
+	recs := p.Connections(0)
+	if len(recs) != 1 || recs[0].Allowed || recs[0].Host != "registry.npmjs.org" || recs[0].Error != want {
+		t.Errorf("records: %+v", recs)
+	}
+}
+
 func TestPlainHTTP(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "served %s", r.URL.Path)

@@ -240,7 +240,6 @@ func (c *Client) share(ctx context.Context, o DevOptions, port int, target strin
 func (c *Client) watch(ctx context.Context, o DevOptions, sb *api.Sandbox, snap worktree.Snapshot, emit func(string, map[string]any)) {
 	t := time.NewTicker(o.SyncInterval)
 	defer t.Stop()
-	networked := hasNetwork(o.Spec)
 	seen := 0
 	lastPoll := time.Time{}
 	for {
@@ -249,7 +248,7 @@ func (c *Client) watch(ctx context.Context, o DevOptions, sb *api.Sandbox, snap 
 			return
 		case <-t.C:
 		}
-		if networked && time.Since(lastPoll) >= time.Second {
+		if time.Since(lastPoll) >= time.Second {
 			lastPoll = time.Now()
 			if conns, err := c.Connections(ctx, sb, seen); err == nil {
 				seen += len(conns)

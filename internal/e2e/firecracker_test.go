@@ -143,8 +143,14 @@ func TestFirecrackerNetwork(t *testing.T) {
 		if strings.Contains(out, "eth0") {
 			t.Error("the VM has a network device")
 		}
-		if len(conns) != 0 {
-			t.Errorf("connections logged with no network: %+v", conns)
+		// Both attempts reached the proxy, which refused them, saying why.
+		if len(conns) != 2 {
+			t.Errorf("connection log: %+v, want the two refused attempts", conns)
+		}
+		for _, c := range conns {
+			if c.Allowed || !strings.Contains(c.Error, "no network") {
+				t.Errorf("with no network: %+v", c)
+			}
 		}
 	})
 
@@ -185,7 +191,9 @@ func TestFirecrackerNetwork(t *testing.T) {
 		for _, c := range conns {
 			if c.Host == "metadata.google.internal" {
 				found = true
-				if c.Allowed || !strings.Contains(c.Error, "not a public address") {
+				// On a cloud VM the name resolves to a private address; elsewhere
+				// it doesn't resolve. Either way it must be refused.
+				if c.Allowed || !strings.Contains(c.Error, "not a public address") && !strings.Contains(c.Error, "resolve ") {
 					t.Errorf("metadata record: %+v", c)
 				}
 			}

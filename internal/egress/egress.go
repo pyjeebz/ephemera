@@ -196,6 +196,9 @@ func (p *Proxy) dial(ctx context.Context, rec *api.Connection) (net.Conn, error)
 		return nil, errors.New("connections to IP addresses are not allowed; use a host name")
 	}
 	ok, rule := p.Policy.Allows(rec.Host, rec.Port)
+	if !ok && len(p.Policy.Allow) == 0 {
+		return nil, fmt.Errorf("the sandbox has no network; add --allow %s", rec.Host)
+	}
 	if !ok {
 		return nil, fmt.Errorf("%s:%d is not on the sandbox's allow list", rec.Host, rec.Port)
 	}

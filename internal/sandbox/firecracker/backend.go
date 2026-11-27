@@ -239,17 +239,18 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 	if b.Log != nil {
 		b.Log(id, how, time.Since(start))
 	}
-	var vp *vmProxy
-	if spec.Network == api.NetworkAllow || spec.Network == api.NetworkOpen {
-		if vp, err = startProxy(vm, policy); err != nil {
-			vm.Kill()
-			vm.Cleanup()
-			if cfg.Jail != nil {
-				b.freeUID(cfg.Jail.UID)
-			}
-			os.RemoveAll(dir)
-			return fmt.Errorf("egress proxy: %w", err)
+	// Every sandbox gets a proxy, even one with no network: its empty
+	// allow list lets nothing out, but each attempt is refused with a
+	// reason and logged, instead of failing as a bare DNS error.
+	vp, err := startProxy(vm, policy)
+	if err != nil {
+		vm.Kill()
+		vm.Cleanup()
+		if cfg.Jail != nil {
+			b.freeUID(cfg.Jail.UID)
 		}
+		os.RemoveAll(dir)
+		return fmt.Errorf("egress proxy: %w", err)
 	}
 	b.mu.Lock()
 	if b.vms == nil {
@@ -257,9 +258,7 @@ func (b *Backend) Create(ctx context.Context, id string, spec api.Spec) error {
 		b.proxies = map[string]*vmProxy{}
 	}
 	b.vms[id] = vm
-	if vp != nil {
-		b.proxies[id] = vp
-	}
+	b.proxies[id] = vp
 	b.mu.Unlock()
 	return nil
 }

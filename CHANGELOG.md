@@ -8,6 +8,7 @@
 
 ### Changed
 
+- A sandbox with no network now refuses each connection with a reason and logs it, like one with an allow list, instead of having no proxy at all. Nothing more gets out, but a first `npm install` without `--allow` used to fail as a bare `ENOTFOUND registry.npmjs.org`; now the run ends with "blocked registry.npmjs.org:443 (the sandbox has no network; add --allow registry.npmjs.org)", and the record lists the attempts. This needs the host and the CLI on this release.
 - `ephemera doctor`'s fixes no longer assume Tailscale. A dropped connection points at the host's firewall, a cloud firewall or security group, and VPN access rules; the MTU fix names whatever interface reaches the host. The docs list every way to reach a host: a LAN, a VPN, a public address behind a firewall, or SSH.
 
 ### Fixed
