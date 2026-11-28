@@ -186,50 +186,99 @@ func (b *Backend) LoadSnapshot(ctx context.Context, id, snapID string, key []byt
 	b.mu.Lock()
 	vp := b.proxies[id]
 	b.mu.Unlock()
+	if err := old.Kill(); err != nil {
+		// Only a Firecracker that did not exit in ten seconds reaches here.
+		// Its live process still holds the jail directory and user ID that
+		// the snapshot restores into, so the sandbox stays on it, where
+		// Destroy and expiry can still reach it.
+		return false, "", fmt.Errorf("stop the running VM: %w", err)
+	}
 	if vp != nil {
 		vp.ln.Close()
 	}
-	old.Kill()
 	old.Cleanup()
 	cfg := old.cfg
 	cfg.Scratch = ""
-	vm, rerr := Restore(ctx, cfg, &Snapshot{Dir: plain, CPUs: meta.CPUs, MemoryMB: meta.MemoryMB, Own: true})
-	reason := ""
-	if rerr != nil {
-		// Keep the sandbox alive: back to a fresh VM.
-		reason = "restore failed (" + rerr.Error() + ")"
+	fresh := func() (*VM, error) {
 		if b.tmpl != nil {
-			vm, err = Restore(ctx, cfg, b.tmpl)
-		} else {
-			scratch := filepath.Join(cfg.Dir, "scratch.ext4")
-			if err = makeScratch(ctx, scratch, b.scratchMB()); err == nil {
-				cfg.Scratch = scratch
-				vm, err = Boot(ctx, cfg)
-			}
+			return Restore(ctx, cfg, b.tmpl)
 		}
-		if err != nil {
-			b.mu.Lock()
-			delete(b.vms, id)
-			b.mu.Unlock()
-			return false, "", fmt.Errorf("%s, and a fresh VM failed too: %w", reason, err)
+		scratch := filepath.Join(cfg.Dir, "scratch.ext4")
+		if err := makeScratch(ctx, scratch, b.scratchMB()); err != nil {
+			return nil, err
 		}
+		cfg.Scratch = scratch
+		return Boot(ctx, cfg)
 	}
-	if vp != nil {
-		if err := vp.listen(vm); err != nil {
-			vm.Kill()
-			vm.Cleanup()
-			return false, "", fmt.Errorf("egress proxy: %w", err)
-		}
+	loaded, reason, err := b.swapVM(id, vp, func() (*VM, error) {
+		return Restore(ctx, cfg, &Snapshot{Dir: plain, CPUs: meta.CPUs, MemoryMB: meta.MemoryMB, Own: true})
+	}, fresh)
+	if err != nil {
+		return false, "", err
 	}
-	b.mu.Lock()
-	b.vms[id] = vm
-	b.mu.Unlock()
-	if rerr != nil {
+	if !loaded {
 		return false, reason, nil
 	}
 	now := time.Now()
 	os.Chtimes(filepath.Join(dir, "meta.json"), now, now) // most recently used
 	return true, "", nil
+}
+
+// swapVM gives the sandbox the VM that load returns, with the sandbox's
+// egress proxy listening on it. Every later call on the sandbox goes
+// through that proxy, so a VM it cannot listen on is no more use than one
+// the snapshot would not fill: both leave the sandbox on a fresh VM from
+// fresh, and the reason is returned. When nothing is left to run, the
+// sandbox keeps no VM, so no caller acts on one that has stopped.
+func (b *Backend) swapVM(id string, vp *vmProxy, load, fresh func() (*VM, error)) (bool, string, error) {
+	vm, err := load()
+	reason := ""
+	if err != nil {
+		reason = "restore failed (" + err.Error() + ")"
+	} else if err := bindProxy(vp, vm); err != nil {
+		reason = "egress proxy: " + err.Error()
+	}
+	if reason != "" {
+		if vm, err = fresh(); err != nil {
+			b.dropVM(id)
+			return false, "", fmt.Errorf("%s, and a fresh VM failed too: %w", reason, err)
+		}
+		if err := bindProxy(vp, vm); err != nil {
+			b.dropVM(id)
+			return false, "", fmt.Errorf("%s, and a fresh VM's egress proxy failed too: %w", reason, err)
+		}
+	}
+	b.mu.Lock()
+	if b.vms == nil {
+		b.vms = map[string]*VM{}
+	}
+	b.vms[id] = vm
+	b.mu.Unlock()
+	return reason == "", reason, nil
+}
+
+// bindProxy points the sandbox's egress proxy at vm. A VM the proxy cannot
+// listen on is killed, because nothing reaches the sandbox through it.
+func bindProxy(vp *vmProxy, vm *VM) error {
+	if vp == nil {
+		return nil
+	}
+	if err := vp.listen(vm); err != nil {
+		vm.Kill()
+		vm.Cleanup()
+		return err
+	}
+	return nil
+}
+
+// dropVM forgets the sandbox's VM and proxy, for a swap that left nothing
+// running. Later calls answer that the sandbox does not exist, and Destroy
+// still removes its directory.
+func (b *Backend) dropVM(id string) {
+	b.mu.Lock()
+	delete(b.vms, id)
+	delete(b.proxies, id)
+	b.mu.Unlock()
 }
 
 // evict deletes the least recently used project snapshots until they fit
